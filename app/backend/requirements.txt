@@ -35,6 +35,9 @@ python-docx>=1.1
 beautifulsoup4>=4.12
 lxml>=5.3
 charset-normalizer>=3.4
+# repairs double-encoded text (valid UTF-8 that literally contains "Â£") — the
+# real sample client JDs need this; see services/ingestion/parsers.py
+ftfy>=6.3
 
 # Export rendering
 weasyprint>=63.0

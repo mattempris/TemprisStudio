@@ -11,6 +11,7 @@ and extended with:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import threading
@@ -34,6 +35,34 @@ _client: anthropic.Anthropic | None = None
 _aclient: anthropic.AsyncAnthropic | None = None
 
 
+class LLMRequestError(RuntimeError):
+    """The request is malformed/unauthorized — retrying will not help.
+    Raised for 400/401/403/404 so a bad schema or key surfaces immediately
+    instead of after several pointless backoff waits."""
+
+
+class LLMTransientError(RuntimeError):
+    """Retryable failure that exhausted the retry budget (429/5xx/network)."""
+
+
+# Split by whether a retry could plausibly succeed. The SDK already retries
+# 429/5xx a couple of times internally; this outer loop adds longer backoff for
+# the sustained-overload case that a pipeline of hundreds of calls will hit.
+_NON_RETRYABLE = (
+    anthropic.BadRequestError,
+    anthropic.AuthenticationError,
+    anthropic.PermissionDeniedError,
+    anthropic.NotFoundError,
+)
+_RETRYABLE = (
+    anthropic.RateLimitError,
+    anthropic.InternalServerError,  # includes 529 overloaded_error
+    anthropic.APIConnectionError,
+    anthropic.APITimeoutError,
+    anthropic.APIStatusError,  # catch-all for other non-2xx
+)
+
+
 def get_client() -> anthropic.Anthropic:
     global _client
     if _client is None:
@@ -48,8 +77,15 @@ def get_async_client() -> anthropic.AsyncAnthropic:
     return _aclient
 
 
-def _first_text(resp) -> str:
-    return next(b.text for b in resp.content if b.type == "text")
+def _response_text(resp) -> str:
+    """Concatenate ALL text blocks, matching the reference implementation.
+
+    Taking only the first text block loses content whenever the model emits the
+    response across several blocks, which yields a truncated fragment that then
+    fails to parse as JSON for no obvious reason. `thinking` blocks are a
+    different block type and are correctly excluded here.
+    """
+    return "".join(b.text for b in resp.content if b.type == "text")
 
 
 # ---------------------------------------------------------------------------
@@ -90,36 +126,67 @@ def complete(
     retries: int = 4,
     json_schema: dict | None = None,
     effort: str = "medium",
+    thinking: str = "adaptive",
 ) -> str:
     # NOTE: temperature/top_p/top_k are NOT accepted by claude-sonnet-5 (or the
     # rest of the 4.6+ model family) — sending them returns a 400. Determinism
     # for routing/self-consistency comes from effort tuning + majority voting
     # instead (see services/clustering/routing.py), not sampling temperature.
+    #
+    # `thinking` defaults to "adaptive" and should stay that way for any call
+    # that requires actual reasoning. Setting it to "disabled" alongside a
+    # constrained json_schema was observed to produce hollow output: on a
+    # 3-persona x 20-subfactor job evaluation the model returned every score as
+    # the lowest allowed value with empty rationale strings — the grammar forces
+    # a well-formed object, and with no thinking budget the model fills each
+    # required field with the first token the grammar permits. Reserve
+    # "disabled" for genuinely mechanical extraction where latency matters.
     settings = get_settings()
     model = model or settings.anthropic_model
     client = get_client()
 
-    kwargs: dict = dict(model=model, max_tokens=max_tokens)
+    kwargs: dict = dict(model=model, max_tokens=max_tokens, thinking={"type": thinking})
     if system:
         kwargs["system"] = system
     if json_schema is not None:
-        kwargs["thinking"] = {"type": "disabled"}
         kwargs["output_config"] = {"effort": effort, "format": {"type": "json_schema", "schema": json_schema}}
+    else:
+        kwargs["output_config"] = {"effort": effort}
     kwargs["messages"] = [{"role": "user", "content": prompt}]
 
     last_err: Exception | None = None
     for attempt in range(retries):
         try:
-            resp = client.messages.create(**kwargs)
-            return _first_text(resp)
-        except Exception as e:  # noqa: BLE001 - deliberately broad, retried below
+            # Always stream and take the final message. With adaptive thinking,
+            # thinking tokens count against max_tokens, so budgets here are
+            # large — and non-streaming requests at high max_tokens risk SDK
+            # HTTP timeouts (the SDK refuses ones it estimates will run ~10min).
+            # Streaming costs nothing when we only want the final text.
+            with client.messages.stream(**kwargs) as stream:
+                resp = stream.get_final_message()
+            if resp.stop_reason == "max_tokens":
+                # Truncated mid-JSON. Surface it as retryable rather than
+                # letting a half-object reach the parser as a mystery failure.
+                raise LLMTransientError(
+                    f"response hit max_tokens ({max_tokens}) and was truncated — "
+                    "raise max_tokens for this call"
+                )
+            return _response_text(resp)
+        except LLMTransientError:
+            raise
+        except _NON_RETRYABLE as e:
+            # 400/401/403/404 — the request itself is wrong, so retrying just
+            # burns backoff. Fail immediately with the message intact so the
+            # caller sees what to fix (e.g. an invalid output schema).
+            raise LLMRequestError(f"{type(e).__name__}: {e}") from e
+        except _RETRYABLE as e:
             last_err = e
             wait = 8 * (attempt + 1)
             with _print_lock:
-                print(f"  [llm] attempt {attempt + 1}/{retries} failed: {e} — retrying in {wait}s")
+                print(f"  [llm] attempt {attempt + 1}/{retries} failed ({type(e).__name__}: {e}) — retrying in {wait}s")
             if attempt < retries - 1:
                 time.sleep(wait)
-    raise RuntimeError(f"LLM call failed after {retries} attempts: {last_err}") from last_err
+    raise LLMTransientError(f"LLM call failed after {retries} attempts: {last_err}") from last_err
 
 
 def complete_json(
@@ -132,24 +199,33 @@ def complete_json(
     json_schema: dict | None = None,
     effort: str = "medium",
 ) -> Any:
+    # One shared retry budget covering BOTH failure modes, since either can be
+    # transient. Previously this passed retries=1 into complete() and only caught
+    # parse errors, so a single 529 killed the call outright despite retries=4.
     last_err: Exception | None = None
     for attempt in range(retries):
-        text = complete(
-            prompt,
-            system=system,
-            model=model,
-            max_tokens=max_tokens,
-            retries=1,
-            json_schema=json_schema,
-            effort=effort,
-        )
         try:
+            text = complete(
+                prompt,
+                system=system,
+                model=model,
+                max_tokens=max_tokens,
+                retries=1,  # transport backoff is handled by this loop
+                json_schema=json_schema,
+                effort=effort,
+            )
             return parse_json(text)
-        except ValueError as e:
+        except LLMRequestError:
+            raise  # malformed request — no amount of retrying fixes it
+        except (LLMTransientError, ValueError) as e:
             last_err = e
+            kind = "JSON parse" if isinstance(e, ValueError) else "transport"
+            wait = 8 * (attempt + 1)
             with _print_lock:
-                print(f"  [llm] JSON parse failed (attempt {attempt + 1}/{retries}): {text[:150]!r}")
-    raise RuntimeError(f"LLM JSON call failed after {retries} attempts: {last_err}") from last_err
+                print(f"  [llm] {kind} failure (attempt {attempt + 1}/{retries}): {str(e)[:160]}")
+            if attempt < retries - 1:
+                time.sleep(wait)
+    raise LLMTransientError(f"LLM JSON call failed after {retries} attempts: {last_err}") from last_err
 
 
 def pmap(
@@ -180,9 +256,6 @@ def pmap(
 # ---------------------------------------------------------------------------
 # Async fan-out with bounded concurrency — used for routing/self-consistency
 # ---------------------------------------------------------------------------
-import asyncio  # noqa: E402
-
-
 async def acomplete_json(
     prompt: str,
     *,
@@ -191,21 +264,40 @@ async def acomplete_json(
     max_tokens: int = 8000,
     json_schema: dict | None = None,
     effort: str = "medium",
+    retries: int = 4,
+    thinking: str = "adaptive",
 ) -> Any:
+    """Async counterpart to complete_json, with the same retry semantics —
+    non-retryable request errors fail fast; transient errors and parse failures
+    share one retry budget with backoff."""
     settings = get_settings()
     model = model or settings.anthropic_model
     client = get_async_client()
 
-    kwargs: dict = dict(model=model, max_tokens=max_tokens)
+    kwargs: dict = dict(model=model, max_tokens=max_tokens, thinking={"type": thinking})
     if system:
         kwargs["system"] = system
     if json_schema is not None:
-        kwargs["thinking"] = {"type": "disabled"}
         kwargs["output_config"] = {"effort": effort, "format": {"type": "json_schema", "schema": json_schema}}
+    else:
+        kwargs["output_config"] = {"effort": effort}
     kwargs["messages"] = [{"role": "user", "content": prompt}]
 
-    resp = await client.messages.create(**kwargs)
-    return parse_json(_first_text(resp))
+    last_err: Exception | None = None
+    for attempt in range(retries):
+        try:
+            async with client.messages.stream(**kwargs) as stream:
+                resp = await stream.get_final_message()
+            if resp.stop_reason == "max_tokens":
+                raise ValueError(f"response truncated at max_tokens={max_tokens}")
+            return parse_json(_response_text(resp))
+        except _NON_RETRYABLE as e:
+            raise LLMRequestError(f"{type(e).__name__}: {e}") from e
+        except (*_RETRYABLE, ValueError) as e:
+            last_err = e
+            if attempt < retries - 1:
+                await asyncio.sleep(8 * (attempt + 1))
+    raise LLMTransientError(f"async LLM JSON call failed after {retries} attempts: {last_err}") from last_err
 
 
 async def amap(

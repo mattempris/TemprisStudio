@@ -1,0 +1,224 @@
+{#
+  Job profile document skeleton.
+
+  Deliberate design choice (see plan): the LLM returns structured JSON content
+  only, and this fixed template renders it. The legacy reference
+  (Legacy jaStudio/2. Job Profile/b.After/*.html) had the CSS hand-authored per
+  role, which for hundreds of generated profiles would be inconsistent, fragile
+  and a waste of tokens. Re-theming per client is a variable swap here, not a
+  regeneration.
+
+  Card/gradient/chip visual pattern carried over from that legacy reference;
+  accent colours are bound to the project's accent_color.
+#}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>{{ content.title }}{% if company_name %} | {{ company_name }}{% endif %}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --accent: {{ accent }};
+      --accent-deep: {{ accent_deep }};
+      --accent-soft: {{ accent_soft }};
+      --text-main: #1e2233;
+      --text-muted: #4a4f63;
+      --border-subtle: rgba(15, 23, 42, 0.08);
+      --chip-bg: rgba(15, 23, 42, 0.03);
+      --shadow-soft: 0 12px 30px rgba(15, 23, 42, 0.12);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 32px 16px;
+      font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: #ffffff; color: var(--text-main);
+    }
+    .page { max-width: 900px; margin: 0 auto; }
+    .card {
+      background: linear-gradient(135deg, {{ accent_wash_a }}, {{ accent_wash_b }});
+      border-radius: 24px; padding: 2.75rem 2.5rem;
+      box-shadow: var(--shadow-soft); border: 1px solid var(--border-subtle);
+    }
+    header {
+      display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 2rem;
+      border-bottom: 1px solid var(--border-subtle); padding-bottom: 1.75rem;
+    }
+    h1 {
+      font-size: 1.9rem; letter-spacing: 0.02em; margin: 0;
+      display: flex; align-items: center; gap: 0.5rem; color: var(--accent-deep);
+    }
+    h1 span.accent-dot {
+      width: 9px; height: 9px; border-radius: 999px; background: var(--accent);
+      box-shadow: 0 0 18px {{ accent_glow }};
+    }
+    .subtitle { color: var(--text-muted); font-size: 0.95rem; }
+    .badge-row { display: flex; flex-wrap: wrap; gap: 0.5rem; font-size: 0.8rem; color: var(--text-muted); }
+    .chip {
+      padding: 0.25rem 0.75rem; border-radius: 999px; background: var(--chip-bg);
+      border: 1px solid {{ accent_border_soft }};
+    }
+    section { padding: 1.5rem 0; border-bottom: 1px dashed var(--border-subtle); }
+    section:last-of-type { border-bottom: none; padding-bottom: 0; }
+    h2 {
+      font-size: 1.05rem; text-transform: uppercase; letter-spacing: 0.16em;
+      font-weight: 600; color: var(--accent); margin: 0 0 0.9rem;
+    }
+    h3 { font-size: 0.95rem; margin: 0.4rem 0 0.3rem; color: var(--accent-deep); }
+    p { line-height: 1.6; margin: 0.25rem 0 0.6rem; }
+    ul { margin: 0.2rem 0 0.75rem; padding-left: 1.1rem; }
+    li { margin: 0.15rem 0; line-height: 1.55; }
+    .two-col { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 1.75rem; }
+    @media (max-width: 768px) {
+      .card { padding: 1.9rem 1.5rem; }
+      .two-col { grid-template-columns: minmax(0, 1fr); }
+    }
+    .tag-list { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.4rem; }
+    .tag {
+      font-size: 0.78rem; padding: 0.2rem 0.6rem; border-radius: 999px;
+      background: var(--accent-soft); color: var(--accent); border: 1px solid {{ accent_border }};
+    }
+    .meta-line { font-size: 0.82rem; color: var(--text-muted); margin-top: 0.5rem; }
+    @page { margin: 18mm 16mm; }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <article class="card">
+
+      <header>
+        <h1><span class="accent-dot"></span>{{ content.title }}</h1>
+        {%- set subtitle_parts = [] -%}
+        {%- if company_name %}{% set _ = subtitle_parts.append(company_name) %}{% endif -%}
+        {%- if content.family %}{% set _ = subtitle_parts.append(content.family) %}{% endif -%}
+        {%- if content.category %}{% set _ = subtitle_parts.append(content.category) %}{% endif -%}
+        {%- if content.level_context %}{% set _ = subtitle_parts.append(content.level_context) %}{% endif -%}
+        {%- if subtitle_parts %}
+        <div class="subtitle">{{ subtitle_parts | join(" · ") }}</div>
+        {%- endif %}
+        {%- if content.badges %}
+        <div class="badge-row">
+          {%- for badge in content.badges %}
+          <span class="chip">{{ badge }}</span>
+          {%- endfor %}
+        </div>
+        {%- endif %}
+      </header>
+
+      {%- if content.about_company %}
+      <section>
+        <h2>About {{ company_name or "the Organisation" }}</h2>
+        <p>{{ content.about_company }}</p>
+      </section>
+      {%- endif %}
+
+      <section>
+        <h2>About the Role</h2>
+        {%- for para in content.about_role %}
+        <p>{{ para }}</p>
+        {%- endfor %}
+      </section>
+
+      <section>
+        <h2>About You</h2>
+        <div class="two-col">
+          <div>
+            {%- if content.requirements %}
+            <h3>Minimum Requirements</h3>
+            <ul>
+              {%- for item in content.requirements %}
+              <li>{{ item }}</li>
+              {%- endfor %}
+            </ul>
+            {%- endif %}
+            {%- if content.essential_skills %}
+            <h3>Essential Skills</h3>
+            <ul>
+              {%- for item in content.essential_skills %}
+              <li>{{ item }}</li>
+              {%- endfor %}
+            </ul>
+            {%- endif %}
+          </div>
+          <div>
+            {%- if content.desirable_skills %}
+            <h3>Desirable Skills</h3>
+            <ul>
+              {%- for item in content.desirable_skills %}
+              <li>{{ item }}</li>
+              {%- endfor %}
+            </ul>
+            {%- endif %}
+            {%- if content.tags %}
+            <div class="tag-list">
+              {%- for tag in content.tags %}
+              <span class="tag">{{ tag }}</span>
+              {%- endfor %}
+            </div>
+            {%- endif %}
+          </div>
+        </div>
+      </section>
+
+      {%- if content.responsibilities %}
+      <section>
+        <h2>Key Responsibilities</h2>
+        <ul>
+          {%- for item in content.responsibilities %}
+          <li>{{ item }}</li>
+          {%- endfor %}
+        </ul>
+      </section>
+      {%- endif %}
+
+      {%- if content.contribution %}
+      <section>
+        <h2>Your Contribution</h2>
+        <p>You can expect to engage in:</p>
+        <ul>
+          {%- for item in content.contribution %}
+          <li>{{ item }}</li>
+          {%- endfor %}
+        </ul>
+      </section>
+      {%- endif %}
+
+      {%- if content.required_of_you %}
+      <section>
+        <h2>Required of You</h2>
+        <ul>
+          {%- for item in content.required_of_you %}
+          <li><strong>{{ item.label }}:</strong> {{ item.value }}</li>
+          {%- endfor %}
+        </ul>
+      </section>
+      {%- endif %}
+
+      {%- if content.reporting_line or content.budget_responsibility %}
+      <section>
+        <h2>Scope &amp; Accountability</h2>
+        <ul>
+          {%- if content.reporting_line %}
+          <li><strong>Reporting line:</strong> {{ content.reporting_line }}</li>
+          {%- endif %}
+          {%- if content.budget_responsibility %}
+          <li><strong>Budget responsibility:</strong> {{ content.budget_responsibility }}</li>
+          {%- endif %}
+        </ul>
+      </section>
+      {%- endif %}
+
+      {%- if content.diversity_statement %}
+      <section>
+        <h2>Diversity Statement</h2>
+        <p>{{ content.diversity_statement }}</p>
+      </section>
+      {%- endif %}
+
+      <p class="meta-line">
+        This job profile describes the general scope of the role and is not an exhaustive list of duties.
+        {%- if job_level %} Evaluated job level: <strong>{{ job_level }}</strong>.{% endif %}
+      </p>
+    </article>
+  </main>
+</body>
+</html>

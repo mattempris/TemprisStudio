@@ -1,0 +1,44 @@
+# Web framework
+fastapi>=0.115
+uvicorn[standard]>=0.32
+python-multipart>=0.0.12
+websockets>=13.0
+pydantic>=2.9
+pydantic-settings>=2.6
+python-dotenv>=1.0
+
+# Azure
+azure-identity>=1.19
+azure-storage-blob>=12.24
+
+# LLM
+anthropic>=0.40
+
+# ML / embeddings / clustering
+# torch/sentence-transformers pinned to match the pre-fine-tuned models'
+# saved environment (see models/*/config_sentence_transformers.json)
+torch==2.12.0
+sentence-transformers==5.5.1
+transformers==5.10.1
+scipy>=1.14
+numpy>=2.0
+scikit-learn>=1.5
+
+# Data
+pandas>=2.2
+openpyxl>=3.1
+
+# Document parsing
+pdfplumber>=0.11
+pypdf>=5.0
+python-docx>=1.1
+beautifulsoup4>=4.12
+lxml>=5.3
+charset-normalizer>=3.4
+
+# Export rendering
+weasyprint>=63.0
+jinja2>=3.1
+
+# Utilities
+tenacity>=9.0

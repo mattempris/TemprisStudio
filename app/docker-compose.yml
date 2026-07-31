@@ -1,0 +1,28 @@
+# Local/deployment baseline — CPU only. For GPU-accelerated embedding inference,
+# layer docker-compose.gpu.yml on top:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up
+#
+# NOTE (see plan's Phase 0 notes): GPU passthrough in Docker on native Windows
+# needs WSL2 + nvidia-container-toolkit and is finicky. For day-to-day
+# GPU-accelerated development, run the backend natively via the jastudio-backend
+# conda env instead of this compose file; use compose primarily for deployment
+# where the host platform configures GPU access.
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "9400:9400"
+    env_file:
+      - ./backend/.env
+    volumes:
+      - ./backend/data/models:/app/data/models
+      - ./backend/data/defaults:/app/data/defaults
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped

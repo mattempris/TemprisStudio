@@ -1,0 +1,16 @@
+# GPU override — requires nvidia-container-toolkit on the host (Linux, or
+# Windows via WSL2). Rebuilds the backend with a CUDA-enabled torch wheel.
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.gpu
+    environment:
+      - EMBEDDING_DEVICE=cuda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

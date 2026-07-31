@@ -1,0 +1,258 @@
+{
+  "domains": [
+    {
+      "name": "Responsibilities",
+      "weight": 35,
+      "subdomains": [
+        {
+          "name": "Decision-Making Authority",
+          "weight": 8,
+          "rubric": [
+            "No decision-making",
+            "Routine decisions with approval",
+            "Independent decisions on own tasks",
+            "Decisions impact team/project",
+            "Strategic decisions with broad org impact"
+          ]
+        },
+        {
+          "name": "People Management",
+          "weight": 7,
+          "rubric": [
+            "No people management",
+            "Mentors or trains others",
+            "Manages small team",
+            "Leads departments/multiple teams",
+            "Senior leader with org-wide HR responsibility"
+          ]
+        },
+        {
+          "name": "Financial Accountability",
+          "weight": 10,
+          "rubric": [
+            "No financial responsibility",
+            "Monitors costs",
+            "Manages small budgets",
+            "Oversees significant budgets",
+            "Oversees business unit or org-wide finances"
+          ]
+        },
+        {
+          "name": "Project/Task Ownership",
+          "weight": 5,
+          "rubric": [
+            "Performs assigned tasks",
+            "Owns tasks within a project",
+            "Manages small projects",
+            "Oversees multiple large-scale initiatives",
+            "Strategic program or portfolio ownership"
+          ]
+        },
+        {
+          "name": "Stakeholder Influence",
+          "weight": 5,
+          "rubric": [
+            "Works independently",
+            "Coordinates with internal peers",
+            "Influences internal stakeholders",
+            "Manages external/internal stakeholders",
+            "Shapes direction at senior/exec levels"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Skills & Experience",
+      "weight": 37,
+      "subdomains": [
+        {
+          "name": "Education Level",
+          "weight": 9,
+          "rubric": [
+            "No formal education",
+            "High school or equivalent",
+            "Associate's or vocational diploma",
+            "Bachelor's degree",
+            "Advanced degree or equivalent"
+          ]
+        },
+        {
+          "name": "Experience Level",
+          "weight": 9,
+          "rubric": [
+            "<1 year",
+            "1-3 years",
+            "3-5 years",
+            "5-8 years",
+            "8+ years with deep specialization"
+          ]
+        },
+        {
+          "name": "Technical Knowledge",
+          "weight": 8,
+          "rubric": [
+            "Basic operational knowledge",
+            "Routine task-level technical skills",
+            "Moderate expertise with technical depth",
+            "Advanced expertise with broad knowledge",
+            "Expert or unique technical mastery"
+          ]
+        },
+        {
+          "name": "Problem Solving",
+          "weight": 6,
+          "rubric": [
+            "Follows set procedures",
+            "Solves routine problems with guidance",
+            "Resolves moderately complex issues",
+            "Independently solves complex problems",
+            "Creates new methods, addresses ambiguous problems"
+          ]
+        },
+        {
+          "name": "Communication Skills",
+          "weight": 5,
+          "rubric": [
+            "Basic, internal only",
+            "Clear communication with peers",
+            "Cross-functional communication",
+            "Influences decisions across teams",
+            "High-level negotiation and external influence"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Effort",
+      "weight": 20,
+      "subdomains": [
+        {
+          "name": "Physical Effort",
+          "weight": 4,
+          "rubric": [
+            "Sedentary",
+            "Occasional light lifting/movement",
+            "Regular light to moderate physical work",
+            "Frequent physical tasks (lifting, moving)",
+            "Sustained or intense physical effort"
+          ]
+        },
+        {
+          "name": "Mental Concentration",
+          "weight": 6,
+          "rubric": [
+            "Low concentration",
+            "Regular attention to detail",
+            "Sustained focus with some complexity",
+            "Extended concentration on complex tasks",
+            "Continuous focus with critical consequences"
+          ]
+        },
+        {
+          "name": "Repetitive Tasks",
+          "weight": 3,
+          "rubric": [
+            "Highly repetitive tasks",
+            "Mostly routine with limited variation",
+            "Mix of routine and varied work",
+            "Mostly varied, little repetition",
+            "Highly varied and adaptive"
+          ]
+        },
+        {
+          "name": "Multitasking Requirement",
+          "weight": 4,
+          "rubric": [
+            "Handles one task at a time",
+            "Occasionally switches tasks",
+            "Regular multitasking",
+            "Manages conflicting priorities",
+            "Constantly juggles complex streams with high impact"
+          ]
+        },
+        {
+          "name": "Time Pressure",
+          "weight": 3,
+          "rubric": [
+            "Rare time pressure",
+            "Occasional deadline pressure",
+            "Regular deadlines",
+            "Frequent urgent deliverables",
+            "Continuous high-pressure deadlines"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Working Conditions",
+      "weight": 8,
+      "subdomains": [
+        {
+          "name": "Physical Environment",
+          "weight": 1,
+          "rubric": [
+            "Office-based, safe",
+            "Minor exposure to noise/discomfort",
+            "Moderate exposure (e.g., factory floor)",
+            "Significant exposure (e.g., lab, outdoors)",
+            "Hazardous or extreme environments"
+          ]
+        },
+        {
+          "name": "Work Hours",
+          "weight": 3,
+          "rubric": [
+            "Regular 9-5",
+            "Occasional overtime",
+            "Regular extended hours",
+            "Rotating shifts",
+            "Unpredictable or prolonged hours"
+          ]
+        },
+        {
+          "name": "Travel Requirements",
+          "weight": 2,
+          "rubric": [
+            "No travel",
+            "Occasional local travel",
+            "Regular local/regional travel",
+            "Frequent national travel",
+            "Extensive international travel"
+          ]
+        },
+        {
+          "name": "Safety Risks",
+          "weight": 1,
+          "rubric": [
+            "No risk",
+            "Minimal (office ergonomics)",
+            "Occasional risk (e.g., lab)",
+            "Regular moderate risk (e.g., fieldwork)",
+            "High or daily exposure to injury risk"
+          ]
+        },
+        {
+          "name": "Remote/Field Work",
+          "weight": 1,
+          "rubric": [
+            "Always office-based",
+            "Occasionally remote/field",
+            "Regular local field work",
+            "Frequent off-site work",
+            "Constantly remote or field-based"
+          ]
+        }
+      ]
+    }
+  ],
+  "level_bands": [
+    { "name": "Operative", "min_score": 20, "max_score": 40 },
+    { "name": "Technician", "min_score": 40, "max_score": 52 },
+    { "name": "Analyst / Engineer", "min_score": 52, "max_score": 62 },
+    { "name": "Senior Analyst / Engineer", "min_score": 62, "max_score": 68 },
+    { "name": "Specialist / Lead", "min_score": 68, "max_score": 73 },
+    { "name": "Principal", "min_score": 73, "max_score": 80 },
+    { "name": "Head of Function", "min_score": 80, "max_score": 89 },
+    { "name": "Director", "min_score": 89, "max_score": 100 }
+  ]
+}

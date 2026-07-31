@@ -181,11 +181,12 @@ def complete(
             raise LLMRequestError(f"{type(e).__name__}: {e}") from e
         except _RETRYABLE as e:
             last_err = e
-            wait = 8 * (attempt + 1)
+            will_retry = attempt < retries - 1
             with _print_lock:
-                print(f"  [llm] attempt {attempt + 1}/{retries} failed ({type(e).__name__}: {e}) — retrying in {wait}s")
-            if attempt < retries - 1:
-                time.sleep(wait)
+                suffix = f" — retrying in {8 * (attempt + 1)}s" if will_retry else ""
+                print(f"  [llm] attempt {attempt + 1}/{retries} failed ({type(e).__name__}){suffix}")
+            if will_retry:
+                time.sleep(8 * (attempt + 1))
     raise LLMTransientError(f"LLM call failed after {retries} attempts: {last_err}") from last_err
 
 
@@ -198,6 +199,7 @@ def complete_json(
     retries: int = 4,
     json_schema: dict | None = None,
     effort: str = "medium",
+    thinking: str = "adaptive",
 ) -> Any:
     # One shared retry budget covering BOTH failure modes, since either can be
     # transient. Previously this passed retries=1 into complete() and only caught
@@ -213,6 +215,7 @@ def complete_json(
                 retries=1,  # transport backoff is handled by this loop
                 json_schema=json_schema,
                 effort=effort,
+                thinking=thinking,
             )
             return parse_json(text)
         except LLMRequestError:

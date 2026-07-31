@@ -309,7 +309,7 @@ def _safe_int(value) -> int | None:
 # Step 1 — strip
 # ===========================================================================
 @router.post("/strip")
-def start_strip(client_slug: str, project_slug: str) -> dict:
+async def start_strip(client_slug: str, project_slug: str) -> dict:
     svc, state = _load(client_slug, project_slug)
     if not state.raw_records:
         raise HTTPException(400, "no records to strip — ingest files or a spreadsheet first")
@@ -381,7 +381,7 @@ def _get_dedupe_graph(
 
 
 @router.post("/dedupe/build")
-def start_dedupe_build(client_slug: str, project_slug: str) -> dict:
+async def start_dedupe_build(client_slug: str, project_slug: str) -> dict:
     """Embed stripped records once; the threshold slider then works off the cache."""
     svc, state = _load(client_slug, project_slug)
     if not state.stripped_records:
@@ -519,7 +519,7 @@ def _invalidate_from(state: ProjectState, stage: str) -> None:
 # Step 3 — normalize
 # ===========================================================================
 @router.post("/normalize")
-def start_normalize(client_slug: str, project_slug: str) -> dict:
+async def start_normalize(client_slug: str, project_slug: str) -> dict:
     svc, state = _load(client_slug, project_slug)
     if not state.dedupe_groups:
         raise HTTPException(400, "no confirmed dedupe groups — confirm dedupe first")
@@ -572,7 +572,7 @@ _TREE_CACHE: dict[tuple[str, str], tuple[np.ndarray, np.ndarray, list[str]]] = {
 
 
 @router.post("/cluster/build")
-def start_cluster_build(client_slug: str, project_slug: str) -> dict:
+async def start_cluster_build(client_slug: str, project_slug: str) -> dict:
     """Embed normalised profiles and build ONE Ward tree.
 
     Stability is deliberately NOT computed here — it depends on the chosen
@@ -689,7 +689,7 @@ class ConfirmClusterRequest(BaseModel):
 
 
 @router.post("/cluster/confirm")
-def confirm_cluster(client_slug: str, project_slug: str, req: ConfirmClusterRequest) -> dict:
+async def confirm_cluster(client_slug: str, project_slug: str, req: ConfirmClusterRequest) -> dict:
     """The expensive stage: bootstrap stability, LLM routing of the unstable
     slice with self-consistency, then batched naming of all three tiers."""
     svc, state = _load(client_slug, project_slug)
@@ -908,7 +908,7 @@ def put_je_framework(client_slug: str, project_slug: str, framework: JEFramework
 
 
 @router.post("/profiles/generate")
-def start_profile_generation(client_slug: str, project_slug: str, run_je: bool = True) -> dict:
+async def start_profile_generation(client_slug: str, project_slug: str, run_je: bool = True) -> dict:
     """Generate a Job Profile document per profile cluster, then (optionally) run
     the JE ensemble over them."""
     svc, state = _load(client_slug, project_slug)

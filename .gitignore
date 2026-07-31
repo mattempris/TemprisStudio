@@ -1,0 +1,43 @@
+# Pre-existing reference/source material (read-only research inputs, not part of the
+# new app being built here — several GB of model weights, node_modules, report bundles).
+# Tracked in the filesystem, not in this repo.
+/HR/
+/Insurance Demo/
+/Legacy jaStudio/
+/jobMatching/
+/models/
+/Additional methodology context/
+
+# Environment / secrets
+.env
+**/.env
+*.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+build/
+.vite/
+
+# Model weights (large, provided separately in ./models and unzipped on demand)
+app/backend/data/models/
+
+# Uploaded/generated project artifacts kept in blob storage, not git
+app/backend/data/uploads/
+app/backend/data/exports/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+
+# Logs
+*.log

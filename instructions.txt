@@ -1,0 +1,39 @@
+Requirement:
+
+Build a Tempris branded application that takes users step-by-step through a job and work architecture creation project.
+
+Application Features
+
+Client browser/creator:-
+Propose Job Architecture blob hierarchy structure to sit within client directories in https://temprisdev.blob.core.windows.net/
+GUI Dropdown showing all client- prefixed blobs in https://temprisdev.blob.core.windows.net/ to select existing client/projects
+Option to create new client/project
+
+
+Input assets:-
+Job Description files (supported: PDF, DOC, DOCX, .TXT, HTML)
+AND/OR
+Job Description XLSX / HRIS dump (AI estimate / user confirm Job Title, job description and job level columns --> optionally map headcount against each job where this column exists (for final analytics)
+
+Process (step by step beautiful vertical scrolling GUI)
+
+1. strip irrelevant content from job descriptions (company description, equality statement) using an API call. Output existing content only - don't infer anything
+2. dedupe the dataset using a parameterised cosine similarity threshold using the QWEN embeddings model fine tuned for jobs (provided already)
+3. Create normalised job description text using parallel API calls with value model (use anthropic API defined in .env). normalised description is 1 sentence defining purpose and responsibilities of role, 5-10 key tasks (inferred is fine), management responsibility / reporting line (if available), budget responsibility. This should take single or multiple "duplicate" records as input. 
+4. Cluster the job descriptions using JobsQWEN embeddings and a hierarchical clustering algorithm
+5. Support interactive panel which allows the user to select different cluster numbers for A) job profiles (groups of jobs), b) job categories (groups of job profiles), and c) job families (groups of job categories)
+6. User triggers a naming / disambiguation function that you design to give distinct, industry standard names to the job profiles, categories and families clusters (e.g. Devops Engineer-->Application Engineering-->Digital & Technology or Procurement Analyst-->Procurement-->Finance)
+7. User defines job profile template, Job Evaluation Framework and level names / JE score mapping (process and default boiler plate documents defined in ./Legacy JAStudio legacy app to create beautiful job profile documents (html native, PDF/DocX export). User triggers process to pass each job profile cluster to an LLM via anthropic API to create Job Profile html documents, which are in turn passed to the Job Evaluation API voting ensemble (check ./Insurance Demo showcase for Job Evaluation ensemble voting process, but implement improvements to the way JE results are browsed i.e. hide the detail below job level aggregate results). Profiles and JE Results can be browsed and exported  in a beautiful interface.
+8. User can infer 5-10 technical and/or non-technical skills per job profile from a selected subset (or all) job profiles. This is achieved via job by job API calls to a performant yet value LLM. Skill names should be 1-3 words as standard. Skill descriptions should be 15-30 words. Where possible, steer away from task/verb/responsibility style language and focus on attributes the job holder must have to perform well. 
+9. Perform steps 4/5/6 for Skills (Skill Cluster, Skill Category, Skill Family) using SkillsQWEN. Result: Skills Taxonomy. User can generate Proficiency definition across the taxonomy based on a proficiency template that they can edit (default: Entry, Intermediate, Advanced, Expert with proficiency criteria you generate once during build). User can then trigger auto-map (deterministic based on skillls roll up) these back to the job profiles at the skill cluster level, where the job level prociency level is assigne using an API call.
+10. perform steps 8/9/4/5/6 for Tasks (Task name 2-4 words as standard, Proportion of job estimate that sums to 100% for each job) using taskQWEN embeddings model.
+11. Enable matching of job profiles into 3rd party taxonomy (use functionality in ./jobMatching)
+
+
+Final Result:
+Browsable hierarchy of Job Family --> Job Category --> Job Profile --> Skill/Task Cluster + Taxonomy Match + input Job Mappings
+Browsable Skils Taxonomy with intelligence re number of jobs requiring (add headcount analytics where we have headcount)
+Browsable Task taxonommy with intelligence re total time proportion against task (add headcount analytics where we have headcount
+
+Export functionality of all the above, including job profile export to multiple formats.
+Save all progress and results to Blob storage with append style lineage (without interrupting existing subdirectory structure) so the state for any project can be imported. Ensure that progress is incrementally saved in the same store.

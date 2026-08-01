@@ -16,6 +16,42 @@ export interface StageSummary {
   active_job_stage: string | null;
 }
 
+// ── HRIS / spreadsheet ingestion ─────────────────────────────────────────────
+
+export type HrisMappingField =
+  | "job_title_col"
+  | "job_description_col"
+  | "job_level_col"
+  | "headcount_col";
+
+export interface HrisSuggestedMapping {
+  job_title_col: string | null;
+  job_description_col: string | null;
+  job_level_col: string | null;
+  headcount_col: string | null;
+  /** Keyed by the same `*_col` names as the fields above. */
+  confidence: Partial<Record<HrisMappingField, number>>;
+  reasoning: Partial<Record<HrisMappingField, string>>;
+}
+
+export interface HrisPreview {
+  file_id: string;
+  row_count: number;
+  columns: string[];
+  preview: Record<string, unknown>[];
+  suggested_mapping: HrisSuggestedMapping;
+  /** Set client-side from the chosen file; the API does not echo it back. */
+  filename?: string;
+}
+
+export interface HrisConfirmResult {
+  records_added: number;
+  total_records: number;
+  rows_in_sheet: number;
+  skipped_no_title: number;
+  limited: boolean;
+}
+
 export interface JobHandle {
   job_id: string;
   stage: string;

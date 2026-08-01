@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Play, Upload } from "lucide-react";
+import { Play } from "lucide-react";
 import { pipelineApi, taxonomyApi } from "../services/pipelineApi";
 import { useJobStream } from "../hooks/useJobStream";
 import type {
+  HrisPreview,
   MatchingSummary,
   Overview,
   ProfileRow,
@@ -19,7 +20,9 @@ import { EntityTaxonomyStage } from "../components/pipeline/EntityTaxonomyStage"
 import { MatchingPanel } from "../components/pipeline/MatchingPanel";
 import { OverviewBrowser } from "../components/pipeline/OverviewBrowser";
 import { ExportBar } from "../components/pipeline/ExportBar";
+import { HrisMappingPanel } from "../components/pipeline/HrisMappingPanel";
 import { Button } from "../components/ui/Button";
+import { Dropzone } from "../components/ui/Dropzone";
 import { cn } from "../lib/cn";
 
 const STAGES = [
@@ -61,6 +64,8 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
   const [matching, setMatching] = useState<MatchingSummary | null>(null);
   const [allIndustries, setAllIndustries] = useState<string[]>([]);
   const [overview, setOverview] = useState<Overview | null>(null);
+  const [hrisPreview, setHrisPreview] = useState<HrisPreview | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -209,6 +214,18 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
           </div>
         )}
 
+        {notice && (
+          <div className="flex items-start justify-between gap-3 rounded-[10px] border border-success-border bg-success-bg px-4 py-3 text-[12.5px] text-text">
+            <span>{notice}</span>
+            <button
+              onClick={() => setNotice(null)}
+              className="shrink-0 text-[11px] font-bold text-text-muted hover:text-text"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
         {STAGES.map((s, i) => {
           const st = state(s.id);
           return (
@@ -265,27 +282,58 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
 
     switch (id) {
       case "ingest":
+        // Two independent input routes per instructions.txt ("AND/OR"), so both
+        // are offered side by side and either can be used, or both.
+        if (hrisPreview) {
+          return (
+            <HrisMappingPanel
+              preview={hrisPreview}
+              busy={busy}
+              onCancel={() => setHrisPreview(null)}
+              onConfirm={(mapping, limit) =>
+                void act(async () => {
+                  const res = await api.confirmHris({
+                    file_id: hrisPreview.file_id,
+                    job_title_col: mapping.job_title_col!,
+                    job_description_col: mapping.job_description_col,
+                    job_level_col: mapping.job_level_col,
+                    headcount_col: mapping.headcount_col,
+                    limit,
+                  });
+                  setHrisPreview(null);
+                  setNotice(
+                    `Imported ${res.records_added.toLocaleString()} of ${res.rows_in_sheet.toLocaleString()} rows` +
+                      (res.skipped_no_title ? `, skipped ${res.skipped_no_title} with no title` : "") +
+                      (res.limited ? " (limited)" : "") +
+                      ".",
+                  );
+                })
+              }
+            />
+          );
+        }
         return (
-          <div>
-            <label className="flex cursor-pointer flex-col items-center gap-2 rounded-[10px] border-2 border-dashed border-border bg-panel px-6 py-8 text-center hover:border-accent">
-              <Upload size={20} className="text-text-muted" />
-              <span className="text-[13px] font-semibold text-text">
-                Drop job description files here, or click to browse
-              </span>
-              <span className="text-[11.5px] text-text-muted">PDF, DOC, DOCX, TXT or HTML</span>
-              <input
-                type="file"
-                multiple
+          <div className="space-y-3">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Dropzone
+                label="Job description files"
+                hint="PDF, DOC, DOCX, TXT or HTML — one role per file"
                 accept=".pdf,.doc,.docx,.txt,.html,.htm"
-                className="hidden"
-                onChange={(e) => {
-                  const files = Array.from(e.target.files ?? []);
-                  if (files.length) void act(() => api.uploadFiles(files));
-                }}
+                multiple
+                onFiles={(files) => void act(() => api.uploadFiles(files))}
               />
-            </label>
-            <p className="mt-3 text-[12.5px] text-text-secondary">
+              <Dropzone
+                label="HRIS or job list spreadsheet"
+                hint="XLSX, XLS or CSV — many roles in one sheet"
+                accept=".xlsx,.xls,.csv"
+                onFiles={(files) =>
+                  void act(async () => setHrisPreview(await api.uploadHris(files[0])))
+                }
+              />
+            </div>
+            <p className="text-[12.5px] text-text-secondary">
               {summary!.raw_records} job{summary!.raw_records === 1 ? "" : "s"} loaded.
+              {summary!.raw_records > 0 && " Add more from either source, or continue."}
             </p>
           </div>
         );

@@ -17,6 +17,7 @@ sample JDs in `Legacy jaStudio/2. Job Profile/a.Before/` exercise both:
 from __future__ import annotations
 
 import io
+import re
 import shutil
 import subprocess
 import tempfile
@@ -71,9 +72,30 @@ def parse_txt(data: bytes) -> str:
 # HTML
 # ---------------------------------------------------------------------------
 def parse_html(data: bytes) -> str:
+    return clean_html_text(data.decode("utf-8", errors="replace"))
+
+
+# Cheap check before paying for a BeautifulSoup parse. Job-board exports commonly
+# store descriptions as HTML fragments inside a spreadsheet cell, but plenty of
+# sheets hold plain prose that merely mentions a "<" — require a closing tag too.
+_HTML_MARKUP = re.compile(r"<(p|div|br|ul|ol|li|strong|em|b|i|span|h[1-6]|table)\b[^>]*>", re.I)
+
+
+def looks_like_html(text: str) -> bool:
+    return bool(_HTML_MARKUP.search(text))
+
+
+def clean_html_text(text: str) -> str:
+    """Strip markup from an HTML fragment, keeping block structure as newlines.
+
+    Shared with spreadsheet ingestion: a job-board CSV routinely stores each
+    description as ~5KB of HTML in one cell. Passing that to the LLM verbatim
+    spends most of the token budget on tags and gives the model markup to reason
+    about instead of prose.
+    """
     from bs4 import BeautifulSoup
 
-    soup = BeautifulSoup(data, "lxml")
+    soup = BeautifulSoup(text, "lxml")
     for tag in soup(["script", "style", "noscript"]):
         tag.decompose()
     # get_text with a newline separator keeps block structure readable

@@ -3,6 +3,8 @@ import type {
   DedupePreview,
   EntityClusterPreview,
   HierarchyNode,
+  HrisConfirmResult,
+  HrisPreview,
   JEDetail,
   JobHandle,
   MatchBrowse,
@@ -82,23 +84,16 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
       );
     },
 
-    uploadHris: (file: File) => {
+    /** Upload a spreadsheet and get the AI-suggested column mapping to confirm.
+     *  `header_row` exists because real HRIS exports often carry report titles
+     *  or timestamps above the actual header. */
+    uploadHris: (file: File, headerRow = 0) => {
       const form = new FormData();
       form.append("file", file);
-      return request<{
-        file_id: string;
-        row_count: number;
-        columns: string[];
-        preview: Record<string, string>[];
-        suggested_mapping: {
-          job_title_col: string | null;
-          job_description_col: string | null;
-          job_level_col: string | null;
-          headcount_col: string | null;
-          confidence: Record<string, number>;
-          reasoning: Record<string, string>;
-        };
-      }>(`${base}/ingest/hris/preview`, { method: "POST", body: form });
+      return request<HrisPreview>(
+        `${base}/ingest/hris/preview?header_row=${headerRow}`,
+        { method: "POST", body: form },
+      ).then((r) => ({ ...r, filename: file.name }));
     },
 
     confirmHris: (body: {
@@ -107,8 +102,10 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
       job_description_col?: string | null;
       job_level_col?: string | null;
       headcount_col?: string | null;
+      header_row?: number;
+      limit?: number | null;
     }) =>
-      request<{ records_added: number; total_records: number }>(`${base}/ingest/hris/confirm`, {
+      request<HrisConfirmResult>(`${base}/ingest/hris/confirm`, {
         method: "POST",
         body: JSON.stringify(body),
       }),

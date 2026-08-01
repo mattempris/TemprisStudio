@@ -16,6 +16,7 @@ import uuid
 from datetime import datetime, timezone
 
 import numpy as np
+import pandas as pd
 from fastapi import APIRouter, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
@@ -45,6 +46,7 @@ from app.services.embeddings import get_embedding_service
 from app.services.evaluation import job_evaluation as je
 from app.services.ingestion.column_mapping import suggest_mapping
 from app.services.ingestion.hris import load_spreadsheet
+from app.services.ingestion import parsers
 from app.services.ingestion.parsers import ParseFailed, UnsupportedFileType, extract_text
 from app.services.job_profile import exporters, generator
 from app.services.orchestrator import (
@@ -243,6 +245,27 @@ class ConfirmMappingRequest(BaseModel):
     job_level_col: str | None = None
     headcount_col: str | None = None
     header_row: int = 0
+    # Every ingested row costs a strip call and (post-dedupe) a normalize call, so
+    # a large export commits real spend. This lets a user trial a subset first
+    # rather than finding out afterwards.
+    limit: int | None = Field(default=None, ge=1)
+
+
+def _cell(row, col: str | None) -> str | None:
+    """Read a cell as clean text, or None.
+
+    `str(row[col]).strip()` is wrong here: a pandas NaN stringifies to "nan",
+    which is truthy, so empty cells would be ingested as the literal text "nan" —
+    blank titles becoming real records and blank descriptions becoming the word
+    "nan" for the LLM to strip and normalise.
+    """
+    if not col:
+        return None
+    value = row[col]
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 @router.post("/ingest/hris/confirm")
@@ -263,11 +286,18 @@ def ingest_hris_confirm(client_slug: str, project_slug: str, req: ConfirmMapping
             raise HTTPException(400, f"column '{col}' not present in the sheet")
 
     added = 0
+    skipped_no_title = 0
     for idx, row in df.iterrows():
-        title = str(row[req.job_title_col]).strip()
+        title = _cell(row, req.job_title_col)
         if not title:
+            skipped_no_title += 1
             continue
-        description = str(row[req.job_description_col]).strip() if req.job_description_col else ""
+        description = _cell(row, req.job_description_col)
+        # Job-board and ATS exports routinely store the description as an HTML
+        # fragment in the cell. Strip it here so downstream stages see prose,
+        # matching what the .html file parser already does.
+        if description and parsers.looks_like_html(description):
+            description = parsers.clean_html_text(description) or description
         state.raw_records.append(
             JobRecordRaw(
                 id=f"rec-{uuid.uuid4().hex[:8]}",
@@ -278,11 +308,13 @@ def ingest_hris_confirm(client_slug: str, project_slug: str, req: ConfirmMapping
                 # titles-only case the methodology package addresses by generating
                 # a synthetic profile — normalization handles it downstream.
                 raw_text=description or title,
-                level_raw=str(row[req.job_level_col]).strip() if req.job_level_col else None,
+                level_raw=_cell(row, req.job_level_col),
                 headcount=_safe_int(row[req.headcount_col]) if req.headcount_col else None,
             )
         )
         added += 1
+        if req.limit and added >= req.limit:
+            break
 
     state.column_mapping = ColumnMapping(
         job_title_col=req.job_title_col,
@@ -294,9 +326,21 @@ def ingest_hris_confirm(client_slug: str, project_slug: str, req: ConfirmMapping
     svc.save_state(
         state,
         action="confirm-column-mapping",
-        lineage_payload={"file_id": req.file_id, "records_added": added, "mapping": state.column_mapping.model_dump()},
+        lineage_payload={
+            "file_id": req.file_id,
+            "records_added": added,
+            "rows_in_sheet": len(df),
+            "limit": req.limit,
+            "mapping": state.column_mapping.model_dump(),
+        },
     )
-    return {"records_added": added, "total_records": len(state.raw_records)}
+    return {
+        "records_added": added,
+        "total_records": len(state.raw_records),
+        "rows_in_sheet": len(df),
+        "skipped_no_title": skipped_no_title,
+        "limited": bool(req.limit and added >= req.limit and len(df) > added),
+    }
 
 
 def _safe_int(value) -> int | None:

@@ -124,11 +124,24 @@ def suggest_mapping(profiles: list[ColumnProfile], row_count: int) -> ColumnMapp
             return None
         return value
 
+    # The schema names fields `*_column` but the rest of the app (and the API
+    # response) uses `*_col`. Normalise here so `confidence` and `reasoning` are
+    # keyed the same way as the mapping itself — otherwise a caller reading
+    # confidence["job_title_col"] silently gets nothing.
+    def _rekey(d: dict, cast) -> dict:
+        out = {}
+        for k, v in d.items():
+            try:
+                out[k.replace("_column", "_col")] = cast(v)
+            except (TypeError, ValueError):
+                continue
+        return out
+
     return ColumnMappingSuggestion(
         job_title_col=_validated("job_title_column"),
         job_description_col=_validated("job_description_column"),
         job_level_col=_validated("job_level_column"),
         headcount_col=_validated("headcount_column"),
-        confidence={k: float(v) for k, v in result.get("confidence", {}).items()},
-        reasoning=dict(result.get("reasoning", {})),
+        confidence=_rekey(result.get("confidence") or {}, float),
+        reasoning=_rekey(result.get("reasoning") or {}, str),
     )

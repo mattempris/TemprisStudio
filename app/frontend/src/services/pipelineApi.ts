@@ -24,6 +24,13 @@ import type {
   TaxonomySearchHit,
 } from "../types/pipeline";
 
+/** Build a query string from defined values only, so an omitted `workers` falls
+ *  through to the server's configured default rather than sending "undefined". */
+function qs(params: Record<string, string | number | boolean | undefined | null>): string {
+  const pairs = Object.entries(params).filter(([, v]) => v !== undefined && v !== null);
+  return pairs.length ? `?${pairs.map(([k, v]) => `${k}=${v}`).join("&")}` : "";
+}
+
 class ApiError extends Error {
   status: number;
   detail: unknown;
@@ -115,7 +122,8 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
         body: JSON.stringify(body),
       }),
 
-    startStrip: () => request<JobHandle>(`${base}/strip`, { method: "POST" }),
+    startStrip: (workers?: number) =>
+      request<JobHandle>(`${base}/strip${qs({ workers })}`, { method: "POST" }),
 
     startDedupeBuild: () => request<JobHandle>(`${base}/dedupe/build`, { method: "POST" }),
     dedupePreview: (threshold: number) =>
@@ -126,7 +134,8 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
         body: JSON.stringify({ threshold }),
       }),
 
-    startNormalize: () => request<JobHandle>(`${base}/normalize`, { method: "POST" }),
+    startNormalize: (workers?: number) =>
+      request<JobHandle>(`${base}/normalize${qs({ workers })}`, { method: "POST" }),
 
     startClusterBuild: () => request<JobHandle>(`${base}/cluster/build`, { method: "POST" }),
     clusterPreview: (k: { families: number; categories: number; profiles: number }) =>
@@ -171,8 +180,10 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
         body: JSON.stringify(framework),
       }),
 
-    startProfileGeneration: (runJe = true) =>
-      request<JobHandle>(`${base}/profiles/generate?run_je=${runJe}`, { method: "POST" }),
+    startProfileGeneration: (runJe = true, workers?: number) =>
+      request<JobHandle>(`${base}/profiles/generate${qs({ run_je: runJe, workers })}`, {
+        method: "POST",
+      }),
     listProfiles: () => request<{ profiles: ProfileRow[]; count: number }>(`${base}/profiles`),
     getProfile: (key: string) =>
       request<{ profile_key: string; title: string; content: Record<string, unknown>; html: string }>(
@@ -197,8 +208,8 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
     // ── Skills (steps 8-9) ───────────────────────────────────────────────────
     skills: {
       summary: () => request<SkillsSummary>(`${base}/skills/summary`),
-      infer: (profileKeys?: string[]) =>
-        request<JobHandle>(`${base}/skills/infer`, {
+      infer: (profileKeys?: string[], workers?: number) =>
+        request<JobHandle>(`${base}/skills/infer${qs({ workers })}`, {
           method: "POST",
           body: JSON.stringify({ profile_keys: profileKeys ?? null }),
         }),
@@ -218,8 +229,10 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
           }),
         }),
       taxonomy: () => request<{ families: TaxonomyNode[]; has_headcount: boolean }>(`${base}/skills/taxonomy`),
-      generateProficiency: () =>
-        request<JobHandle>(`${base}/skills/proficiency/generate`, { method: "POST" }),
+      generateProficiency: (workers?: number) =>
+        request<JobHandle>(`${base}/skills/proficiency/generate${qs({ workers })}`, {
+          method: "POST",
+        }),
       getTemplate: (defaults = false) =>
         request<ProficiencyTemplate>(
           `${base}/skills/proficiency/template${defaults ? "?defaults=true" : ""}`,
@@ -234,8 +247,8 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
     // ── Tasks (step 10) ──────────────────────────────────────────────────────
     tasks: {
       summary: () => request<TasksSummary>(`${base}/tasks/summary`),
-      infer: (profileKeys?: string[]) =>
-        request<JobHandle>(`${base}/tasks/infer`, {
+      infer: (profileKeys?: string[], workers?: number) =>
+        request<JobHandle>(`${base}/tasks/infer${qs({ workers })}`, {
           method: "POST",
           body: JSON.stringify({ profile_keys: profileKeys ?? null }),
         }),
@@ -263,8 +276,14 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
     // ── 3rd-party taxonomy matching (step 11) ────────────────────────────────
     matching: {
       summary: () => request<MatchingSummary>(`${base}/matching/summary`),
-      run: (body: { industries?: string[] | null; shortlist_size?: number; assign_level?: boolean }) =>
-        request<JobHandle>(`${base}/matching/run`, { method: "POST", body: JSON.stringify(body) }),
+      run: (
+        body: { industries?: string[] | null; shortlist_size?: number; assign_level?: boolean },
+        workers?: number,
+      ) =>
+        request<JobHandle>(`${base}/matching/run${qs({ workers })}`, {
+          method: "POST",
+          body: JSON.stringify(body),
+        }),
       matches: (reviewOnly = false) =>
         request<{ matches: TaxonomyMatch[]; summary: Record<string, number | null> }>(
           `${base}/matching/matches?review_only=${reviewOnly}`,

@@ -33,6 +33,18 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173,http://localhost:4673"
     max_file_size_mb: int = 50
 
+    # LLM fan-out width for the per-item stages (strip, normalize, skills, tasks,
+    # profile generation, evaluation, matching). Each worker is one in-flight
+    # request, so wall time is roughly ceil(items / workers) x per-call latency.
+    #
+    # 8 is deliberately conservative rather than optimal: raising it trades
+    # against the account's requests- and tokens-per-minute limits, and past those
+    # the API returns 429s. llm.py retries those with backoff, so a too-high value
+    # degrades into waiting rather than failing — but throughput stops improving.
+    # Tune per account; `llm_max_workers` is the ceiling the API will accept.
+    llm_workers: int = 8
+    llm_max_workers: int = 64
+
     # Embeddings
     embedding_device: str = "cuda"  # falls back to cpu automatically if unavailable
 

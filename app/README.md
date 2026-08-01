@@ -73,6 +73,8 @@ but functional — everything else is unaffected.
 | `AZURE_BLOB_ACCOUNT` | `temprisdev` |
 | `EMBEDDING_DEVICE` | `cuda` or `cpu`; falls back to CPU automatically |
 | `APP_PORT`, `CORS_ORIGINS`, `MAX_FILE_SIZE_MB` | server basics |
+| `LLM_WORKERS` | how many LLM calls run concurrently in the per-item stages (default 8) |
+| `LLM_MAX_WORKERS` | ceiling the API will accept for a per-run override (default 64) |
 
 Also tunable there: `STABILITY_GATE` (default 0.58), `STABILITY_N_PERTURB` (50),
 `SELF_CONSISTENCY_VOTES` (3), `CATCH_ALL_REVIEWERS` (5).
@@ -155,6 +157,32 @@ job-board and ATS exports) are stripped to prose on import.
 Saving any of these invalidates work already produced under the old version;
 each editor says so before you commit, and affected artifacts are marked stale
 rather than deleted.
+
+### Speed of the per-item stages
+
+Strip, normalise, skill and task inference, profile generation, evaluation and
+taxonomy matching are all one LLM call per item, run through a thread pool. They
+are latency-bound, not compute-bound: a strip call on a 4KB description takes
+about 9 seconds almost entirely waiting on the API, so wall time is roughly
+`ceil(items / workers) x 9s`.
+
+The **Parallel requests** slider in the left sidebar sets that width for every
+stage (persisted locally; `LLM_WORKERS` is the server-side default and applies
+when a request omits it). Measured on 8 real descriptions:
+
+| workers | 8 records | vs serial |
+|---|---|---|
+| 1 | 76s | 0.9× |
+| 4 | 22s | 3.2× |
+| 8 | 13s | 5.6× |
+
+Scaling stays close to linear until the account's requests- or tokens-per-minute
+limit is reached; past that the API returns 429s, which are retried with backoff,
+so too high a value degrades into waiting rather than failing — but throughput
+stops improving. Start at 8-16 and raise it if the account allows.
+
+A wave is only as fast as its slowest item, which is why 8 workers on 8 records
+gives 5.6× rather than 8× — one 6KB description gates the batch.
 
 Two panels carry most of the method:
 

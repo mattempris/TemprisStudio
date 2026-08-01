@@ -246,6 +246,19 @@ def complete_json(
     raise LLMTransientError(f"LLM JSON call failed after {retries} attempts: {last_err}") from last_err
 
 
+def resolve_workers(requested: int | None = None) -> int:
+    """The fan-out width to use: an explicit per-request value, else the
+    configured default, clamped to the configured ceiling.
+
+    Centralised so every stage honours the same setting and the same cap — the
+    counts used to be hardcoded per call site, which meant tuning one stage did
+    nothing for the others.
+    """
+    settings = get_settings()
+    workers = requested if requested and requested > 0 else settings.llm_workers
+    return max(1, min(workers, settings.llm_max_workers))
+
+
 def pmap(
     fn: Callable[[T], R],
     items: list[T],

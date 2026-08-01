@@ -38,7 +38,7 @@ from app.models.project_state import (
     StageName,
 )
 from app.services import dedupe as dedupe_svc
-from app.services import normalization, stripping
+from app.services import llm, normalization, stripping
 from app.services.clustering import backbone as bb
 from app.services.clustering import engine as cluster_engine
 from app.services.clustering import naming, rollup, routing
@@ -502,8 +502,11 @@ def _safe_int(value) -> int | None:
 # Step 1 — strip
 # ===========================================================================
 @router.post("/strip")
-async def start_strip(client_slug: str, project_slug: str) -> dict:
+async def start_strip(
+    client_slug: str, project_slug: str, workers: int | None = None
+) -> dict:
     svc, state = _load(client_slug, project_slug)
+    _workers = llm.resolve_workers(workers)
     if not state.raw_records:
         raise HTTPException(400, "no records to strip — ingest files or a spreadsheet first")
 
@@ -512,7 +515,7 @@ async def start_strip(client_slug: str, project_slug: str) -> dict:
 
     def work(reporter: ProgressReporter) -> dict:
         reporter.stage_start(len(records), f"Stripping boilerplate from {len(records)} job descriptions")
-        results = stripping.strip_many(records, workers=8, progress=reporter.pmap_callback())
+        results = stripping.strip_many(records, workers=_workers, progress=reporter.pmap_callback())
 
         fresh = svc.load_state(client_slug, project_slug)
         fresh.stripped_records = [
@@ -712,8 +715,11 @@ def _invalidate_from(state: ProjectState, stage: str) -> None:
 # Step 3 — normalize
 # ===========================================================================
 @router.post("/normalize")
-async def start_normalize(client_slug: str, project_slug: str) -> dict:
+async def start_normalize(
+    client_slug: str, project_slug: str, workers: int | None = None
+) -> dict:
     svc, state = _load(client_slug, project_slug)
+    _workers = llm.resolve_workers(workers)
     if not state.dedupe_groups:
         raise HTTPException(400, "no confirmed dedupe groups — confirm dedupe first")
 
@@ -728,7 +734,7 @@ async def start_normalize(client_slug: str, project_slug: str) -> dict:
 
     def work(reporter: ProgressReporter) -> dict:
         reporter.stage_start(len(group_inputs), f"Normalising {len(group_inputs)} job groups")
-        results = normalization.normalize_many(group_inputs, workers=8, progress=reporter.pmap_callback())
+        results = normalization.normalize_many(group_inputs, workers=_workers, progress=reporter.pmap_callback())
 
         fresh = svc.load_state(client_slug, project_slug)
         fresh.normalized_profiles = [
@@ -1117,10 +1123,13 @@ def put_je_framework(client_slug: str, project_slug: str, framework: JEFramework
 
 
 @router.post("/profiles/generate")
-async def start_profile_generation(client_slug: str, project_slug: str, run_je: bool = True) -> dict:
+async def start_profile_generation(
+    client_slug: str, project_slug: str, run_je: bool = True, workers: int | None = None
+) -> dict:
     """Generate a Job Profile document per profile cluster, then (optionally) run
     the JE ensemble over them."""
     svc, state = _load(client_slug, project_slug)
+    _workers = llm.resolve_workers(workers)
     c = state.clustering
     if c is None or not c.profile_names:
         raise HTTPException(400, "clustering and naming must be complete first")
@@ -1172,7 +1181,7 @@ async def start_profile_generation(client_slug: str, project_slug: str, run_je: 
 
     def work(reporter: ProgressReporter) -> dict:
         reporter.stage_start(len(specs), f"Generating {len(specs)} job profile documents")
-        contents = generator.generate_many(specs, workers=6, progress=reporter.pmap_callback())
+        contents = generator.generate_many(specs, workers=_workers, progress=reporter.pmap_callback())
 
         accent = state.meta.accent_color
         company = state.meta.display_name
@@ -1213,7 +1222,7 @@ async def start_profile_generation(client_slug: str, project_slug: str, run_je: 
         if run_je:
             reporter.stage_start(len(docs), f"Job evaluation ensemble across {len(docs)} profiles")
             je_inputs = [(d.profile_key, d.title, d.content) for d in docs]
-            results = je.evaluate_many(je_inputs, framework, workers=6, progress=reporter.pmap_callback())
+            results = je.evaluate_many(je_inputs, framework, workers=_workers, progress=reporter.pmap_callback())
 
             fresh2 = svc.load_state(client_slug, project_slug)
             fresh2.je_results = [

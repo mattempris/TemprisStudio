@@ -19,6 +19,7 @@ from app.models.project_state import (
 )
 from app.services.matching import index as tax_index
 from app.services.matching import matcher, taxonomy
+from app.services import llm
 from app.services.orchestrator import JobAlreadyRunning, ProgressReporter, get_registry, run_job
 from app.services.project_service import ProjectService
 
@@ -122,8 +123,11 @@ class MatchRequest(BaseModel):
 
 
 @project_router.post("/run")
-async def run_matching(client_slug: str, project_slug: str, req: MatchRequest) -> dict:
+async def run_matching(
+    client_slug: str, project_slug: str, req: MatchRequest, workers: int | None = None
+) -> dict:
     svc, state = _load(client_slug, project_slug)
+    _workers = llm.resolve_workers(workers)
     available = [p for p in state.job_profiles if not p.stale]
     if not available:
         raise HTTPException(400, "no job profiles yet — generate job profiles first")
@@ -155,7 +159,7 @@ async def run_matching(client_slug: str, project_slug: str, req: MatchRequest) -
             levels,
             shortlist_size=req.shortlist_size,
             assign_level=req.assign_level,
-            workers=6,
+            workers=_workers,
             progress=reporter.pmap_callback(),
         )
         summary = matcher.summarize(results)

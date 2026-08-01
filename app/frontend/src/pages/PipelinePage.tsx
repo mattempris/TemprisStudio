@@ -76,6 +76,17 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
   const [overview, setOverview] = useState<Overview | null>(null);
   const [hrisPreview, setHrisPreview] = useState<HrisPreview | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Fan-out width for the per-item LLM stages. One control rather than per stage:
+  // it is a property of the API account's rate limits, not of a stage.
+  const [workers, setWorkers] = useState<number>(() => {
+    const saved = Number(localStorage.getItem("jastudio-workers"));
+    return saved >= 1 && saved <= 64 ? saved : 8;
+  });
+  const setWorkersPersisted = useCallback((n: number) => {
+    const clamped = Math.max(1, Math.min(64, n));
+    setWorkers(clamped);
+    localStorage.setItem("jastudio-workers", String(clamped));
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -207,6 +218,28 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
             );
           })}
         </ol>
+        <div className="mt-4 border-t border-border px-2.5 pt-3">
+          <label className="flex items-baseline justify-between text-[10px] font-extrabold uppercase tracking-wider text-text-muted">
+            Parallel requests
+            <span className="text-[13px] font-bold tabular-nums text-accent">{workers}</span>
+          </label>
+          <input
+            type="range"
+            min={1}
+            max={32}
+            value={workers}
+            onChange={(e) => setWorkersPersisted(Number(e.target.value))}
+            className="mt-1 w-full accent-[var(--color-accent)]"
+          />
+          <p className="mt-1 text-[10.5px] leading-snug text-text-muted">
+            How many LLM calls run at once in the per-item stages. Each call takes
+            roughly the same time regardless, so this sets how many run
+            concurrently. Raising it helps until the API account's rate limit is
+            reached, after which requests are retried and throughput stops
+            improving.
+          </p>
+        </div>
+
         {overview && overview.families.length > 0 && (
           <a
             href="#architecture"
@@ -351,7 +384,7 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
       case "strip":
         return (
           <div className="space-y-3">
-            <Button variant="primary" onClick={() => runJob(api.startStrip)} disabled={busy || job.running}>
+            <Button variant="primary" onClick={() => runJob(() => api.startStrip(workers))} disabled={busy || job.running}>
               <span className="flex items-center gap-1.5">
                 <Play size={12} /> Strip {summary!.raw_records} job descriptions
               </span>
@@ -389,7 +422,7 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
       case "normalize":
         return (
           <div className="space-y-3">
-            <Button variant="primary" onClick={() => runJob(api.startNormalize)} disabled={busy || job.running}>
+            <Button variant="primary" onClick={() => runJob(() => api.startNormalize(workers))} disabled={busy || job.running}>
               <span className="flex items-center gap-1.5">
                 <Play size={12} /> Normalise {summary!.dedupe_groups} distinct jobs
               </span>
@@ -487,7 +520,7 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
             <div className="space-y-3">
               <Button
                 variant="primary"
-                onClick={() => runJob(() => api.startProfileGeneration(true))}
+                onClick={() => runJob(() => api.startProfileGeneration(true, workers))}
                 disabled={busy || job.running}
               >
                 <span className="flex items-center gap-1.5">
@@ -526,7 +559,7 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
               clusters: skills?.k_clusters ?? null,
             }}
             audit={skills?.audit ?? {}}
-            onInfer={() => api.skills.infer()}
+            onInfer={() => api.skills.infer(undefined, workers)}
             onBuildTree={api.skills.buildTree}
             preview={api.skills.preview}
             onConfirm={api.skills.confirm}
@@ -542,7 +575,7 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
               mappedClusters: skills?.proficiency_definitions ?? 0,
               levelsAssigned: skills?.levels_assigned ?? 0,
               requirements: skills?.profile_requirements ?? 0,
-              onGenerate: api.skills.generateProficiency,
+              onGenerate: () => api.skills.generateProficiency(workers),
               editor: (
                 <Collapsible
                   title="Proficiency template"
@@ -577,7 +610,7 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
               clusters: tasks?.k_tasks ?? null,
             }}
             audit={tasks?.audit ?? {}}
-            onInfer={() => api.tasks.infer()}
+            onInfer={() => api.tasks.infer(undefined, workers)}
             onBuildTree={api.tasks.buildTree}
             preview={api.tasks.preview}
             onConfirm={api.tasks.confirm}
@@ -602,7 +635,7 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
               industries={matching?.industries ?? []}
               allIndustries={allIndustries}
               onRun={(inds) =>
-                runJob(() => api.matching.run({ industries: inds.length ? inds : null }))
+                runJob(() => api.matching.run({ industries: inds.length ? inds : null }, workers))
               }
               running={busy || job.running}
               hasResults={(matching?.matched_profiles ?? 0) > 0}

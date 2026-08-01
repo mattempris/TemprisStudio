@@ -28,6 +28,7 @@ from app.services.clustering import engine as cluster_engine
 from app.services.clustering import rollup
 from app.services import embeddings
 from app.services.embeddings import get_embedding_service
+from app.services import llm
 from app.services.orchestrator import JobAlreadyRunning, ProgressReporter, get_registry, run_job
 from app.services.project_service import ProjectService
 from app.services.skills import inference, proficiency
@@ -98,8 +99,11 @@ class InferRequest(BaseModel):
 
 
 @router.post("/infer")
-async def infer_skills(client_slug: str, project_slug: str, req: InferRequest) -> dict:
+async def infer_skills(
+    client_slug: str, project_slug: str, req: InferRequest, workers: int | None = None
+) -> dict:
     svc, state = _load(client_slug, project_slug)
+    _workers = llm.resolve_workers(workers)
     available = [p for p in state.job_profiles if not p.stale]
     if not available:
         raise HTTPException(400, "no job profiles yet — generate job profiles first")
@@ -116,7 +120,7 @@ async def infer_skills(client_slug: str, project_slug: str, req: InferRequest) -
 
     def work(reporter: ProgressReporter) -> dict:
         reporter.stage_start(len(payload), f"Inferring skills for {len(payload)} job profiles")
-        per_profile = inference.infer_many(payload, workers=8, progress=reporter.pmap_callback())
+        per_profile = inference.infer_many(payload, workers=_workers, progress=reporter.pmap_callback())
         flat = [s for group in per_profile for s in group]
         audit = inference.audit_skills(flat)
 
@@ -566,10 +570,13 @@ def _template_from_state(state: ProjectState) -> proficiency.ProficiencyTemplate
 
 
 @router.post("/proficiency/generate")
-async def generate_proficiency(client_slug: str, project_slug: str) -> dict:
+async def generate_proficiency(
+    client_slug: str, project_slug: str, workers: int | None = None
+) -> dict:
     """Generate per-cluster proficiency definitions, roll up deterministically to
     job profiles, then assign each job's required level."""
     svc, state = _load(client_slug, project_slug)
+    _workers = llm.resolve_workers(workers)
     c = state.skills.clustering
     if c is None or not c.profile_names:
         raise HTTPException(400, "cluster and name the skills taxonomy first")
@@ -595,7 +602,7 @@ async def generate_proficiency(client_slug: str, project_slug: str) -> dict:
     def work(reporter: ProgressReporter) -> dict:
         reporter.stage_start(len(clusters), f"Writing proficiency definitions for {len(clusters)} clusters")
         defs = proficiency.generate_definitions_many(
-            clusters, template, workers=6, progress=reporter.pmap_callback()
+            clusters, template, workers=_workers, progress=reporter.pmap_callback()
         )
 
         # deterministic rollup — no LLM, per the spec
@@ -606,7 +613,7 @@ async def generate_proficiency(client_slug: str, project_slug: str) -> dict:
             profile_lookup,
             {d.cluster_id: d for d in defs},
             template,
-            workers=8,
+            workers=_workers,
             progress=reporter.pmap_callback(),
         )
 

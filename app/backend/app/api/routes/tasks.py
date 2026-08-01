@@ -24,6 +24,7 @@ from app.services.clustering import backbone as bb
 from app.services.clustering import engine as cluster_engine
 from app.services import embeddings
 from app.services.embeddings import get_embedding_service
+from app.services import llm
 from app.services.orchestrator import JobAlreadyRunning, ProgressReporter, get_registry, run_job
 from app.services.project_service import ProjectService
 from app.services.tasks import inference
@@ -84,8 +85,11 @@ class InferRequest(BaseModel):
 
 
 @router.post("/infer")
-async def infer_tasks(client_slug: str, project_slug: str, req: InferRequest) -> dict:
+async def infer_tasks(
+    client_slug: str, project_slug: str, req: InferRequest, workers: int | None = None
+) -> dict:
     svc, state = _load(client_slug, project_slug)
+    _workers = llm.resolve_workers(workers)
     available = [p for p in state.job_profiles if not p.stale]
     if not available:
         raise HTTPException(400, "no job profiles yet — generate job profiles first")
@@ -99,7 +103,7 @@ async def infer_tasks(client_slug: str, project_slug: str, req: InferRequest) ->
 
     def work(reporter: ProgressReporter) -> dict:
         reporter.stage_start(len(payload), f"Inferring tasks for {len(payload)} job profiles")
-        results = inference.infer_many(payload, workers=8, progress=reporter.pmap_callback())
+        results = inference.infer_many(payload, workers=_workers, progress=reporter.pmap_callback())
         flat = [t for tasks, _ in results for t in tasks]
         fixes = [fix for _, fix in results]
         audit = inference.audit_tasks(flat, fixes)

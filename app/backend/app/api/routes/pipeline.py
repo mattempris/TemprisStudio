@@ -935,9 +935,17 @@ def rename_cluster(client_slug: str, project_slug: str, req: RenameRequest) -> d
 # Step 7 — JE framework, profile generation, evaluation
 # ===========================================================================
 @router.get("/je-framework")
-def get_je_framework(client_slug: str, project_slug: str) -> JEFrameworkConfig:
+def get_je_framework(
+    client_slug: str, project_slug: str, defaults: bool = False
+) -> JEFrameworkConfig:
+    """The project's framework, or the shipped default if it has none.
+
+    `defaults=true` forces the shipped default even when the project has saved
+    its own — that is what the editor's "Load defaults" control needs, and
+    without it there is no way back to the original once you have saved.
+    """
     _, state = _load(client_slug, project_slug)
-    if not state.je_framework.domains:
+    if defaults or not state.je_framework.domains:
         return je.load_default_framework()
     return state.je_framework
 

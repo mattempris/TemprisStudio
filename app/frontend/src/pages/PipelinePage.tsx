@@ -4,6 +4,8 @@ import { pipelineApi, taxonomyApi } from "../services/pipelineApi";
 import { useJobStream } from "../hooks/useJobStream";
 import type {
   HrisPreview,
+  JEFramework,
+  ProficiencyTemplate,
   MatchingSummary,
   Overview,
   ProfileRow,
@@ -21,6 +23,9 @@ import { MatchingPanel } from "../components/pipeline/MatchingPanel";
 import { OverviewBrowser } from "../components/pipeline/OverviewBrowser";
 import { ExportBar } from "../components/pipeline/ExportBar";
 import { HrisMappingPanel } from "../components/pipeline/HrisMappingPanel";
+import { JEFrameworkEditor } from "../components/pipeline/JEFrameworkEditor";
+import { ProficiencyTemplateEditor } from "../components/pipeline/ProficiencyTemplateEditor";
+import { Collapsible } from "../components/ui/Collapsible";
 import { Button } from "../components/ui/Button";
 import { Dropzone } from "../components/ui/Dropzone";
 import { cn } from "../lib/cn";
@@ -432,6 +437,21 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
       case "profiles":
         return (
           <div className="space-y-4">
+            {/* Step 7 opens with "User defines job profile template, Job
+                Evaluation Framework and level names / JE score mapping", so the
+                framework is editable here — before the run that consumes it. */}
+            <Collapsible
+              title="Job evaluation framework"
+              subtitle="Domains, sub-factor weights, scoring rubric, and the level names each score maps to."
+            >
+              <LazyJEFramework
+                load={() => api.getJeFramework()}
+                loadDefaults={() => api.getJeFramework(true)}
+                save={api.putJeFramework}
+                hasResults={summary!.je_results > 0}
+              />
+            </Collapsible>
+
             <div className="space-y-3">
               <Button
                 variant="primary"
@@ -491,6 +511,19 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
               levelsAssigned: skills?.levels_assigned ?? 0,
               requirements: skills?.profile_requirements ?? 0,
               onGenerate: api.skills.generateProficiency,
+              editor: (
+                <Collapsible
+                  title="Proficiency template"
+                  subtitle="The level scale and criteria that per-cluster wording is generated against."
+                >
+                  <LazyProficiencyTemplate
+                    load={() => api.skills.getTemplate()}
+                    loadDefaults={() => api.skills.getTemplate(true)}
+                    save={api.skills.putTemplate}
+                    hasGenerated={(skills?.proficiency_definitions ?? 0) > 0}
+                  />
+                </Collapsible>
+              ),
             }}
           />
         );
@@ -556,6 +589,97 @@ interface Downstream {
   skills: SkillsSummary | null;
   tasks: TasksSummary | null;
   matching: MatchingSummary | null;
+}
+
+/**
+ * The two config editors fetch on first open rather than with the page.
+ * Both are behind a Collapsible, so most sessions never need the request.
+ */
+function LazyJEFramework({
+  load,
+  loadDefaults,
+  save,
+  hasResults,
+}: {
+  load: () => Promise<JEFramework>;
+  loadDefaults: () => Promise<JEFramework>;
+  save: (f: JEFramework) => Promise<unknown>;
+  hasResults: boolean;
+}) {
+  const [framework, setFramework] = useState<JEFramework | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    load()
+      .then(setFramework)
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+    // `load` is a fresh closure each render; depending on it would refetch forever.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (error) return <p className="text-[12px] text-brand">{error}</p>;
+  if (!framework) return <p className="text-[12px] text-text-muted">Loading framework…</p>;
+  return (
+    <JEFrameworkEditor
+      framework={framework}
+      saving={saving}
+      hasResults={hasResults}
+      onReset={loadDefaults}
+      onSave={async (f) => {
+        setSaving(true);
+        try {
+          await save(f);
+          setFramework(f);
+        } finally {
+          setSaving(false);
+        }
+      }}
+    />
+  );
+}
+
+function LazyProficiencyTemplate({
+  load,
+  loadDefaults,
+  save,
+  hasGenerated,
+}: {
+  load: () => Promise<ProficiencyTemplate>;
+  loadDefaults: () => Promise<ProficiencyTemplate>;
+  save: (t: ProficiencyTemplate) => Promise<unknown>;
+  hasGenerated: boolean;
+}) {
+  const [template, setTemplate] = useState<ProficiencyTemplate | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    load()
+      .then(setTemplate)
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (error) return <p className="text-[12px] text-brand">{error}</p>;
+  if (!template) return <p className="text-[12px] text-text-muted">Loading template…</p>;
+  return (
+    <ProficiencyTemplateEditor
+      template={template}
+      saving={saving}
+      hasGenerated={hasGenerated}
+      onReset={loadDefaults}
+      onSave={async (t) => {
+        setSaving(true);
+        try {
+          await save(t);
+          setTemplate(t);
+        } finally {
+          setSaving(false);
+        }
+      }}
+    />
+  );
 }
 
 function stageState(id: string, s: StageSummary, d: Downstream): StageState {

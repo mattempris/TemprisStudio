@@ -6,7 +6,9 @@ import type {
   HrisConfirmResult,
   HrisPreview,
   JEDetail,
+  JEFramework,
   JobHandle,
+  ProficiencyTemplate,
   MatchBrowse,
   MatchingSummary,
   Overview,
@@ -137,6 +139,16 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
         body: JSON.stringify({ level, cluster_id: clusterId, name }),
       }),
 
+    /** Step 7: the JE framework and level/score mapping the user defines.
+     *  GET returns the shipped default until the project saves its own. */
+    getJeFramework: (defaults = false) =>
+      request<JEFramework>(`${base}/je-framework${defaults ? "?defaults=true" : ""}`),
+    putJeFramework: (framework: JEFramework) =>
+      request<{ saved: boolean }>(`${base}/je-framework`, {
+        method: "PUT",
+        body: JSON.stringify(framework),
+      }),
+
     startProfileGeneration: (runJe = true) =>
       request<JobHandle>(`${base}/profiles/generate?run_je=${runJe}`, { method: "POST" }),
     listProfiles: () => request<{ profiles: ProfileRow[]; count: number }>(`${base}/profiles`),
@@ -186,6 +198,15 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
       taxonomy: () => request<{ families: TaxonomyNode[]; has_headcount: boolean }>(`${base}/skills/taxonomy`),
       generateProficiency: () =>
         request<JobHandle>(`${base}/skills/proficiency/generate`, { method: "POST" }),
+      getTemplate: (defaults = false) =>
+        request<ProficiencyTemplate>(
+          `${base}/skills/proficiency/template${defaults ? "?defaults=true" : ""}`,
+        ),
+      putTemplate: (template: ProficiencyTemplate) =>
+        request<{ saved: boolean }>(`${base}/skills/proficiency/template`, {
+          method: "PUT",
+          body: JSON.stringify(template),
+        }),
     },
 
     // ── Tasks (step 10) ──────────────────────────────────────────────────────

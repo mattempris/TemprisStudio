@@ -492,9 +492,13 @@ def _level_distribution(reqs) -> dict[str, int]:
 # Step 9b — proficiency template, definitions, rollup, level assignment
 # ===========================================================================
 @router.get("/proficiency/template")
-def get_template(client_slug: str, project_slug: str) -> ProficiencyTemplateConfig:
+def get_template(
+    client_slug: str, project_slug: str, defaults: bool = False
+) -> ProficiencyTemplateConfig:
+    """`defaults=true` forces the shipped default, so the editor's "Load
+    defaults" control can get back to it after the project has saved its own."""
     _, state = _load(client_slug, project_slug)
-    if state.skills.proficiency_template.levels:
+    if state.skills.proficiency_template.levels and not defaults:
         return state.skills.proficiency_template
     default = proficiency.load_default_template()
     return ProficiencyTemplateConfig(

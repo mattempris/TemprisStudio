@@ -32,13 +32,16 @@ interface Props {
   runJob: (start: () => Promise<JobHandle>) => void;
   busy: boolean;
   progress: React.ReactNode;
-  /** Skills only: proficiency criteria generation plus the auto-map onto jobs. */
+  /** Skills only: proficiency criteria generation plus the auto-map onto jobs.
+   *  `editor` is the template editor, shown above the generate button since it
+   *  defines the rubric that generation is written against. */
   proficiency?: {
     done: boolean;
     mappedClusters: number;
     levelsAssigned: number;
     requirements: number;
     onGenerate: () => Promise<JobHandle>;
+    editor?: React.ReactNode;
   };
 }
 
@@ -128,12 +131,15 @@ export function EntityTaxonomyStage({
 
       {/* 4. Proficiency (skills only) */}
       {named && proficiency && (
-        <div className="rounded-[10px] border border-border bg-panel px-4 py-3">
-          <p className="text-[12.5px] font-semibold text-text">Proficiency levels</p>
-          <p className="mt-0.5 mb-2 text-[11.5px] leading-snug text-text-secondary">
-            Generates level criteria per skill cluster, then deterministically maps each job profile
-            onto them.
-          </p>
+        <div className="space-y-2.5 rounded-[10px] border border-border bg-panel px-4 py-3">
+          <div>
+            <p className="text-[12.5px] font-semibold text-text">Proficiency levels</p>
+            <p className="mt-0.5 text-[11.5px] leading-snug text-text-secondary">
+              Generates level criteria per skill cluster, then deterministically maps each job
+              profile onto them.
+            </p>
+          </div>
+          {proficiency.editor}
           <Button variant="primary" onClick={() => runJob(proficiency.onGenerate)} disabled={busy}>
             <span className="flex items-center gap-1.5">
               <Play size={12} />

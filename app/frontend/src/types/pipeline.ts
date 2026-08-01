@@ -350,6 +350,43 @@ export interface Overview {
   };
 }
 
+// ── User-editable configuration (step 7 and step 9) ──────────────────────────
+
+export interface JESubdomain {
+  name: string;
+  weight: number;
+  /** Exactly 5 descriptors, one per score point 1-5. */
+  rubric: string[];
+}
+
+export interface JEDomain {
+  name: string;
+  weight: number;
+  subdomains: JESubdomain[];
+}
+
+export interface JELevelBand {
+  name: string;
+  min_score: number;
+  max_score: number;
+}
+
+export interface JEFramework {
+  domains: JEDomain[];
+  level_bands: JELevelBand[];
+}
+
+export interface ProficiencyLevel {
+  name: string;
+  ordinal: number;
+  criteria: string;
+  typical_autonomy?: string | null;
+}
+
+export interface ProficiencyTemplate {
+  levels: ProficiencyLevel[];
+}
+
 export interface HierarchyNode {
   families: {
     id: number;

@@ -92,47 +92,116 @@ def validate_framework(framework: JEFrameworkConfig) -> list[str]:
 # Dynamic prompt + schema
 # ---------------------------------------------------------------------------
 def build_schema(framework: JEFrameworkConfig) -> dict:
-    """One object per persona; each domain an object of its subdomain scores
-    plus a Rationale string.
+    """A FLAT schema: two arrays of uniform rows, not nested per-name objects.
 
-    Scores are plain integers with the 1-5 range enforced by the prompt and,
-    definitively, by `_clip()` in `clamp()`. Two schema-level alternatives were
-    tried against the live API and both were rejected:
-      - `minimum`/`maximum`: "For 'integer' type, properties maximum, minimum
-        are not supported" (structured outputs don't accept numeric ranges).
-      - `enum: [1..5]` on every subfactor: "The compiled grammar is too large" —
-        3 personas x 20 subfactors of 5-way enums exceeds the grammar budget.
-    Since the range is already guaranteed deterministically post-call, losing
-    schema-level enforcement costs nothing.
+    This shape was arrived at empirically, and the schema size turned out to be
+    the binding constraint rather than max_tokens. Against the live API:
+      - `minimum`/`maximum` on scores: rejected outright ("For 'integer' type,
+        properties maximum, minimum are not supported").
+      - `enum: [1..5]` per subfactor: "The compiled grammar is too large".
+      - Nested objects keyed by domain/subfactor name, personas inlined: also
+        "compiled grammar is too large".
+      - Same, with the persona shape in `$defs`/`$ref`: passed validation, but
+        every request then hung ~260s and failed with `overloaded_error` — at
+        max_tokens of 32000, 16000, 8000 AND 4000 alike, while an identical
+        32000-token request with no schema was served in 1.4s. The grammar was
+        evidently still near the limit and too slow to compile.
+
+    A nested schema needs one grammar rule per literal property name: 4 domains x
+    (5 subfactors + Rationale) = 24 names, x3 personas. This flat form needs one
+    rule for a score row and one for a rationale row, whatever the framework's
+    size — so it also stops the grammar growing as a user adds domains.
+
+    The cost is that the schema no longer guarantees every subfactor appears
+    exactly once. That's fine: `validate_raw_evaluations()` already had to check
+    completeness and ranges anyway, and now also catches missing or duplicate
+    rows, with a retry behind it.
     """
-    domain_props: dict[str, Any] = {}
-    for d in framework.domains:
-        sub_props: dict[str, Any] = {s.name: {"type": "integer"} for s in d.subdomains}
-        sub_props["Rationale"] = {"type": "string"}
-        domain_props[d.name] = {
-            "type": "object",
-            "properties": sub_props,
-            "required": [*[s.name for s in d.subdomains], "Rationale"],
-            "additionalProperties": False,
-        }
-
-    # All three personas share an identical shape, so define it once in $defs and
-    # $ref it. Inlining it three times triples the compiled grammar and trips
-    # "The compiled grammar is too large" on a 4-domain/20-subfactor framework.
     return {
-        "$defs": {
-            "persona": {
-                "type": "object",
-                "properties": domain_props,
-                "required": [d.name for d in framework.domains],
-                "additionalProperties": False,
-            }
-        },
         "type": "object",
-        "properties": {p: {"$ref": "#/$defs/persona"} for p in PERSONAS},
-        "required": list(PERSONAS),
+        "properties": {
+            "scores": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "domain": {"type": "string"},
+                        "subfactor": {"type": "string"},
+                        "balanced": {"type": "integer"},
+                        "generous": {"type": "integer"},
+                        "harsh": {"type": "integer"},
+                    },
+                    "required": ["domain", "subfactor", "balanced", "generous", "harsh"],
+                    "additionalProperties": False,
+                },
+            },
+            "rationales": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "domain": {"type": "string"},
+                        "persona": {"type": "string"},
+                        "text": {"type": "string"},
+                    },
+                    "required": ["domain", "persona", "text"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["scores", "rationales"],
         "additionalProperties": False,
     }
+
+
+def _expand_flat_response(raw: dict, framework: JEFrameworkConfig) -> dict:
+    """Turn the flat score/rationale rows into the nested
+    persona -> domain -> {subfactor: score, Rationale: str} structure that
+    clamp(), weighted_score() and domain_subtotals() all consume, so the flat
+    wire format stays contained to this module's boundary.
+
+    Names are matched case- and whitespace-insensitively, since the model echoes
+    them back as free strings rather than picking from an enum.
+    """
+    canon_domain = {d.name.strip().lower(): d.name for d in framework.domains}
+    canon_sub = {
+        (d.name.strip().lower(), s.name.strip().lower()): s.name
+        for d in framework.domains
+        for s in d.subdomains
+    }
+    canon_persona = {p.lower(): p for p in PERSONAS}
+
+    out: dict[str, dict] = {
+        p: {d.name: {} for d in framework.domains} for p in PERSONAS
+    }
+
+    for row in raw.get("scores", []) or []:
+        dname = canon_domain.get(str(row.get("domain", "")).strip().lower())
+        if dname is None:
+            continue
+        sname = canon_sub.get((dname.strip().lower(), str(row.get("subfactor", "")).strip().lower()))
+        if sname is None:
+            continue
+        for persona, field in (("Balanced", "balanced"), ("Generous", "generous"), ("Harsh", "harsh")):
+            value = row.get(field)
+            if isinstance(value, bool) or not isinstance(value, int):
+                continue
+            out[persona][dname][sname] = value
+
+    for row in raw.get("rationales", []) or []:
+        dname = canon_domain.get(str(row.get("domain", "")).strip().lower())
+        persona = canon_persona.get(str(row.get("persona", "")).strip().lower())
+        if dname is None or persona is None:
+            continue
+        out[persona][dname]["Rationale"] = str(row.get("text", "")).strip()
+
+    # ensure the Rationale key exists everywhere so validation reports "empty"
+    # rather than raising a KeyError
+    for persona in PERSONAS:
+        for d in framework.domains:
+            out[persona][d.name].setdefault("Rationale", "")
+
+    return out
 
 
 def build_system_prompt(framework: JEFrameworkConfig) -> str:
@@ -154,8 +223,10 @@ def build_system_prompt(framework: JEFrameworkConfig) -> str:
     n_subfactors = sum(len(d.subdomains) for d in framework.domains)
     spread_lo, spread_hi = max(4, n_subfactors // 4), max(8, n_subfactors // 2)
 
+    all_subfactors = [(d.name, s.name) for d in framework.domains for s in d.subdomains]
+
     lines.append(
-        "\n\nProduce THREE evaluations, derived in this order:\n"
+        "\n\nScore each subfactor from THREE perspectives, derived in this order:\n"
         "1. BALANCED: your honest, defensible reading of the role.\n"
         f"2. GENEROUS: identical to Balanced EXCEPT nudge UP by exactly 1 the "
         f"{spread_lo}-{spread_hi} subfactors where an optimistic but still "
@@ -163,12 +234,21 @@ def build_system_prompt(framework: JEFrameworkConfig) -> str:
         f"3. HARSH: identical to Balanced EXCEPT nudge DOWN by exactly 1 the "
         f"{spread_lo}-{spread_hi} subfactors where a conservative but still "
         "defensible reading justifies it. Never -2 on any subfactor.\n\n"
-        "HARD CONSTRAINTS: for every subfactor, Generous >= Balanced >= Harsh. "
-        "Generous and Harsh must differ from Balanced only by these single-point "
-        "nudges — they are not independent re-scorings.\n\n"
-        "Each domain also gets a Rationale: 1-2 sentences, written in that "
-        "persona's voice, citing specifics from the profile that justify the "
-        "scores. Do not restate the rubric."
+        "HARD CONSTRAINTS: for every subfactor, generous >= balanced >= harsh, "
+        "and every score is an integer 1-5. Generous and Harsh differ from "
+        "Balanced only by these single-point nudges — they are not independent "
+        "re-scorings.\n\n"
+        "OUTPUT FORMAT:\n"
+        "`scores`: one row per subfactor, carrying all three perspectives —\n"
+        '  {"domain": ..., "subfactor": ..., "balanced": n, "generous": n, "harsh": n}\n'
+        f"  Return exactly {len(all_subfactors)} rows, one for each subfactor "
+        "listed above, using the domain and subfactor names verbatim. No "
+        "duplicates and none omitted.\n"
+        "`rationales`: one row per domain per perspective —\n"
+        '  {"domain": ..., "persona": "Balanced"|"Generous"|"Harsh", "text": ...}\n'
+        f"  Return exactly {len(framework.domains) * len(PERSONAS)} rows. Each "
+        "text is 1-2 sentences in that perspective's voice, citing specifics from "
+        "the profile that justify its scores. Do not restate the rubric."
     )
     return "\n".join(lines)
 
@@ -276,8 +356,15 @@ def weighted_score(persona_eval: dict, framework: JEFrameworkConfig) -> float:
     """Weighted 0-100 score for one persona.
 
     Each subdomain's 1-5 score is rescaled to 0-100 and multiplied by its weight
-    (weights across all subdomains sum to 100), so the result is directly
-    comparable to the level bands' 0-100 scale.
+    (weights across all subdomains sum to 100).
+
+    NOTE this differs deliberately from the legacy reference, which summed the
+    20 subfactors with EQUAL weight for a 20-100 total and never applied the
+    domain weightings at all. Honouring the weights is the whole reason
+    instructions.txt supplies Job_Evaluation_Domain_Weightings.csv, but it means
+    the scale's floor is 0 rather than 20 — so level bands written for the raw
+    sum must be converted (pct = (raw_sum - 20) / 0.8) before use. The shipped
+    default bands already are; see the note in je_framework_default.json.
     """
     total = 0.0
     for d in framework.domains:
@@ -362,8 +449,9 @@ def evaluate_one(
             thinking="adaptive",
         )
         try:
-            validate_raw_evaluations(candidate, framework)
-            raw = candidate
+            expanded = _expand_flat_response(candidate, framework)
+            validate_raw_evaluations(expanded, framework)
+            raw = expanded
             break
         except InvalidEvaluation as e:
             last_err = e

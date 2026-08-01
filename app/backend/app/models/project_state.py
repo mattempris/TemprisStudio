@@ -226,6 +226,24 @@ class SkillsState(BaseModel):
     audit: dict = Field(default_factory=dict)  # inference audit counts, for transparency
 
 
+class InferredTaskRecord(BaseModel):
+    """A task as inferred from one job profile (step 10), before clustering.
+    `proportion` is that task's share of the job holder's time; the proportions
+    for one profile_key are guaranteed to sum to 100."""
+
+    id: str
+    name: str
+    description: str
+    proportion: float
+    source_profile_key: str
+
+
+class TasksState(BaseModel):
+    inferred: list[InferredTaskRecord] = Field(default_factory=list)
+    clustering: ClusteringState | None = None
+    audit: dict = Field(default_factory=dict)
+
+
 class ProjectState(BaseModel):
     meta: ProjectMeta
     inputs: list[RawInputFile] = Field(default_factory=list)
@@ -240,3 +258,4 @@ class ProjectState(BaseModel):
     job_profiles: list[JobProfileDoc] = Field(default_factory=list)
     je_results: list[JEEvaluationResult] = Field(default_factory=list)
     skills: SkillsState = Field(default_factory=SkillsState)
+    tasks: TasksState = Field(default_factory=TasksState)

@@ -245,14 +245,15 @@
       ]
     }
   ],
+  "_level_bands_note": "Band NAMES and their relative spacing come from Legacy jaStudio's levelling_table.json. The THRESHOLDS have been rescaled, not invented. That table's numbers were authored for an unweighted raw sum: 20 subfactors each scored 1-5 and 'summed with equal weight' (Insurance Demo/pipeline/build_levelling.py says so explicitly), giving a 20-100 range. This app instead applies the domain and subdomain weights that instructions.txt supplies via Job_Evaluation_Domain_Weightings.csv, producing a weighted 0-100 percentage — which is the point of the framework having weights at all, but it is a different scale with a floor of 0 rather than 20. Applying the original numbers unchanged therefore under-levelled every job (a data analyst landed in 'Operative'). Converting between the two is linear: pct = (raw_sum - 20) / 0.8. The thresholds below are exactly that conversion of the original bands, so the client's own level structure is preserved on the correct scale. These are compensation-relevant boundaries and remain fully user-editable — re-calibrate them against your own score distribution before using them in anger.",
   "level_bands": [
-    { "name": "Operative", "min_score": 20, "max_score": 40 },
-    { "name": "Technician", "min_score": 40, "max_score": 52 },
-    { "name": "Analyst / Engineer", "min_score": 52, "max_score": 62 },
-    { "name": "Senior Analyst / Engineer", "min_score": 62, "max_score": 68 },
-    { "name": "Specialist / Lead", "min_score": 68, "max_score": 73 },
-    { "name": "Principal", "min_score": 73, "max_score": 80 },
-    { "name": "Head of Function", "min_score": 80, "max_score": 89 },
-    { "name": "Director", "min_score": 89, "max_score": 100 }
+    { "name": "Operative", "min_score": 0, "max_score": 25 },
+    { "name": "Technician", "min_score": 25, "max_score": 40 },
+    { "name": "Analyst / Engineer", "min_score": 40, "max_score": 52.5 },
+    { "name": "Senior Analyst / Engineer", "min_score": 52.5, "max_score": 60 },
+    { "name": "Specialist / Lead", "min_score": 60, "max_score": 66.25 },
+    { "name": "Principal", "min_score": 66.25, "max_score": 75 },
+    { "name": "Head of Function", "min_score": 75, "max_score": 86.25 },
+    { "name": "Director", "min_score": 86.25, "max_score": 100 }
   ]
 }

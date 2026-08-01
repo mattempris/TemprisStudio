@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import websocket
-from app.api.routes import matching, pipeline, projects, skills, tasks
+from app.api.routes import matching, overview, pipeline, projects, skills, tasks
 from app.core.config import get_settings
 
 app = FastAPI(title="Tempris JAStudio")
@@ -24,6 +24,7 @@ app.include_router(skills.router)
 app.include_router(tasks.router)
 app.include_router(matching.router)
 app.include_router(matching.project_router)
+app.include_router(overview.router)
 app.include_router(websocket.router)
 
 

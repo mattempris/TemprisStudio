@@ -1,13 +1,23 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Play, Upload } from "lucide-react";
-import { pipelineApi } from "../services/pipelineApi";
+import { pipelineApi, taxonomyApi } from "../services/pipelineApi";
 import { useJobStream } from "../hooks/useJobStream";
-import type { ProfileRow, StageSummary } from "../types/pipeline";
+import type {
+  MatchingSummary,
+  Overview,
+  ProfileRow,
+  SkillsSummary,
+  StageSummary,
+  TasksSummary,
+} from "../types/pipeline";
 import { StageSection, type StageState } from "../components/wizard/StageSection";
 import { ProgressBar } from "../components/wizard/ProgressBar";
 import { ClusterKPanel } from "../components/pipeline/ClusterKPanel";
 import { DedupePanel } from "../components/pipeline/DedupePanel";
 import { JEResultsBrowser } from "../components/pipeline/JEResultsBrowser";
+import { EntityTaxonomyStage } from "../components/pipeline/EntityTaxonomyStage";
+import { MatchingPanel } from "../components/pipeline/MatchingPanel";
+import { OverviewBrowser } from "../components/pipeline/OverviewBrowser";
 import { Button } from "../components/ui/Button";
 import { cn } from "../lib/cn";
 
@@ -18,7 +28,24 @@ const STAGES = [
   { id: "normalize", title: "Normalise descriptions", description: "Produce a structured summary per distinct job: purpose, key tasks, reporting line, budget." },
   { id: "cluster", title: "Cluster and name", description: "Build the Family › Category › Profile hierarchy and give each cluster an industry-standard name." },
   { id: "profiles", title: "Job profiles and evaluation", description: "Generate a job profile document per cluster and evaluate it against your job evaluation framework." },
+  { id: "skills", title: "Skills taxonomy", description: "Infer the attributes each profile needs, cluster them into a taxonomy, and set proficiency levels." },
+  { id: "tasks", title: "Task taxonomy", description: "Infer what each profile spends time on, cluster it, and analyse where the workforce's time goes." },
+  { id: "matching", title: "3rd-party taxonomy match", description: "Place each job profile in the external market taxonomy and assign a career level." },
 ] as const;
+
+const SKILL_LABELS = {
+  tiers: ["Skill families", "Skill categories", "Skill clusters"] as [string, string, string],
+  hints: ["Broadest grouping", "Groups of clusters", "Groups of skills"] as [string, string, string],
+  itemNoun: "inferred skills",
+  leafNoun: "cluster",
+};
+
+const TASK_LABELS = {
+  tiers: ["Task domains", "Task categories", "Task clusters"] as [string, string, string],
+  hints: ["Broadest grouping", "Groups of clusters", "Groups of tasks"] as [string, string, string],
+  itemNoun: "inferred tasks",
+  leafNoun: "cluster",
+};
 
 export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; projectSlug: string }) {
   const api = useMemo(() => pipelineApi(clientSlug, projectSlug), [clientSlug, projectSlug]);
@@ -28,6 +55,11 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
   const [profiles, setProfiles] = useState<ProfileRow[]>([]);
   const [caps, setCaps] = useState({ html: true, docx: true, pdf: false });
   const [busy, setBusy] = useState(false);
+  const [skills, setSkills] = useState<SkillsSummary | null>(null);
+  const [tasks, setTasks] = useState<TasksSummary | null>(null);
+  const [matching, setMatching] = useState<MatchingSummary | null>(null);
+  const [allIndustries, setAllIndustries] = useState<string[]>([]);
+  const [overview, setOverview] = useState<Overview | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -36,6 +68,18 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
       if (s.job_profiles > 0) {
         const p = await api.listProfiles();
         setProfiles(p.profiles);
+        // Downstream summaries only mean anything once profiles exist, and they
+        // are independent — fetch together rather than serially behind each stage.
+        const [sk, tk, mt, ov] = await Promise.allSettled([
+          api.skills.summary(),
+          api.tasks.summary(),
+          api.matching.summary(),
+          api.overview(),
+        ]);
+        if (sk.status === "fulfilled") setSkills(sk.value);
+        if (tk.status === "fulfilled") setTasks(tk.value);
+        if (mt.status === "fulfilled") setMatching(mt.value);
+        if (ov.status === "fulfilled") setOverview(ov.value);
       }
       return s;
     } catch (e) {
@@ -49,6 +93,9 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
   useEffect(() => {
     void refresh();
     void api.exportCapabilities().then(setCaps).catch(() => {});
+    // The industry list is static catalogue metadata; a 503 here just means the
+    // 3rd-party taxonomy isn't present, which the matching stage handles.
+    void taxonomyApi.industries().then((r) => setAllIndustries(r.industries)).catch(() => {});
   }, [refresh, api]);
 
   // Re-attach to a job already running server-side (e.g. after a page reload) —
@@ -62,12 +109,17 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
   // Open the first stage that still needs attention.
   useEffect(() => {
     if (!summary || expanded !== null) return;
-    setExpanded(firstIncompleteStage(summary));
-  }, [summary, expanded]);
+    setExpanded(firstIncompleteStage(summary, downstream));
+  }, [summary, expanded, downstream]);
+
+  const downstream = useMemo<Downstream>(
+    () => ({ skills, tasks, matching }),
+    [skills, tasks, matching],
+  );
 
   const state = useCallback(
-    (id: string): StageState => (summary ? stageState(id, summary) : "locked"),
-    [summary],
+    (id: string): StageState => (summary ? stageState(id, summary, downstream) : "locked"),
+    [summary, downstream],
   );
 
   async function runJob(start: () => Promise<{ job_id: string; stage: string }>) {
@@ -136,6 +188,14 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
             );
           })}
         </ol>
+        {overview && overview.families.length > 0 && (
+          <a
+            href="#architecture"
+            className="mt-3 flex items-center gap-2 rounded-[10px] border-t border-border px-2.5 pt-3 text-[11.5px] font-bold text-brand hover:underline"
+          >
+            Job architecture
+          </a>
+        )}
       </nav>
 
       <div className="min-w-0 flex-1 space-y-4">
@@ -155,7 +215,7 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
               title={s.title}
               description={s.description}
               state={st}
-              summary={stageSummaryLine(s.id, summary)}
+              summary={stageSummaryLine(s.id, summary, downstream)}
               lockedReason={lockedReason(s.id)}
               expanded={expanded === s.id}
               onToggle={() => setExpanded(expanded === s.id ? null : s.id)}
@@ -164,6 +224,27 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
             </StageSection>
           );
         })}
+
+        {/* The deliverable, not a step — styled as a structural container rather
+            than another numbered wizard card so it doesn't read as more work. */}
+        {overview && overview.families.length > 0 && (
+          <section
+            id="architecture"
+            className="rounded-[var(--radius-modal)] border border-border bg-card p-6 shadow-modal"
+          >
+            <div className="mb-4 border-b-2 border-brand pb-3">
+              <h2 className="text-[16px] font-bold text-text">Job architecture</h2>
+              <p className="mt-0.5 text-[12.5px] text-text-secondary">
+                The complete hierarchy: every job family, category and profile with its
+                evaluation, skills, time allocation and external taxonomy match.
+              </p>
+            </div>
+            <OverviewBrowser
+              data={overview}
+              onOpenProfile={(key) => window.open(api.exportUrl(key, "html"), "_blank")}
+            />
+          </section>
+        )}
       </div>
     </div>
   );
@@ -317,13 +398,121 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
           </div>
         );
 
+      case "skills":
+        return (
+          <EntityTaxonomyStage
+            kind="skill"
+            labels={SKILL_LABELS}
+            tierLabels={SKILL_LABELS.tiers}
+            inferredCount={skills?.inferred_skills ?? 0}
+            profilesCovered={skills?.profiles_covered ?? 0}
+            jobProfileCount={summary!.job_profiles}
+            clustered={skills?.clustered ?? false}
+            named={skills?.named ?? false}
+            k={{
+              families: skills?.k_families ?? null,
+              categories: skills?.k_categories ?? null,
+              clusters: skills?.k_clusters ?? null,
+            }}
+            audit={skills?.audit ?? {}}
+            onInfer={() => api.skills.infer()}
+            onBuildTree={api.skills.buildTree}
+            preview={api.skills.preview}
+            onConfirm={api.skills.confirm}
+            loadTaxonomy={async () => {
+              const t = await api.skills.taxonomy();
+              return { roots: t.families, hasHeadcount: t.has_headcount };
+            }}
+            runJob={runJob}
+            busy={busy || job.running}
+            progress={showProgress ? <ProgressBar job={job} /> : null}
+            proficiency={{
+              done: (skills?.proficiency_definitions ?? 0) > 0,
+              mappedClusters: skills?.proficiency_definitions ?? 0,
+              levelsAssigned: skills?.levels_assigned ?? 0,
+              requirements: skills?.profile_requirements ?? 0,
+              onGenerate: api.skills.generateProficiency,
+            }}
+          />
+        );
+
+      case "tasks":
+        return (
+          <EntityTaxonomyStage
+            kind="task"
+            labels={TASK_LABELS}
+            tierLabels={TASK_LABELS.tiers}
+            inferredCount={tasks?.inferred_tasks ?? 0}
+            profilesCovered={tasks?.profiles_covered ?? 0}
+            jobProfileCount={summary!.job_profiles}
+            clustered={tasks?.clustered ?? false}
+            named={tasks?.named ?? false}
+            k={{
+              families: tasks?.k_domains ?? null,
+              categories: tasks?.k_categories ?? null,
+              clusters: tasks?.k_tasks ?? null,
+            }}
+            audit={tasks?.audit ?? {}}
+            onInfer={() => api.tasks.infer()}
+            onBuildTree={api.tasks.buildTree}
+            preview={api.tasks.preview}
+            onConfirm={api.tasks.confirm}
+            loadTaxonomy={async () => {
+              const t = await api.tasks.taxonomy();
+              return { roots: t.domains, hasHeadcount: t.has_headcount };
+            }}
+            runJob={runJob}
+            busy={busy || job.running}
+            progress={showProgress ? <ProgressBar job={job} /> : null}
+          />
+        );
+
+      case "matching":
+        return (
+          <div className="space-y-3">
+            <MatchingPanel
+              browse={api.matching.browse}
+              matches={api.matching.matches}
+              search={api.matching.search}
+              override={api.matching.override}
+              industries={matching?.industries ?? []}
+              allIndustries={allIndustries}
+              onRun={(inds) =>
+                runJob(() => api.matching.run({ industries: inds.length ? inds : null }))
+              }
+              running={busy || job.running}
+              hasResults={(matching?.matched_profiles ?? 0) > 0}
+            />
+            {showProgress && <ProgressBar job={job} />}
+          </div>
+        );
+
       default:
         return null;
     }
   }
 }
 
-function stageState(id: string, s: StageSummary): StageState {
+interface Downstream {
+  skills: SkillsSummary | null;
+  tasks: TasksSummary | null;
+  matching: MatchingSummary | null;
+}
+
+function stageState(id: string, s: StageSummary, d: Downstream): StageState {
+  switch (id) {
+    // Steps 8-11 all hang off having job profiles; each is complete once its own
+    // final artifact exists (a named taxonomy, or at least one recorded match).
+    case "skills":
+      if (s.job_profiles === 0) return "locked";
+      return d.skills?.named ? "complete" : "active";
+    case "tasks":
+      if (s.job_profiles === 0) return "locked";
+      return d.tasks?.named ? "complete" : "active";
+    case "matching":
+      if (s.job_profiles === 0) return "locked";
+      return (d.matching?.matched_profiles ?? 0) > 0 ? "complete" : "active";
+  }
   switch (id) {
     case "ingest":
       return s.raw_records > 0 ? "complete" : "active";
@@ -347,7 +536,25 @@ function stageState(id: string, s: StageSummary): StageState {
   }
 }
 
-function stageSummaryLine(id: string, s: StageSummary): string | undefined {
+function stageSummaryLine(id: string, s: StageSummary, d: Downstream): string | undefined {
+  switch (id) {
+    case "skills":
+      if (!d.skills?.named) return undefined;
+      return `${d.skills.inferred_skills} skills › ${d.skills.k_clusters} clusters${
+        d.skills.levels_assigned ? ", proficiency mapped" : ""
+      }`;
+    case "tasks":
+      if (!d.tasks?.named) return undefined;
+      return `${d.tasks.inferred_tasks} tasks › ${d.tasks.k_tasks} clusters`;
+    case "matching": {
+      const m = d.matching;
+      if (!m || m.matched_profiles === 0) return undefined;
+      const review = m.summary.needs_review ?? 0;
+      return `${m.summary.matched ?? 0} of ${m.matched_profiles} matched${
+        review ? `, ${review} to review` : ""
+      }`;
+    }
+  }
   switch (id) {
     case "ingest":
       return `${s.raw_records} job${s.raw_records === 1 ? "" : "s"} loaded`;
@@ -378,14 +585,18 @@ function lockedReason(id: string): string {
       return "Normalise at least 3 jobs first.";
     case "profiles":
       return "Name the clusters first.";
+    case "skills":
+    case "tasks":
+    case "matching":
+      return "Generate job profiles first.";
     default:
       return "";
   }
 }
 
-function firstIncompleteStage(s: StageSummary): string {
+function firstIncompleteStage(s: StageSummary, d: Downstream): string {
   for (const stage of STAGES) {
-    if (stageState(stage.id, s) === "active") return stage.id;
+    if (stageState(stage.id, s, d) === "active") return stage.id;
   }
   return STAGES[STAGES.length - 1].id;
 }

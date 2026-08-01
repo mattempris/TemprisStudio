@@ -412,11 +412,27 @@ def skills_taxonomy(client_slug: str, project_slug: str) -> dict:
                 }
             )
 
+    def roll_up(skill_count: int, jobs: set[str]) -> dict:
+        """Aggregate for a family or category.
+
+        Jobs are unioned rather than summed: one job profile requiring three
+        skills in the same family counts once toward that family's reach. Summing
+        the child counts would inflate a broad family into looking universally
+        required.
+        """
+        return {
+            "skill_count": skill_count,
+            "jobs_requiring_count": len(jobs),
+            "headcount_requiring": sum(profile_headcount.get(k, 0) for k in jobs) or None,
+        }
+
     families = []
     for fam in tree.values():
         cats = []
+        fam_skills, fam_jobs = 0, set()
         for cat in fam["categories"].values():
             clusters = []
+            cat_skills, cat_jobs = 0, set()
             for cl in cat["clusters"].values():
                 reqs = reqs_by_cluster.get(cl["id"], [])
                 jobs_requiring = sorted({r.profile_key for r in reqs})
@@ -430,9 +446,27 @@ def skills_taxonomy(client_slug: str, project_slug: str) -> dict:
                         "level_distribution": _level_distribution(reqs),
                     }
                 )
+                cat_skills += len(cl["skills"])
+                cat_jobs.update(jobs_requiring)
             clusters.sort(key=lambda x: -x["jobs_requiring_count"])
-            cats.append({**{k: v for k, v in cat.items() if k != "clusters"}, "clusters": clusters})
-        families.append({**{k: v for k, v in fam.items() if k != "categories"}, "categories": cats})
+            cats.append(
+                {
+                    **{k: v for k, v in cat.items() if k != "clusters"},
+                    "clusters": clusters,
+                    **roll_up(cat_skills, cat_jobs),
+                }
+            )
+            fam_skills += cat_skills
+            fam_jobs.update(cat_jobs)
+        cats.sort(key=lambda x: -x["jobs_requiring_count"])
+        families.append(
+            {
+                **{k: v for k, v in fam.items() if k != "categories"},
+                "categories": cats,
+                **roll_up(fam_skills, fam_jobs),
+            }
+        )
+    families.sort(key=lambda x: -x["jobs_requiring_count"])
 
     return {"families": families, "has_headcount": bool(profile_headcount)}
 

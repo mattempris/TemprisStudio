@@ -13,15 +13,39 @@ import { Button } from "../ui/Button";
  * so it stays responsive. Requests are debounced and superseded so a fast drag
  * doesn't queue up stale responses.
  */
+/** Tier labels differ per entity (jobs / skills / tasks) but the mechanics are
+ *  identical, so the same panel drives all three. */
+export interface TierLabels {
+  tiers: [string, string, string];
+  hints: [string, string, string];
+  itemNoun: string;
+  leafNoun: string;
+}
+
+const JOB_LABELS: TierLabels = {
+  tiers: ["Job families", "Job categories", "Job profiles"],
+  hints: ["Broadest grouping", "Groups of profiles", "Groups of jobs"],
+  itemNoun: "normalised jobs",
+  leafNoun: "profile",
+};
+
 interface Props {
   itemCount: number;
   initial: { families: number; categories: number; profiles: number };
   preview: (k: { families: number; categories: number; profiles: number }) => Promise<ClusterPreview>;
   onConfirm: (k: { families: number; categories: number; profiles: number }, gate: number) => void;
   confirming: boolean;
+  labels?: TierLabels;
 }
 
-export function ClusterKPanel({ itemCount, initial, preview, onConfirm, confirming }: Props) {
+export function ClusterKPanel({
+  itemCount,
+  initial,
+  preview,
+  onConfirm,
+  confirming,
+  labels = JOB_LABELS,
+}: Props) {
   const [k, setK] = useState(initial);
   const [gate, setGate] = useState(0.58);
   const [result, setResult] = useState<ClusterPreview | null>(null);
@@ -61,16 +85,16 @@ export function ClusterKPanel({ itemCount, initial, preview, onConfirm, confirmi
   }, [k, fetchPreview]);
 
   const tiers = [
-    { key: "families" as const, label: "Job families", hint: "Broadest grouping", sizes: result?.family_sizes },
-    { key: "categories" as const, label: "Job categories", hint: "Groups of profiles", sizes: result?.category_sizes },
-    { key: "profiles" as const, label: "Job profiles", hint: "Groups of jobs", sizes: result?.profile_sizes },
+    { key: "families" as const, label: labels.tiers[0], hint: labels.hints[0], sizes: result?.family_sizes },
+    { key: "categories" as const, label: labels.tiers[1], hint: labels.hints[1], sizes: result?.category_sizes },
+    { key: "profiles" as const, label: labels.tiers[2], hint: labels.hints[2], sizes: result?.profile_sizes },
   ];
 
   return (
     <div>
       <p className="mb-4 text-[13px] text-text-secondary">
-        Choose how many clusters to create at each tier. {itemCount} normalised jobs will be organised into a
-        Family › Category › Profile hierarchy.
+        Choose how many clusters to create at each tier. {itemCount} {labels.itemNoun} will be organised into
+        a {labels.tiers[0]} › {labels.tiers[1]} › {labels.tiers[2]} hierarchy.
       </p>
 
       <div className="space-y-4">
@@ -118,8 +142,8 @@ export function ClusterKPanel({ itemCount, initial, preview, onConfirm, confirmi
       {result && !error && (
         <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2 rounded-[10px] border border-border bg-panel px-4 py-3">
           {[
-            ["Singleton profiles", result.singleton_profiles],
-            ["Largest profile", `${result.largest_profile_size} jobs`],
+            [`Singleton ${labels.leafNoun}s`, result.singleton_profiles],
+            [`Largest ${labels.leafNoun}`, `${result.largest_profile_size} items`],
           ].map(([label, value]) => (
             <div key={String(label)}>
               <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">{label}</p>
@@ -128,7 +152,7 @@ export function ClusterKPanel({ itemCount, initial, preview, onConfirm, confirmi
           ))}
           {result.singleton_profiles > result.profile_sizes.length / 2 && (
             <p className="w-full text-[11.5px] text-warning">
-              Over half the profiles contain a single job — consider fewer profile clusters.
+              Over half the {labels.leafNoun}s contain a single item — consider fewer clusters at that tier.
             </p>
           )}
         </div>
@@ -139,7 +163,7 @@ export function ClusterKPanel({ itemCount, initial, preview, onConfirm, confirmi
           <label className="text-[12.5px] font-semibold text-text">
             Stability gate
             <span className="ml-2 font-normal text-text-muted">
-              Jobs below this get re-checked by the model
+              Items below this get re-checked by the model
             </span>
           </label>
           <span className="text-[15px] font-bold tabular-nums text-accent">{gate.toFixed(2)}</span>
@@ -154,7 +178,7 @@ export function ClusterKPanel({ itemCount, initial, preview, onConfirm, confirmi
           className="w-full accent-[var(--color-accent)]"
         />
         <p className="mt-1.5 text-[11.5px] leading-relaxed text-text-muted">
-          Clustering places most jobs confidently. Those where the geometry is uncertain are sent to the model
+          Clustering places most items confidently. Those where the geometry is uncertain are sent to the model
           to reassign, which is where the cost goes — a lower gate means fewer model calls. Around 0.55–0.60
           works well; above 0.70 tends to pay for assignments the model simply confirms.
         </p>

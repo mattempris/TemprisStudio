@@ -87,6 +87,227 @@ export interface JEDetail {
   };
 }
 
+// ── Skills (step 8/9) and tasks (step 10) ────────────────────────────────────
+// The two taxonomies are the same three-tier shape with a different leaf, so the
+// browser component is shared and these types differ only in the leaf array.
+
+export interface SkillsSummary {
+  inferred_skills: number;
+  profiles_covered: number;
+  clustered: boolean;
+  k_families: number | null;
+  k_categories: number | null;
+  k_clusters: number | null;
+  named: boolean;
+  /** Skill clusters that have generated proficiency-level criteria. */
+  proficiency_definitions: number;
+  /** (job profile, skill cluster) requirement rows produced by the auto-map. */
+  profile_requirements: number;
+  levels_assigned: number;
+  audit: Record<string, number>;
+}
+
+export interface TasksSummary {
+  inferred_tasks: number;
+  profiles_covered: number;
+  clustered: boolean;
+  k_domains: number | null;
+  k_categories: number | null;
+  k_tasks: number | null;
+  named: boolean;
+  audit: Record<string, number>;
+}
+
+export interface TaxonomyLeaf {
+  id: string;
+  name: string;
+  description: string;
+  source_profile_key: string;
+  stability_score: number | null;
+  routed_by_llm: boolean;
+  kind?: string;
+  proportion?: number;
+  headcount?: number | null;
+  fte_equivalent?: number | null;
+}
+
+/** One node at any of the three tiers. Aggregates differ per entity: skills
+ *  carry job counts and headcount, tasks carry time proportions and FTE. */
+export interface TaxonomyNode {
+  id: number;
+  name: string;
+  children?: TaxonomyNode[];
+  leaves?: TaxonomyLeaf[];
+  skill_count?: number;
+  task_count?: number;
+  jobs_requiring_count?: number;
+  jobs_contributing?: number;
+  /** Skills: people in the jobs requiring this branch. Unioned, not summed. */
+  headcount_requiring?: number | null;
+  proportion_sum?: number;
+  fte_equivalent?: number | null;
+  proficiency_definitions?: Record<string, string>;
+}
+
+export interface EntityClusterPreview {
+  family_sizes?: number[];
+  category_sizes?: number[];
+  profile_sizes?: number[];
+  domain_sizes?: number[];
+  task_sizes?: number[];
+  singleton_profiles?: number;
+  singleton_tasks?: number;
+}
+
+// ── 3rd-party taxonomy matching (step 11) ────────────────────────────────────
+
+export interface MatchingSummary {
+  matched_profiles: number;
+  total_profiles: number;
+  industries: string[];
+  computed_at: string | null;
+  summary: Record<string, number | null>;
+}
+
+export interface MatchCandidate {
+  code: string;
+  title: string;
+  family_title: string;
+  sub_family_title: string;
+  cosine: number;
+}
+
+export interface TaxonomyMatch {
+  profile_key: string;
+  profile_title: string;
+  matched: boolean;
+  spec_code: string | null;
+  spec_title: string | null;
+  family_title: string | null;
+  sub_family_title: string | null;
+  cosine: number | null;
+  confidence: number;
+  rationale: string;
+  runner_up_code: string | null;
+  runner_up_title: string | null;
+  level_code: string | null;
+  level_title: string | null;
+  level_stream: string | null;
+  level_confidence: number;
+  level_rationale: string;
+  shortlist: MatchCandidate[];
+  needs_review: boolean;
+  review_reasons: string[];
+  overridden_by_user: boolean;
+}
+
+export interface MatchBrowseRow {
+  profile_key: string;
+  profile_title: string;
+  spec_code: string | null;
+  spec_title: string | null;
+  level_code: string | null;
+  level_title: string | null;
+  level_stream: string | null;
+  cosine: number | null;
+  confidence: number;
+  needs_review: boolean;
+  review_reasons: string[];
+  overridden_by_user: boolean;
+  headcount: number | null;
+}
+
+export interface MatchBrowseNode {
+  name: string;
+  profile_count: number;
+  headcount: number | null;
+  needs_review: number;
+  sub_families?: MatchBrowseNode[];
+  specializations?: {
+    code: string;
+    title: string;
+    profiles: MatchBrowseRow[];
+    profile_count: number;
+    headcount: number | null;
+    needs_review: number;
+  }[];
+}
+
+export interface MatchBrowse {
+  families: MatchBrowseNode[];
+  unmatched: MatchBrowseRow[];
+  has_headcount: boolean;
+  summary: Record<string, number | null>;
+}
+
+export interface TaxonomySearchHit {
+  code: string;
+  title: string;
+  family_title: string;
+  sub_family_title: string;
+  levels: { code: string; title: string }[];
+}
+
+// ── Combined final hierarchy ─────────────────────────────────────────────────
+
+export interface OverviewProfile {
+  profile_key: string;
+  title: string;
+  headcount: number | null;
+  source_titles: string[];
+  source_job_count: number;
+  evaluation: { aggregate_score: number; level_name: string; stale: boolean } | null;
+  skills: { cluster_id: number; cluster_name: string; assigned_level: string | null }[];
+  skill_count: number;
+  tasks: {
+    name: string;
+    description: string;
+    proportion: number;
+    cluster_id: number | null;
+    cluster_name: string | null;
+  }[];
+  task_count: number;
+  taxonomy_match: {
+    spec_code: string | null;
+    spec_title: string | null;
+    family_title: string | null;
+    level_code: string | null;
+    level_title: string | null;
+    confidence: number;
+    needs_review: boolean;
+    overridden_by_user: boolean;
+  } | null;
+}
+
+export interface OverviewGroup {
+  id: number;
+  name: string;
+  profile_count: number;
+  headcount: number | null;
+  source_job_count: number;
+  mean_je_score: number | null;
+  matched_count: number;
+}
+
+export interface Overview {
+  families: (OverviewGroup & {
+    categories: (OverviewGroup & { profiles: OverviewProfile[] })[];
+  })[];
+  totals: OverviewGroup & {
+    families: number;
+    categories: number;
+    skills: number;
+    tasks: number;
+  };
+  has_headcount: boolean;
+  available: {
+    evaluation: boolean;
+    skills: boolean;
+    tasks: boolean;
+    taxonomy_match: boolean;
+  };
+}
+
 export interface HierarchyNode {
   families: {
     id: number;

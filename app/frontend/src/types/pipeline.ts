@@ -376,6 +376,35 @@ export interface JEFramework {
   level_bands: JELevelBand[];
 }
 
+export interface Boilerplate {
+  client_company_description: string | null;
+  diversity_statement: string | null;
+  accent_color: string;
+}
+
+export interface ProfileSection {
+  key: string;
+  heading: string;
+  include: boolean;
+  guidance: string;
+}
+
+export interface ProfileSectionSpec {
+  key: string;
+  default_heading: string;
+  shape: string;
+  description: string;
+  default_guidance: string;
+  removable: boolean;
+}
+
+/** Config plus the catalogue, so the editor can describe each section and know
+ *  which ones are required without duplicating the backend's list. */
+export interface ProfileTemplate {
+  sections: ProfileSection[];
+  catalogue: ProfileSectionSpec[];
+}
+
 export interface ProficiencyLevel {
   name: string;
   ordinal: number;

@@ -29,6 +29,7 @@ from app.models.project_state import (
     JEEvaluationResult,
     JEFrameworkConfig,
     JobProfileDoc,
+    JobProfileTemplateConfig,
     JobRecordRaw,
     JobRecordStripped,
     NormalizedProfile,
@@ -49,6 +50,7 @@ from app.services.ingestion.hris import load_spreadsheet
 from app.services.ingestion import parsers
 from app.services.ingestion.parsers import ParseFailed, UnsupportedFileType, extract_text
 from app.services.job_profile import exporters, generator
+from app.services.job_profile import template_config as tpl
 from app.services.orchestrator import (
     JobAlreadyRunning,
     ProgressReporter,
@@ -341,6 +343,152 @@ def ingest_hris_confirm(client_slug: str, project_slug: str, req: ConfirmMapping
         "skipped_no_title": skipped_no_title,
         "limited": bool(req.limit and added >= req.limit and len(df) > added),
     }
+
+
+class BoilerplateRequest(BaseModel):
+    """Project-level fixed text for the profile documents (step 7's "default
+    boiler plate documents"). Null leaves the field unset; empty string clears it."""
+
+    client_company_description: str | None = None
+    diversity_statement: str | None = None
+    accent_color: str | None = None
+
+
+@router.get("/boilerplate")
+def get_boilerplate(client_slug: str, project_slug: str) -> dict:
+    _, state = _load(client_slug, project_slug)
+    return {
+        "client_company_description": state.meta.client_company_description,
+        "diversity_statement": state.meta.diversity_statement,
+        "accent_color": state.meta.accent_color,
+    }
+
+
+@router.put("/boilerplate")
+def put_boilerplate(client_slug: str, project_slug: str, req: BoilerplateRequest) -> dict:
+    """Editable after creation, not only at it.
+
+    Step 1 deliberately strips company blurb and equality statements out of the
+    source job descriptions, so the generated documents have nowhere else to get
+    them from. Existing profiles are re-rendered rather than marked stale: this is
+    fixed text around the content, so no LLM call is needed to apply it.
+    """
+    svc, state = _load(client_slug, project_slug)
+    if req.client_company_description is not None:
+        state.meta.client_company_description = req.client_company_description or None
+    if req.diversity_statement is not None:
+        state.meta.diversity_statement = req.diversity_statement or None
+    if req.accent_color is not None:
+        state.meta.accent_color = req.accent_color
+
+    sections = _resolve_sections(state)
+    section_headings = tpl.headings(sections)
+    je_by_key = {r.profile_key: r for r in state.je_results}
+    for doc in state.job_profiles:
+        doc.html = generator.render_html(
+            doc.content,
+            accent_color=state.meta.accent_color,
+            company_name=state.meta.display_name,
+            about_company=state.meta.client_company_description,
+            diversity_statement=state.meta.diversity_statement,
+            job_level=je_by_key[doc.profile_key].level_name if doc.profile_key in je_by_key else None,
+            headings=section_headings,
+            sections=sections,
+        )
+
+    svc.save_state(
+        state,
+        action="update-boilerplate",
+        lineage_payload={
+            "has_company_description": bool(state.meta.client_company_description),
+            "has_diversity_statement": bool(state.meta.diversity_statement),
+            "accent_color": state.meta.accent_color,
+            "profiles_rerendered": len(state.job_profiles),
+        },
+    )
+    return {"saved": True, "profiles_rerendered": len(state.job_profiles)}
+
+
+@router.get("/profile-template")
+def get_profile_template(
+    client_slug: str, project_slug: str, defaults: bool = False
+) -> dict:
+    """Step 7's job profile template: which sections a profile has, what each is
+    called, and the guidance the model gets for it.
+
+    Returns the catalogue alongside the config so the editor can show what each
+    section is for and which ones cannot be removed, without hardcoding it.
+    """
+    _, state = _load(client_slug, project_slug)
+    sections = tpl.default_sections() if defaults else _resolve_sections(state)
+    return {
+        "sections": [
+            {"key": s.key, "heading": s.heading, "include": s.include, "guidance": s.guidance}
+            for s in sections
+        ],
+        "catalogue": [
+            {
+                "key": spec.key,
+                "default_heading": spec.default_heading,
+                "shape": spec.shape,
+                "description": spec.description,
+                "default_guidance": spec.default_guidance,
+                "removable": spec.removable,
+            }
+            for spec in tpl.CATALOGUE
+        ],
+    }
+
+
+@router.put("/profile-template")
+def put_profile_template(
+    client_slug: str, project_slug: str, config: JobProfileTemplateConfig
+) -> dict:
+    svc, state = _load(client_slug, project_slug)
+    sections = [
+        tpl.SectionConfig(key=s.key, heading=s.heading, include=s.include, guidance=s.guidance)
+        for s in config.sections
+    ]
+    problems = tpl.validate(sections)
+    if problems:
+        raise HTTPException(
+            422, {"message": "job profile template is not valid", "problems": problems}
+        )
+
+    state.profile_template = config
+    # Existing profiles were generated against the previous section set, so they
+    # no longer match this template. Marked stale rather than deleted — they keep
+    # their content until regenerated.
+    stale = 0
+    for doc in state.job_profiles:
+        if not doc.stale:
+            doc.stale = True
+            stale += 1
+
+    svc.save_state(
+        state,
+        action="update-profile-template",
+        lineage_payload={
+            "sections": [s.key for s in sections if s.include],
+            "profiles_marked_stale": stale,
+        },
+    )
+    return {"saved": True, "profiles_marked_stale": stale}
+
+
+def _resolve_sections(state: ProjectState) -> list[tpl.SectionConfig]:
+    """The project's profile-template sections, or the shipped default set.
+
+    A project only stores `profile_template` once the user edits it, so an empty
+    list means "never customised" rather than "no sections".
+    """
+    saved = state.profile_template.sections
+    if not saved:
+        return tpl.default_sections()
+    return [
+        tpl.SectionConfig(key=s.key, heading=s.heading, include=s.include, guidance=s.guidance)
+        for s in saved
+    ]
 
 
 def _safe_int(value) -> int | None:
@@ -1015,6 +1163,12 @@ async def start_profile_generation(client_slug: str, project_slug: str, run_je: 
             )
         )
     profile_cluster_ids = sorted(by_profile.keys())
+    # Step 7's user-defined template. Resolved once here rather than per profile
+    # so every document in a run uses the same section set.
+    sections = _resolve_sections(state)
+    section_headings = tpl.headings(sections)
+    for spec in specs:
+        spec.sections = sections
 
     def work(reporter: ProgressReporter) -> dict:
         reporter.stage_start(len(specs), f"Generating {len(specs)} job profile documents")
@@ -1023,11 +1177,18 @@ async def start_profile_generation(client_slug: str, project_slug: str, run_je: 
         accent = state.meta.accent_color
         company = state.meta.display_name
         about_company = state.meta.client_company_description
+        diversity = state.meta.diversity_statement
 
         docs: list[JobProfileDoc] = []
         for spec, pid, content in zip(specs, profile_cluster_ids, contents):
             html = generator.render_html(
-                content, accent_color=accent, company_name=company, about_company=about_company
+                content,
+                accent_color=accent,
+                company_name=company,
+                about_company=about_company,
+                diversity_statement=diversity,
+                headings=section_headings,
+                sections=sections,
             )
             svc.save_profile_content(client_slug, project_slug, spec.profile_key, content)
             svc.save_profile_html(client_slug, project_slug, spec.profile_key, html)
@@ -1074,7 +1235,10 @@ async def start_profile_generation(client_slug: str, project_slug: str, run_je: 
                     accent_color=accent,
                     company_name=company,
                     about_company=about_company,
+                    diversity_statement=diversity,
                     job_level=res.level_name,
+                    headings=section_headings,
+                    sections=sections,
                 )
                 svc.save_profile_html(client_slug, project_slug, doc.profile_key, doc.html)
             svc.save_state(fresh2, action="run-je-evaluation", lineage_payload={"evaluated": len(results)})
@@ -1210,10 +1374,19 @@ def export_profile(client_slug: str, project_slug: str, profile_key: str, fmt: s
     if fmt == "html":
         return Response(content=doc.html, media_type="text/html")
 
+    _sections = _resolve_sections(state)
     if fmt == "docx":
         data = exporters.render_docx(
-            doc.content, company_name=company, job_level=level, about_company=about,
+            doc.content,
+            company_name=company,
+            job_level=level,
+            about_company=about,
+            diversity_statement=state.meta.diversity_statement,
             accent_color=state.meta.accent_color,
+            # Same headings the HTML used, or the two formats of one profile
+            # would disagree on what its sections are called.
+            headings=tpl.headings(_sections),
+            sections=_sections,
         )
         svc.save_export(
             client_slug, project_slug, profile_key, "job-profile.docx", data,

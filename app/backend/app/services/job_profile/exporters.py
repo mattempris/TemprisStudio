@@ -67,6 +67,8 @@ def render_docx(
     about_company: str | None = None,
     diversity_statement: str | None = None,
     accent_color: str = "#1d4ed8",
+    headings: dict[str, str] | None = None,
+    sections: list | None = None,
 ) -> bytes:
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -78,6 +80,16 @@ def render_docx(
     # document stays properly editable: changing "Heading 1" in Word updates
     # every heading, as a Word user expects.
     accent_rgb = _hex_to_rgbcolor(accent_color, RGBColor)
+    if sections:
+        from app.services.job_profile import template_config as tpl
+
+        content = tpl.filter_content(content, sections)
+    h = headings or {}
+
+    def heading_for(key: str, fallback: str) -> str:
+        """Custom heading from the user's profile template, else the default."""
+        return h.get(key) or fallback
+
 
     normal = doc.styles["Normal"]
     normal.font.name = "Calibri"
@@ -121,7 +133,7 @@ def render_docx(
         doc.add_paragraph(about_company)
 
     if content.get("about_role"):
-        doc.add_heading("About the Role", level=2)
+        doc.add_heading(heading_for("about_role", "About the Role"), level=2)
         for para in content["about_role"]:
             doc.add_paragraph(para)
 
@@ -135,9 +147,9 @@ def render_docx(
         table.autofit = True
         left, right = table.rows[0].cells
 
-        _fill_cell(left, [("Minimum Requirements", content.get("requirements")),
-                          ("Essential Skills", content.get("essential_skills"))], Pt)
-        _fill_cell(right, [("Desirable Skills", content.get("desirable_skills"))], Pt)
+        _fill_cell(left, [(heading_for("requirements", "Minimum Requirements"), content.get("requirements")),
+                          (heading_for("essential_skills", "Essential Skills"), content.get("essential_skills"))], Pt)
+        _fill_cell(right, [(heading_for("desirable_skills", "Desirable Skills"), content.get("desirable_skills"))], Pt)
 
         if content.get("tags"):
             p = right.add_paragraph(", ".join(content["tags"]))
@@ -145,18 +157,18 @@ def render_docx(
             p.runs[0].font.italic = True
 
     if content.get("responsibilities"):
-        doc.add_heading("Key Responsibilities", level=2)
+        doc.add_heading(heading_for("responsibilities", "Key Responsibilities"), level=2)
         for item in content["responsibilities"]:
             doc.add_paragraph(item, style="List Bullet")
 
     if content.get("contribution"):
-        doc.add_heading("Your Contribution", level=2)
+        doc.add_heading(heading_for("contribution", "Your Contribution"), level=2)
         doc.add_paragraph("You can expect to engage in:")
         for item in content["contribution"]:
             doc.add_paragraph(item, style="List Bullet")
 
     if content.get("required_of_you"):
-        doc.add_heading("Required of You", level=2)
+        doc.add_heading(heading_for("required_of_you", "Required of You"), level=2)
         for item in content["required_of_you"]:
             p = doc.add_paragraph(style="List Bullet")
             p.add_run(f"{item.get('label', '')}: ").bold = True
@@ -166,11 +178,11 @@ def render_docx(
         doc.add_heading("Scope & Accountability", level=2)
         if content.get("reporting_line"):
             p = doc.add_paragraph(style="List Bullet")
-            p.add_run("Reporting line: ").bold = True
+            p.add_run(heading_for("reporting_line", "Reporting line") + ": ").bold = True
             p.add_run(content["reporting_line"])
         if content.get("budget_responsibility"):
             p = doc.add_paragraph(style="List Bullet")
-            p.add_run("Budget responsibility: ").bold = True
+            p.add_run(heading_for("budget_responsibility", "Budget responsibility") + ": ").bold = True
             p.add_run(content["budget_responsibility"])
 
     if diversity_statement:

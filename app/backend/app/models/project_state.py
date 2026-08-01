@@ -30,7 +30,12 @@ class ProjectMeta(BaseModel):
     client_slug: str
     project_slug: str
     display_name: str
+    # Document boilerplate. Step 1 strips company blurb and equality statements
+    # OUT of the source job descriptions (they are noise for clustering); step 7
+    # re-adds them at document level from here, so they are stated once per
+    # project rather than inconsistently per input file.
     client_company_description: str | None = None
+    diversity_statement: str | None = None
     accent_color: str = "#1d4ed8"
     created_at: datetime
     updated_at: datetime
@@ -150,6 +155,27 @@ class LevelBand(BaseModel):
 class JEFrameworkConfig(BaseModel):
     domains: list[JEDomainConfig] = Field(default_factory=list)
     level_bands: list[LevelBand] = Field(default_factory=list)
+
+
+class ProfileSectionConfig(BaseModel):
+    """One section of the user-defined job profile template (step 7).
+
+    `key` must be one of services/job_profile/template_config.py's catalogue —
+    each key carries the shape (prose / list / chips / inline) that the HTML, PDF
+    and DocX renderers all know how to lay out.
+    """
+
+    key: str
+    heading: str
+    include: bool = True
+    guidance: str = ""
+
+
+class JobProfileTemplateConfig(BaseModel):
+    """Empty `sections` means the project has never customised the template, so
+    the shipped default catalogue applies."""
+
+    sections: list[ProfileSectionConfig] = Field(default_factory=list)
 
 
 class JobProfileDoc(BaseModel):
@@ -305,6 +331,7 @@ class ProjectState(BaseModel):
     normalized_profiles: list[NormalizedProfile] = Field(default_factory=list)
     clustering: ClusteringState | None = None
     je_framework: JEFrameworkConfig = Field(default_factory=JEFrameworkConfig)
+    profile_template: JobProfileTemplateConfig = Field(default_factory=JobProfileTemplateConfig)
     job_profiles: list[JobProfileDoc] = Field(default_factory=list)
     je_results: list[JEEvaluationResult] = Field(default_factory=list)
     skills: SkillsState = Field(default_factory=SkillsState)

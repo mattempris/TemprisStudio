@@ -129,6 +129,33 @@ Pick a client and project, then work down the nine numbered stages. Each is
 locked until its input exists, and collapses to a one-line summary once done.
 Stages that cost real LLM spend are always an explicit button press.
 
+**Input** accepts either individual job description files (PDF/DOC/DOCX/TXT/HTML,
+one role per file) or a spreadsheet (XLSX/XLS/CSV) holding many roles, or both.
+For a spreadsheet the app profiles the columns and proposes a mapping for job
+title, description, level and headcount, showing its confidence and reasoning for
+each; you confirm or change it. Headcount is optional and is the only source of
+the headcount analytics later. Descriptions stored as HTML fragments (common in
+job-board and ATS exports) are stripped to prose on import.
+
+**Three things are user-defined** and all live in the stage that consumes them:
+
+- *Job profile template* (step 7) — which sections a profile contains, their
+  headings, their order, and the guidance the model gets per section. Sections
+  come from a catalogue rather than being free-form, because the PDF and DocX
+  renderers build from the same structured content as the HTML; each catalogue
+  entry carries the shape all three know how to lay out. Disabling a section
+  removes it from the generation schema entirely.
+- *Job evaluation framework* (step 7) — domains, sub-factor weights, the 1-5
+  rubric per sub-factor, and the level names each score band maps to. Weights
+  validate live: domains sum to 100, and each domain's sub-factors sum to that
+  domain's weight.
+- *Proficiency template* (step 9) — the level scale and criteria that per-cluster
+  proficiency wording is generated against. Edit before generating.
+
+Saving any of these invalidates work already produced under the old version;
+each editor says so before you commit, and affected artifacts are marked stale
+rather than deleted.
+
 Two panels carry most of the method:
 
 - **Cluster and name** — sliders re-cut a cached Ward tree, so previewing
@@ -166,6 +193,9 @@ the browsable outputs. Takes about 4-5 minutes and spends real LLM budget. The
 
 - Skills inference drifts on the 1-3 word name rule (roughly 20% of names run
   long). The audit line under the stage reports it; the prompt hasn't been tuned.
+- The profile-template catalogue is fixed. You can rename, reorder, disable and
+  re-guide the eleven sections but cannot invent a twelfth — a new section needs
+  a shape the HTML, PDF and DocX renderers all understand.
 - No REST job-status endpoint — the WebSocket is the only way to observe a
   running job. The page re-attaches via `active_job_id` after a refresh, but a
   silently dropped socket has no polling fallback.

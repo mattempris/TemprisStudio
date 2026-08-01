@@ -6,6 +6,9 @@ import type {
   HrisPreview,
   JEFramework,
   ProficiencyTemplate,
+  Boilerplate,
+  ProfileSection,
+  ProfileTemplate,
   MatchingSummary,
   Overview,
   ProfileRow,
@@ -24,6 +27,8 @@ import { OverviewBrowser } from "../components/pipeline/OverviewBrowser";
 import { ExportBar } from "../components/pipeline/ExportBar";
 import { HrisMappingPanel } from "../components/pipeline/HrisMappingPanel";
 import { JEFrameworkEditor } from "../components/pipeline/JEFrameworkEditor";
+import { ProfileTemplateEditor } from "../components/pipeline/ProfileTemplateEditor";
+import { BoilerplateEditor } from "../components/pipeline/BoilerplateEditor";
 import { ProficiencyTemplateEditor } from "../components/pipeline/ProficiencyTemplateEditor";
 import { Collapsible } from "../components/ui/Collapsible";
 import { Button } from "../components/ui/Button";
@@ -438,8 +443,35 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
         return (
           <div className="space-y-4">
             {/* Step 7 opens with "User defines job profile template, Job
-                Evaluation Framework and level names / JE score mapping", so the
-                framework is editable here — before the run that consumes it. */}
+                Evaluation Framework and level names / JE score mapping", so both
+                are editable here — before the run that consumes them. */}
+            <Collapsible
+              title="Document boilerplate"
+              subtitle="Company description, equality statement and accent colour applied to every profile."
+            >
+              <LazyBoilerplate
+                load={api.getBoilerplate}
+                save={api.putBoilerplate}
+                onSaved={() => void refresh()}
+              />
+            </Collapsible>
+
+            <Collapsible
+              title="Job profile template"
+              subtitle="Which sections each profile has, their headings and order, and the guidance used to write them."
+            >
+              <LazyProfileTemplate
+                load={() => api.getProfileTemplate()}
+                loadDefaults={() => api.getProfileTemplate(true)}
+                save={api.putProfileTemplate}
+                profileCount={summary!.job_profiles}
+                onSaved={(n) => {
+                  if (n > 0) setNotice(`Template saved. ${n} existing profile${n === 1 ? "" : "s"} marked stale — regenerate to apply it.`);
+                  void refresh();
+                }}
+              />
+            </Collapsible>
+
             <Collapsible
               title="Job evaluation framework"
               subtitle="Domains, sub-factor weights, scoring rubric, and the level names each score maps to."
@@ -595,6 +627,94 @@ interface Downstream {
  * The two config editors fetch on first open rather than with the page.
  * Both are behind a Collapsible, so most sessions never need the request.
  */
+function LazyBoilerplate({
+  load,
+  save,
+  onSaved,
+}: {
+  load: () => Promise<Boilerplate>;
+  save: (v: Boilerplate) => Promise<{ profiles_rerendered: number }>;
+  onSaved: () => void;
+}) {
+  const [value, setValue] = useState<Boilerplate | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    load()
+      .then(setValue)
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (error) return <p className="text-[12px] text-brand">{error}</p>;
+  if (!value) return <p className="text-[12px] text-text-muted">Loading…</p>;
+  return (
+    <BoilerplateEditor
+      value={value}
+      saving={saving}
+      onSave={async (v) => {
+        setSaving(true);
+        try {
+          const res = await save(v);
+          setValue(v);
+          onSaved();
+          return res;
+        } finally {
+          setSaving(false);
+        }
+      }}
+    />
+  );
+}
+
+function LazyProfileTemplate({
+  load,
+  loadDefaults,
+  save,
+  profileCount,
+  onSaved,
+}: {
+  load: () => Promise<ProfileTemplate>;
+  loadDefaults: () => Promise<ProfileTemplate>;
+  save: (s: ProfileSection[]) => Promise<{ profiles_marked_stale: number }>;
+  profileCount: number;
+  onSaved: (staleCount: number) => void;
+}) {
+  const [template, setTemplate] = useState<ProfileTemplate | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    load()
+      .then(setTemplate)
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (error) return <p className="text-[12px] text-brand">{error}</p>;
+  if (!template) return <p className="text-[12px] text-text-muted">Loading template…</p>;
+  return (
+    <ProfileTemplateEditor
+      template={template}
+      saving={saving}
+      profileCount={profileCount}
+      onReset={loadDefaults}
+      onSave={async (sections) => {
+        setSaving(true);
+        try {
+          const res = await save(sections);
+          setTemplate({ ...template, sections });
+          onSaved(res.profiles_marked_stale);
+          return res;
+        } finally {
+          setSaving(false);
+        }
+      }}
+    />
+  );
+}
+
 function LazyJEFramework({
   load,
   loadDefaults,

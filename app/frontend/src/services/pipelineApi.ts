@@ -1,4 +1,5 @@
 import type {
+  Boilerplate,
   ClusterPreview,
   DedupePreview,
   EntityClusterPreview,
@@ -9,6 +10,8 @@ import type {
   JEFramework,
   JobHandle,
   ProficiencyTemplate,
+  ProfileSection,
+  ProfileTemplate,
   MatchBrowse,
   MatchingSummary,
   Overview,
@@ -137,6 +140,25 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
       request<unknown>(`${base}/cluster/rename`, {
         method: "POST",
         body: JSON.stringify({ level, cluster_id: clusterId, name }),
+      }),
+
+    /** Step 7's document boilerplate: fixed text and accent colour applied to
+     *  every profile. Saving re-renders existing profiles (no LLM call needed). */
+    getBoilerplate: () => request<Boilerplate>(`${base}/boilerplate`),
+    putBoilerplate: (v: Boilerplate) =>
+      request<{ saved: boolean; profiles_rerendered: number }>(`${base}/boilerplate`, {
+        method: "PUT",
+        body: JSON.stringify(v),
+      }),
+
+    /** Step 7: the user-defined job profile template — which sections a profile
+     *  has, their headings, order and per-section generation guidance. */
+    getProfileTemplate: (defaults = false) =>
+      request<ProfileTemplate>(`${base}/profile-template${defaults ? "?defaults=true" : ""}`),
+    putProfileTemplate: (sections: ProfileSection[]) =>
+      request<{ saved: boolean; profiles_marked_stale: number }>(`${base}/profile-template`, {
+        method: "PUT",
+        body: JSON.stringify({ sections }),
       }),
 
     /** Step 7: the JE framework and level/score mapping the user defines.

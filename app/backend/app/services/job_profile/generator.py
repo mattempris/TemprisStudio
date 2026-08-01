@@ -15,6 +15,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from app.core.config import DEFAULTS_DIR
 from app.services import llm
+from app.services.job_profile import template_config as tpl
 
 PROFILE_SCHEMA = {
     "type": "object",
@@ -99,6 +100,8 @@ class ProfileGenerationInput:
     # normalised member profiles: (purpose_statement, key_tasks, management_line, budget)
     members: list[tuple[str, list[str], str | None, str | None]] = field(default_factory=list)
     headcount: int | None = None
+    # Step 7's user-defined template. None means the shipped default section set.
+    sections: list[tpl.SectionConfig] | None = None
 
 
 def _member_block(n: int, member: tuple[str, list[str], str | None, str | None]) -> str:
@@ -123,15 +126,28 @@ def build_prompt(spec: ProfileGenerationInput) -> str:
     if spec.headcount is not None:
         header.append(f"Total headcount across the cluster: {spec.headcount}")
     blocks = [_member_block(i, m) for i, m in enumerate(spec.members, start=1)]
-    return "\n".join(header) + "\n\n" + "\n\n".join(blocks)
+    # The user's template decides which sections exist and what they are called,
+    # so the per-section instructions are built from it rather than being fixed in
+    # SYSTEM. SYSTEM still carries the general field guidance.
+    sections = spec.sections or tpl.default_sections()
+    return (
+        "\n".join(header)
+        + "\n\n"
+        + "\n\n".join(blocks)
+        + "\n\nProduce exactly these sections:\n"
+        + tpl.prompt_section_guide(sections)
+    )
 
 
 def generate_content(spec: ProfileGenerationInput) -> dict:
     """Returns the structured profile content dict (not HTML)."""
+    sections = spec.sections or tpl.default_sections()
     result = llm.complete_json(
         build_prompt(spec),
         system=SYSTEM,
-        json_schema=PROFILE_SCHEMA,
+        # Only the enabled sections are in the schema, so the model is never asked
+        # for content that the template would discard.
+        json_schema=tpl.build_schema(sections),
         effort="medium",
         max_tokens=8000,
     )
@@ -181,6 +197,8 @@ def render_html(
     job_level: str | None = None,
     diversity_statement: str | None = None,
     about_company: str | None = None,
+    headings: dict[str, str] | None = None,
+    sections: list[tpl.SectionConfig] | None = None,
 ) -> str:
     """Render structured content into the themed HTML skeleton.
 
@@ -189,7 +207,7 @@ def render_html(
     the model invent them would fabricate claims about a real company.
     """
     r, g, b = _hex_to_rgb(accent_color)
-    ctx = dict(content)
+    ctx = dict(tpl.filter_content(content, sections) if sections else content)
     if about_company is not None:
         ctx["about_company"] = about_company
     if diversity_statement is not None:
@@ -198,6 +216,7 @@ def render_html(
     template = _get_env().get_template("job_profile.html.j2")
     return template.render(
         content=ctx,
+        headings=headings or {},
         company_name=company_name,
         job_level=job_level,
         accent=accent_color,

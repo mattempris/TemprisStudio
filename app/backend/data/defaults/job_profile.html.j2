@@ -112,7 +112,7 @@
       {%- endif %}
 
       <section>
-        <h2>About the Role</h2>
+        <h2>{{ headings.get("about_role", "About the Role") }}</h2>
         {%- for para in content.about_role %}
         <p>{{ para }}</p>
         {%- endfor %}
@@ -123,7 +123,7 @@
         <div class="two-col">
           <div>
             {%- if content.requirements %}
-            <h3>Minimum Requirements</h3>
+            <h3>{{ headings.get("requirements", "Minimum Requirements") }}</h3>
             <ul>
               {%- for item in content.requirements %}
               <li>{{ item }}</li>
@@ -131,7 +131,7 @@
             </ul>
             {%- endif %}
             {%- if content.essential_skills %}
-            <h3>Essential Skills</h3>
+            <h3>{{ headings.get("essential_skills", "Essential Skills") }}</h3>
             <ul>
               {%- for item in content.essential_skills %}
               <li>{{ item }}</li>
@@ -141,7 +141,7 @@
           </div>
           <div>
             {%- if content.desirable_skills %}
-            <h3>Desirable Skills</h3>
+            <h3>{{ headings.get("desirable_skills", "Desirable Skills") }}</h3>
             <ul>
               {%- for item in content.desirable_skills %}
               <li>{{ item }}</li>
@@ -161,7 +161,7 @@
 
       {%- if content.responsibilities %}
       <section>
-        <h2>Key Responsibilities</h2>
+        <h2>{{ headings.get("responsibilities", "Key Responsibilities") }}</h2>
         <ul>
           {%- for item in content.responsibilities %}
           <li>{{ item }}</li>
@@ -172,7 +172,7 @@
 
       {%- if content.contribution %}
       <section>
-        <h2>Your Contribution</h2>
+        <h2>{{ headings.get("contribution", "Your Contribution") }}</h2>
         <p>You can expect to engage in:</p>
         <ul>
           {%- for item in content.contribution %}
@@ -184,7 +184,7 @@
 
       {%- if content.required_of_you %}
       <section>
-        <h2>Required of You</h2>
+        <h2>{{ headings.get("required_of_you", "Required of You") }}</h2>
         <ul>
           {%- for item in content.required_of_you %}
           <li><strong>{{ item.label }}:</strong> {{ item.value }}</li>
@@ -198,10 +198,10 @@
         <h2>Scope &amp; Accountability</h2>
         <ul>
           {%- if content.reporting_line %}
-          <li><strong>Reporting line:</strong> {{ content.reporting_line }}</li>
+          <li><strong>{{ headings.get("reporting_line", "Reporting line") }}:</strong> {{ content.reporting_line }}</li>
           {%- endif %}
           {%- if content.budget_responsibility %}
-          <li><strong>Budget responsibility:</strong> {{ content.budget_responsibility }}</li>
+          <li><strong>{{ headings.get("budget_responsibility", "Budget responsibility") }}:</strong> {{ content.budget_responsibility }}</li>
           {%- endif %}
         </ul>
       </section>

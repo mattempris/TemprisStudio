@@ -175,6 +175,57 @@ class JEEvaluationResult(BaseModel):
     stale: bool = False
 
 
+class InferredSkillRecord(BaseModel):
+    """A skill as inferred from one job profile (step 8), before clustering."""
+
+    id: str
+    name: str
+    description: str
+    kind: str  # "technical" | "non-technical"
+    source_profile_key: str
+
+
+class ProficiencyLevelConfig(BaseModel):
+    name: str
+    ordinal: int
+    criteria: str
+    typical_autonomy: str = ""
+
+
+class ProficiencyTemplateConfig(BaseModel):
+    levels: list[ProficiencyLevelConfig] = Field(default_factory=list)
+
+
+class ClusterProficiencyRecord(BaseModel):
+    cluster_id: int
+    cluster_name: str
+    definitions: dict[str, str] = Field(default_factory=dict)  # level name -> definition
+
+
+class ProfileSkillRequirementRecord(BaseModel):
+    """Output of the deterministic rollup plus the LLM level assignment (step 9)."""
+
+    profile_key: str
+    cluster_id: int
+    cluster_name: str
+    contributing_skills: list[str] = Field(default_factory=list)
+    assigned_level: str | None = None
+    rationale: str | None = None
+
+
+class SkillsState(BaseModel):
+    """Everything from instructions.txt steps 8-9."""
+
+    inferred: list[InferredSkillRecord] = Field(default_factory=list)
+    # Same shape as ClusteringState but over skills, produced by the same engine
+    # with skillQWEN embeddings.
+    clustering: ClusteringState | None = None
+    proficiency_template: ProficiencyTemplateConfig = Field(default_factory=ProficiencyTemplateConfig)
+    cluster_proficiencies: list[ClusterProficiencyRecord] = Field(default_factory=list)
+    profile_requirements: list[ProfileSkillRequirementRecord] = Field(default_factory=list)
+    audit: dict = Field(default_factory=dict)  # inference audit counts, for transparency
+
+
 class ProjectState(BaseModel):
     meta: ProjectMeta
     inputs: list[RawInputFile] = Field(default_factory=list)
@@ -188,3 +239,4 @@ class ProjectState(BaseModel):
     je_framework: JEFrameworkConfig = Field(default_factory=JEFrameworkConfig)
     job_profiles: list[JobProfileDoc] = Field(default_factory=list)
     je_results: list[JEEvaluationResult] = Field(default_factory=list)
+    skills: SkillsState = Field(default_factory=SkillsState)

@@ -347,6 +347,10 @@ def evaluate_one(
             system=system,
             json_schema=schema,
             effort="medium",
+            # Keep the transient budget small: this loop already retries, and the
+            # two multiply. At the default 4 that's up to 12 calls of a large,
+            # slow request per profile — long enough to look like a hang.
+            retries=2,
             # Generous budget: adaptive thinking shares max_tokens with the
             # visible JSON, and this response is ~60 scores + 12 rationales.
             # At 16000 the JSON was getting truncated mid-string.

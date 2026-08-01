@@ -1,0 +1,29 @@
+{
+  "_comment": "Default proficiency scale. instructions.txt asks for 'a proficiency template that they can edit (default: Entry, Intermediate, Advanced, Expert with proficiency criteria you generate once during build)' — so these generic criteria are authored here as build-time data, not produced by a runtime LLM call. The per-skill-cluster wording IS generated at runtime, using these as the rubric.",
+  "levels": [
+    {
+      "name": "Entry",
+      "ordinal": 1,
+      "criteria": "Applies the skill to routine, well-defined situations with guidance available. Follows established methods rather than selecting between them, and escalates anything unfamiliar. Output is checked by others before it is relied upon.",
+      "typical_autonomy": "Works to instruction with regular review."
+    },
+    {
+      "name": "Intermediate",
+      "ordinal": 2,
+      "criteria": "Applies the skill independently across the range of situations normally encountered in the role. Chooses between established approaches and recognises when a situation falls outside them. Output is generally relied upon without rework.",
+      "typical_autonomy": "Works independently on familiar problems; seeks input on novel ones."
+    },
+    {
+      "name": "Advanced",
+      "ordinal": 3,
+      "criteria": "Handles complex, ambiguous or contested situations where established methods are insufficient, and adapts them with sound judgement. Recognised internally as a point of reference, and reviews or guides the work of others.",
+      "typical_autonomy": "Sets own approach; accountable for judgement calls."
+    },
+    {
+      "name": "Expert",
+      "ordinal": 4,
+      "criteria": "Shapes how the skill is practised beyond their own work — setting standards, resolving the hardest cases, and building capability in others. Judgement is sought on decisions with significant or organisation-wide consequence.",
+      "typical_autonomy": "Defines practice; influences direction beyond own remit."
+    }
+  ]
+}

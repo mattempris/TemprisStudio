@@ -63,17 +63,32 @@ _RETRYABLE = (
 )
 
 
+# The SDK defaults to a 10-minute request timeout. That's far too long once a
+# call sits inside nested retry loops: a hung or trickling stream would burn ten
+# minutes before the retry logic even got a chance to cycle. A pipeline stage
+# making hundreds of calls needs to fail fast and move on.
+REQUEST_TIMEOUT_SECONDS = 240.0
+
+
 def get_client() -> anthropic.Anthropic:
     global _client
     if _client is None:
-        _client = anthropic.Anthropic(api_key=get_settings().anthropic_api_key)
+        _client = anthropic.Anthropic(
+            api_key=get_settings().anthropic_api_key,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+            max_retries=1,  # this module owns retry policy; don't double-retry underneath it
+        )
     return _client
 
 
 def get_async_client() -> anthropic.AsyncAnthropic:
     global _aclient
     if _aclient is None:
-        _aclient = anthropic.AsyncAnthropic(api_key=get_settings().anthropic_api_key)
+        _aclient = anthropic.AsyncAnthropic(
+            api_key=get_settings().anthropic_api_key,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+            max_retries=1,
+        )
     return _aclient
 
 

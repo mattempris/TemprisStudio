@@ -155,6 +155,13 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
     /** The combined final hierarchy — every artifact joined onto its profile. */
     overview: () => request<Overview>(`${base}/overview`),
 
+    exportManifest: () =>
+      request<{ datasets: { key: string; name: string; rows: number; columns: number }[] }>(
+        `${base}/exports/manifest`,
+      ),
+    workbookUrl: () => `/api${base}/exports/workbook.xlsx`,
+    datasetCsvUrl: (dataset: string) => `/api${base}/exports/${dataset}.csv`,
+
     // ── Skills (steps 8-9) ───────────────────────────────────────────────────
     skills: {
       summary: () => request<SkillsSummary>(`${base}/skills/summary`),

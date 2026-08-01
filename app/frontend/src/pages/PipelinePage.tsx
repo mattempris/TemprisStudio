@@ -18,6 +18,7 @@ import { JEResultsBrowser } from "../components/pipeline/JEResultsBrowser";
 import { EntityTaxonomyStage } from "../components/pipeline/EntityTaxonomyStage";
 import { MatchingPanel } from "../components/pipeline/MatchingPanel";
 import { OverviewBrowser } from "../components/pipeline/OverviewBrowser";
+import { ExportBar } from "../components/pipeline/ExportBar";
 import { Button } from "../components/ui/Button";
 import { cn } from "../lib/cn";
 
@@ -243,6 +244,13 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
               data={overview}
               onOpenProfile={(key) => window.open(api.exportUrl(key, "html"), "_blank")}
             />
+            <div className="mt-4">
+              <ExportBar
+                manifest={api.exportManifest}
+                workbookUrl={api.workbookUrl()}
+                csvUrl={api.datasetCsvUrl}
+              />
+            </div>
           </section>
         )}
       </div>

@@ -149,13 +149,19 @@ export interface TaxonomyNode {
   proficiency_definitions?: Record<string, string>;
 }
 
+/** Each entity names its tiers differently on the wire: jobs use
+ *  family/category/profile, skills family/category/cluster, tasks
+ *  domain/category/task. All three variants are optional here and folded into
+ *  one shape by toClusterPreview. */
 export interface EntityClusterPreview {
   family_sizes?: number[];
+  domain_sizes?: number[];
   category_sizes?: number[];
   profile_sizes?: number[];
-  domain_sizes?: number[];
+  cluster_sizes?: number[];
   task_sizes?: number[];
   singleton_profiles?: number;
+  singleton_clusters?: number;
   singleton_tasks?: number;
 }
 

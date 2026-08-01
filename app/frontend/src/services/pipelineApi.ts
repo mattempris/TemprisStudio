@@ -53,7 +53,7 @@ function toClusterPreview(
   k: { families: number; categories: number; profiles: number },
 ): ClusterPreview {
   const family = raw.family_sizes ?? raw.domain_sizes ?? [];
-  const leaf = raw.profile_sizes ?? raw.task_sizes ?? [];
+  const leaf = raw.profile_sizes ?? raw.cluster_sizes ?? raw.task_sizes ?? [];
   return {
     k_families: k.families,
     k_categories: k.categories,
@@ -61,7 +61,8 @@ function toClusterPreview(
     family_sizes: family,
     category_sizes: raw.category_sizes ?? [],
     profile_sizes: leaf,
-    singleton_profiles: raw.singleton_profiles ?? raw.singleton_tasks ?? 0,
+    singleton_profiles:
+      raw.singleton_profiles ?? raw.singleton_clusters ?? raw.singleton_tasks ?? 0,
     largest_profile_size: leaf.length ? Math.max(...leaf) : 0,
   };
 }

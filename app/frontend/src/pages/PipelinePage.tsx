@@ -107,16 +107,19 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
     }
   }, [summary?.active_job_id, summary?.active_job_stage, job.running, job.jobId, attach]);
 
+  // Declared before the effects that read it — a `const` referenced above its
+  // own declaration is a temporal dead zone error at runtime, which the type
+  // checker does not catch.
+  const downstream = useMemo<Downstream>(
+    () => ({ skills, tasks, matching }),
+    [skills, tasks, matching],
+  );
+
   // Open the first stage that still needs attention.
   useEffect(() => {
     if (!summary || expanded !== null) return;
     setExpanded(firstIncompleteStage(summary, downstream));
   }, [summary, expanded, downstream]);
-
-  const downstream = useMemo<Downstream>(
-    () => ({ skills, tasks, matching }),
-    [skills, tasks, matching],
-  );
 
   const state = useCallback(
     (id: string): StageState => (summary ? stageState(id, summary, downstream) : "locked"),

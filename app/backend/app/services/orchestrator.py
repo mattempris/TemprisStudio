@@ -152,6 +152,18 @@ class ProgressReporter:
             ).model_dump()
         )
 
+    def message(self, text: str) -> None:
+        """A status line with no countable progress (e.g. "building index...").
+
+        Emitted with total=0 so the UI shows the text without implying the bar
+        has jumped back to zero.
+        """
+        self._emit(
+            ProgressMessage(
+                stage=self._stage, current=0, total=0, percent=0, message=text
+            ).model_dump()
+        )
+
     def stage_complete(self, summary: dict | None = None) -> None:
         self._emit(StageCompleteMessage(stage=self._stage, summary=summary or {}).model_dump())
 

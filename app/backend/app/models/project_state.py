@@ -244,6 +244,56 @@ class TasksState(BaseModel):
     audit: dict = Field(default_factory=dict)
 
 
+class TaxonomyCandidateRecord(BaseModel):
+    """One shortlisted specialization the reranker chose from. Kept in full so a
+    challenged match can be re-argued against what was actually on the table."""
+
+    code: str
+    title: str
+    family_title: str
+    sub_family_title: str
+    cosine: float
+
+
+class TaxonomyMatchRecord(BaseModel):
+    """A job profile's placement in the 3rd-party taxonomy (step 11).
+
+    `matched=False` with `review_reasons=["no_match"]` is a real, useful outcome —
+    the taxonomy has no bucket for this role — and is stored rather than dropped.
+    """
+
+    profile_key: str
+    profile_title: str
+    matched: bool
+    spec_code: str | None = None
+    spec_title: str | None = None
+    family_title: str | None = None
+    sub_family_title: str | None = None
+    cosine: float | None = None
+    confidence: float = 0.0
+    rationale: str = ""
+    runner_up_code: str | None = None
+    runner_up_title: str | None = None
+    level_code: str | None = None
+    level_title: str | None = None
+    level_stream: str | None = None
+    level_confidence: float = 0.0
+    level_rationale: str = ""
+    shortlist: list[TaxonomyCandidateRecord] = Field(default_factory=list)
+    needs_review: bool = False
+    review_reasons: list[str] = Field(default_factory=list)
+    # Set when a user overrides the machine match, so the two never get confused.
+    overridden_by_user: bool = False
+
+
+class MatchingState(BaseModel):
+    industries: list[str] = Field(default_factory=list)
+    shortlist_size: int = 12
+    matches: list[TaxonomyMatchRecord] = Field(default_factory=list)
+    summary: dict = Field(default_factory=dict)
+    computed_at: datetime | None = None
+
+
 class ProjectState(BaseModel):
     meta: ProjectMeta
     inputs: list[RawInputFile] = Field(default_factory=list)
@@ -259,3 +309,4 @@ class ProjectState(BaseModel):
     je_results: list[JEEvaluationResult] = Field(default_factory=list)
     skills: SkillsState = Field(default_factory=SkillsState)
     tasks: TasksState = Field(default_factory=TasksState)
+    matching: MatchingState = Field(default_factory=MatchingState)

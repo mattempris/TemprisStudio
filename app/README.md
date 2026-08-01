@@ -9,6 +9,17 @@ Implements the 11-step process in `../instructions.txt`.
 
 ---
 
+## Quick start
+
+From the repo root, double-click **`startApp.bat`** (or run it from a terminal).
+It checks the conda env and `.env` are present, warns if a stale server is
+already holding a port, starts backend and frontend in their own windows, waits
+for both to answer, and opens a browser tab. **`stopApp.bat`** shuts them down —
+strictly by listening port, never by process name, so unrelated Python work is
+left alone.
+
+Everything below is the manual equivalent.
+
 ## Running locally (recommended for development)
 
 GPU passthrough into Docker on native Windows needs WSL2 plus
@@ -66,13 +77,36 @@ but functional — everything else is unaffected.
 Also tunable there: `STABILITY_GATE` (default 0.58), `STABILITY_N_PERTURB` (50),
 `SELF_CONSISTENCY_VOTES` (3), `CATCH_ALL_REVIEWERS` (5).
 
-**One-time setup**: the three fine-tuned Qwen embedding models ship zipped in
-`../models/`. Unzip them into place with:
+## Embedding models
+
+The three fine-tuned Qwen3-0.6B models ship zipped in `../models/`. Install them
+with:
 
 ```bash
 cd app/backend
-python -m scripts.prepare_embedding_models jobQWEN skillQWEN taskQWEN
+python -m scripts.prepare_embedding_models                    # all three
+python -m scripts.prepare_embedding_models taskQWEN --force   # replace one
 ```
+
+Two zip shapes are handled: a fully merged sentence-transformers directory
+(~1.9GB), and a **LoRA adapter** (~40MB, `adapter_config.json` +
+`adapter_model.safetensors`), which is merged into its base model at install time
+so inference pays no adapter overhead. Merging needs `peft` and the base model
+named in `adapter_config.json` — currently `Qwen/Qwen3-Embedding-0.6B`, pulled
+from the HuggingFace cache or downloaded once.
+
+**Replacing a model**: stop the backend first (`stopApp.bat`). A running server
+holds the model's files open, and Windows will not let the directory be replaced
+while it does. The installer moves the old copy aside before writing rather than
+deleting in place, so a failed attempt changes nothing.
+
+**Cached vectors are model-specific.** Each project stores its embeddings and Ward
+tree in blob storage, stamped with the model build that produced them. Replacing
+a model makes those stale — cosine similarity between vectors from two different
+models is meaningless, and the failure would otherwise be silent, since
+clustering still completes and still returns plausible groupings. Loading a stale
+cache returns a 409 naming both versions; rebuild that entity's tree to clear it.
+Only the affected entity is invalidated.
 
 ## Storage layout
 

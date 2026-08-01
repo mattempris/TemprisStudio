@@ -26,6 +26,7 @@ from app.models.project_state import (
 from app.services.clustering import backbone as bb
 from app.services.clustering import engine as cluster_engine
 from app.services.clustering import rollup
+from app.services import embeddings
 from app.services.embeddings import get_embedding_service
 from app.services.orchestrator import JobAlreadyRunning, ProgressReporter, get_registry, run_job
 from app.services.project_service import ProjectService
@@ -189,7 +190,10 @@ async def build_skill_tree(client_slug: str, project_slug: str) -> dict:
 
         svc.save_array(client_slug, project_slug, "skill_embeddings", emb)
         svc.save_array(client_slug, project_slug, "skill_linkage", tree)
-        svc.save_index(client_slug, project_slug, "skill_embeddings", ids)
+        svc.save_index(
+            client_slug, project_slug, "skill_embeddings", ids,
+            model_fingerprint=get_embedding_service().fingerprint("skill"),
+        )
         _SKILL_TREE_CACHE[(client_slug, project_slug)] = (tree, emb, ids)
 
         n = len(ids)
@@ -211,11 +215,16 @@ def _get_skill_tree(svc: ProjectService, state: ProjectState):
     key = (client, project)
     if key in _SKILL_TREE_CACHE:
         return _SKILL_TREE_CACHE[key]
+    index_path = f"{project}/artifacts/skill_embeddings_index.json"
     tree = svc.load_array(client, f"{project}/artifacts/skill_linkage.npy")
     emb = svc.load_array(client, f"{project}/artifacts/skill_embeddings.npy")
-    ids = svc.load_index(client, f"{project}/artifacts/skill_embeddings_index.json")
+    ids = svc.load_index(client, index_path)
     if tree is None or emb is None or ids is None:
         raise HTTPException(409, "skill tree not built yet — run skills/cluster/build first")
+    try:
+        embeddings.assert_cache_current("skill", svc.load_index_fingerprint(client, index_path))
+    except embeddings.StaleEmbeddingCache as e:
+        raise HTTPException(409, str(e)) from e
     _SKILL_TREE_CACHE[key] = (tree, emb, ids)
     return tree, emb, ids
 

@@ -23,6 +23,10 @@ transformers==5.10.1
 scipy>=1.14
 numpy>=2.0
 scikit-learn>=1.5
+# Some fine-tuned models ship as LoRA adapters rather than merged weights;
+# scripts/prepare_embedding_models.py merges them into the base model at install
+# time so inference pays no adapter overhead.
+peft>=0.17
 
 # Data
 pandas>=2.2

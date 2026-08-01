@@ -8,6 +8,7 @@ for JobBERT-v3, just with a different underlying checkpoint per entity type.
 """
 from __future__ import annotations
 
+import json
 from functools import lru_cache
 from typing import Literal
 
@@ -61,6 +62,73 @@ class EmbeddingService:
     def is_ready(self, entity: EntityType) -> bool:
         model_dir = MODELS_DIR / _ENTITY_TO_DIR[entity]
         return (model_dir / "config.json").exists()
+
+    def fingerprint(self, entity: EntityType) -> str:
+        """Identifies WHICH build of a model is installed, e.g.
+        'taskQWEN@ft_epoch3.zip:1785570701'.
+
+        Cached embeddings are only reusable if the model that produced them is
+        still installed — cosine similarity between vectors from two different
+        models is meaningless, and the failure is silent: clustering still runs
+        and still returns plausible-looking groups. Stamping caches with this and
+        comparing on load turns that into an explicit error.
+
+        Falls back to the bare name when the stamp is absent (a model installed
+        before stamping existed), which compares unequal to any stamped
+        fingerprint and so errs toward rebuilding.
+        """
+        name = _ENTITY_TO_DIR[entity]
+        stamp = MODELS_DIR / name / "installed_from.json"
+        if stamp.exists():
+            try:
+                meta = json.loads(stamp.read_text(encoding="utf-8"))
+                return f"{name}@{meta.get('source_zip')}:{meta.get('mtime')}"
+            except (json.JSONDecodeError, OSError):
+                pass
+        return name
+
+
+class StaleEmbeddingCache(RuntimeError):
+    """Cached vectors were produced by a different build of the embedding model."""
+
+
+def assert_cache_current(entity: EntityType, stored_fingerprint: str | None) -> None:
+    """Refuse to reuse embeddings from a model that is no longer installed.
+
+    Silent reuse is the dangerous case: clustering would run to completion over a
+    mix of old and new vectors and return groupings that look entirely
+    reasonable. Only a rebuild fixes it, so this fails loudly and says so.
+
+    The four cases, and why an unstamped index is not automatically fatal:
+
+      model stamped, index stamped, equal    -> reuse
+      model stamped, index stamped, differ   -> refuse; the model was replaced
+      model stamped, index NOT stamped       -> refuse; the model has been
+          (re)installed since stamping began, so an unstamped index necessarily
+          predates that install
+      neither stamped                        -> reuse; a model installed before
+          stamping existed, with a cache from the same era. Nothing indicates a
+          change, and refusing here would invalidate every existing project's
+          tree on upgrade for no reason.
+    """
+    current = get_embedding_service().fingerprint(entity)
+    if stored_fingerprint == current:
+        return
+
+    model_is_stamped = "@" in current
+    if stored_fingerprint is None:
+        if not model_is_stamped:
+            return  # legacy on both sides — no evidence the model changed
+        raise StaleEmbeddingCache(
+            f"cached {entity} embeddings carry no model version, but {current} "
+            f"has been installed since version tracking began — so the cache "
+            f"predates it. Rebuild the {entity} tree."
+        )
+    raise StaleEmbeddingCache(
+        f"cached {entity} embeddings were produced by {stored_fingerprint}, but "
+        f"{current} is installed now. Vectors from different models are not "
+        f"comparable — rebuild the {entity} tree."
+    )
 
 
 _service: EmbeddingService | None = None

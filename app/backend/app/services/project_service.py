@@ -99,14 +99,37 @@ class ProjectService:
             return None
         return np.load(io.BytesIO(data), allow_pickle=False)
 
-    def save_index(self, client_slug: str, project_slug: str, name: str, index: list[str]) -> str:
+    def save_index(
+        self,
+        client_slug: str,
+        project_slug: str,
+        name: str,
+        index: list[str],
+        *,
+        model_fingerprint: str | None = None,
+    ) -> str:
+        """Save the row order for a cached embedding matrix.
+
+        `model_fingerprint` records which build of the embedding model produced
+        those vectors, so a later load can refuse to mix them with output from a
+        replaced model. See EmbeddingService.fingerprint.
+        """
         path = f"{project_slug}/artifacts/{name}_index.json"
-        self.store.write_json(client_slug, path, {"ids": index})
+        payload: dict = {"ids": index}
+        if model_fingerprint:
+            payload["model_fingerprint"] = model_fingerprint
+        self.store.write_json(client_slug, path, payload)
         return path
 
     def load_index(self, client_slug: str, path: str) -> list[str] | None:
         raw = self.store.read_json(client_slug, path)
         return raw["ids"] if raw else None
+
+    def load_index_fingerprint(self, client_slug: str, path: str) -> str | None:
+        """The embedding-model fingerprint stored with an index, or None for an
+        index written before fingerprinting (treated as unknown, not as valid)."""
+        raw = self.store.read_json(client_slug, path)
+        return raw.get("model_fingerprint") if raw else None
 
     # ---- LLM response cache ----
     # Keyed by a hash of the exact request so a rerun with identical inputs is a

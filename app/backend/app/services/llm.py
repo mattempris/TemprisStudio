@@ -476,28 +476,46 @@ def pmap(
     Off by default — most stages want a hard failure — but for the long, expensive
     per-item stages it is the difference between losing one profile and losing the
     150 that already succeeded.
+
+    It never tolerates `LLMRequestError`, though. An exhausted credit balance, a bad
+    key or a rejected schema is not a property of one item: every remaining item will
+    fail the same way. Swallowing it per item would turn "no credit" into a stage
+    that reports success with 565 quiet failures, having hammered the API 565 times
+    to find out what the first call already knew.
     """
     results: list[R | None] = [None] * len(items)
     done = 0
     failures = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(fn, item): i for i, item in enumerate(items)}
-        for future in as_completed(futures):
-            i = futures[future]
-            try:
-                results[i] = future.result()
-            except Exception as e:
-                if not tolerate_errors:
-                    raise
-                failures += 1
+        try:
+            for future in as_completed(futures):
+                i = futures[future]
+                try:
+                    results[i] = future.result()
+                except LLMRequestError:
+                    raise  # systemic — credit, key or schema. Never per-item.
+                except Exception as e:
+                    if not tolerate_errors:
+                        raise
+                    failures += 1
+                    with _print_lock:
+                        print(f"  [{label}] item {i} failed, continuing: {type(e).__name__}: {str(e)[:200]}")
+                done += 1
+                msg = f"{label} {done}/{len(items)}" + (f" ({failures} failed)" if failures else "")
                 with _print_lock:
-                    print(f"  [{label}] item {i} failed, continuing: {type(e).__name__}: {str(e)[:200]}")
-            done += 1
-            msg = f"{label} {done}/{len(items)}" + (f" ({failures} failed)" if failures else "")
-            with _print_lock:
-                print(f"  {msg}")
-            if progress:
-                progress(done, len(items), label)
+                    print(f"  {msg}")
+                if progress:
+                    progress(done, len(items), label)
+        except LLMRequestError:
+            # Every queued item would fail identically, so drop them rather than
+            # spending the rest of the batch discovering that. Work already running
+            # cannot be cancelled and is left to finish.
+            cancelled = sum(1 for f in futures if f.cancel())
+            if cancelled:
+                with _print_lock:
+                    print(f"  [{label}] abandoning {cancelled} queued items — the failure is systemic")
+            raise
     return results  # type: ignore[return-value]
 
 

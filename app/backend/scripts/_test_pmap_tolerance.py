@@ -33,6 +33,26 @@ def main() -> int:
     passed &= check("order preserved", out[0] == "result-0" and out[9] == "result-9")
     passed &= check(f"progress still counted every item ({seen[-1]})", seen[-1] == (10, 10))
 
+    print("=== a systemic failure is NEVER tolerated ===")
+    # Credit exhaustion, a bad key or a rejected schema is not a property of one
+    # item. Tolerating it per item turns "no credit" into a stage that reports
+    # success with every item quietly missing.
+    attempts = {"n": 0}
+
+    def no_credit(i: int) -> str:
+        attempts["n"] += 1
+        raise llm.LLMRequestError(
+            "BadRequestError: Your credit balance is too low to access the Anthropic API"
+        )
+
+    try:
+        llm.pmap(no_credit, list(range(50)), workers=4, label="je", tolerate_errors=True)
+        passed &= check("raised despite tolerate_errors", False)
+    except llm.LLMRequestError:
+        passed &= check("raises even with tolerate_errors=True", True)
+        passed &= check(f"stopped early rather than trying all 50 ({attempts['n']} attempts)",
+                        attempts["n"] < 50)
+
     print("=== default (unchanged: a failure is fatal) ===")
     try:
         llm.pmap(flaky, list(range(10)), workers=4, label="strip")

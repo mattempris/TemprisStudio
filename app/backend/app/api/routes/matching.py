@@ -189,7 +189,7 @@ async def run_matching(
         reporter.stage_complete(summary)
         return summary
 
-    return _start_job(client_slug, project_slug, "review", work)
+    return _start_job(client_slug, project_slug, "matching", work)
 
 
 def _to_record(m: matcher.ProfileMatch) -> TaxonomyMatchRecord:

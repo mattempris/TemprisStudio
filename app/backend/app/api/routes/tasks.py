@@ -136,7 +136,7 @@ async def infer_tasks(
         reporter.stage_complete(summary)
         return summary
 
-    return _start_job(client_slug, project_slug, "review", work)
+    return _start_job(client_slug, project_slug, "tasks", work)
 
 
 @router.get("")
@@ -168,11 +168,15 @@ async def build_task_tree(client_slug: str, project_slug: str) -> dict:
     ids = [t.id for t in tasks]
 
     def work(reporter: ProgressReporter) -> dict:
-        reporter.stage_start(2, f"Embedding {len(texts)} tasks with taskQWEN")
-        emb = get_embedding_service().embed_documents("task", texts)
-        reporter.progress(1, 2, "embedded")
+        if not embeddings.is_loaded("task"):
+            reporter.message("Loading the taskQWEN model (first use this session)")
+            get_embedding_service().warm("task")
+        reporter.stage_start(len(texts), f"Embedding {len(texts)} tasks with taskQWEN")
+        emb = get_embedding_service().embed_documents(
+            "task", texts, progress=lambda done, total: reporter.progress(done, total, "embedded")
+        )
+        reporter.message("Building the Ward tree")
         tree = bb.build_linkage_tree(emb)
-        reporter.progress(2, 2, "tree built")
 
         svc.save_array(client_slug, project_slug, "task_embeddings", emb)
         svc.save_array(client_slug, project_slug, "task_linkage", tree)
@@ -193,7 +197,7 @@ async def build_task_tree(client_slug: str, project_slug: str) -> dict:
         reporter.stage_complete(summary)
         return summary
 
-    return _start_job(client_slug, project_slug, "cluster", work)
+    return _start_job(client_slug, project_slug, "tasks", work)
 
 
 def _get_task_tree(svc: ProjectService, state: ProjectState):
@@ -331,7 +335,7 @@ async def confirm_task_cluster(
         reporter.stage_complete(summary)
         return summary
 
-    return _start_job(client_slug, project_slug, "cluster", work)
+    return _start_job(client_slug, project_slug, "tasks", work)
 
 
 @router.get("/taxonomy")

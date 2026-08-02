@@ -30,11 +30,19 @@ export function ProgressBar({ job }: { job: JobState }) {
         </span>
       </div>
 
+      {/* A running step with no countable total (loading a model, building a
+          tree) would otherwise render a 0% bar, which reads as a hang. Show a
+          moving indeterminate bar instead — the elapsed counter above it is the
+          proof that the server is still talking to us. */}
       <div className="mt-2 h-2 overflow-hidden rounded-full bg-border">
-        <div
-          className="h-full rounded-full bg-accent transition-[width] duration-300"
-          style={{ width: `${job.percent}%` }}
-        />
+        {job.running && job.total === 0 ? (
+          <div className="h-full w-1/3 animate-[jastudio-indeterminate_1.4s_ease-in-out_infinite] rounded-full bg-accent" />
+        ) : (
+          <div
+            className="h-full rounded-full bg-accent transition-[width] duration-300"
+            style={{ width: `${job.percent}%` }}
+          />
+        )}
       </div>
 
       {job.summary && !job.running && (

@@ -587,9 +587,15 @@ async def start_dedupe_build(client_slug: str, project_slug: str) -> dict:
     ids = [r.id for r in state.stripped_records]
 
     def work(reporter: ProgressReporter) -> dict:
+        svc_emb = get_embedding_service()
+        if not embeddings.is_loaded("job"):
+            reporter.message("Loading the jobQWEN model (first use this session)")
+            svc_emb.warm("job")
         reporter.stage_start(len(texts), f"Embedding {len(texts)} records with jobQWEN")
-        emb = get_embedding_service().embed_documents("job", texts)
-        reporter.progress(len(texts), len(texts), "embedded")
+        emb = svc_emb.embed_documents(
+            "job", texts, progress=lambda done, total: reporter.progress(done, total, "embedded")
+        )
+        reporter.message("Computing the similarity graph")
 
         svc.save_array(client_slug, project_slug, "dedupe_embeddings", emb)
         svc.save_index(client_slug, project_slug, "dedupe_embeddings", ids)
@@ -600,7 +606,7 @@ async def start_dedupe_build(client_slug: str, project_slug: str) -> dict:
         reporter.stage_complete(summary)
         return summary
 
-    return _start_job(client_slug, project_slug, "normalize", work)  # reuse a streamed stage label
+    return _start_job(client_slug, project_slug, "dedupe", work)
 
 
 @router.get("/dedupe/preview")
@@ -795,11 +801,15 @@ async def start_cluster_build(client_slug: str, project_slug: str) -> dict:
     ids = [p.id for p in profiles]
 
     def work(reporter: ProgressReporter) -> dict:
-        reporter.stage_start(2, f"Embedding {len(texts)} profiles and building the cluster tree")
-        emb = get_embedding_service().embed_documents("job", texts)
-        reporter.progress(1, 2, "embedded")
+        if not embeddings.is_loaded("job"):
+            reporter.message("Loading the jobQWEN model (first use this session)")
+            get_embedding_service().warm("job")
+        reporter.stage_start(len(texts), f"Embedding {len(texts)} profiles with jobQWEN")
+        emb = get_embedding_service().embed_documents(
+            "job", texts, progress=lambda done, total: reporter.progress(done, total, "embedded")
+        )
+        reporter.message("Building the Ward tree")
         tree = bb.build_linkage_tree(emb)
-        reporter.progress(2, 2, "Ward tree built")
 
         svc.save_array(client_slug, project_slug, "cluster_embeddings", emb)
         svc.save_array(client_slug, project_slug, "cluster_linkage", tree)
@@ -1259,7 +1269,7 @@ async def start_profile_generation(
         reporter.stage_complete(summary)
         return summary
 
-    return _start_job(client_slug, project_slug, "profile_gen", work)
+    return _start_job(client_slug, project_slug, "profiles", work)
 
 
 def _profile_key(name: str, item_ids: list[str]) -> str:

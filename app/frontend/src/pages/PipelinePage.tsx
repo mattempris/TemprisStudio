@@ -76,6 +76,10 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
   const [overview, setOverview] = useState<Overview | null>(null);
   const [hrisPreview, setHrisPreview] = useState<HrisPreview | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Which wizard stage the current/last job belongs to, so its progress and
+  // summary render only there. Without this every stage showed the same job —
+  // step 3 displaying step 2's completed bar.
+  const [jobOwner, setJobOwner] = useState<string | null>(null);
   // Fan-out width for the per-item LLM stages. One control rather than per stage:
   // it is a property of the API account's rate limits, not of a stage.
   const [workers, setWorkers] = useState<number>(() => {
@@ -130,6 +134,9 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
   useEffect(() => {
     if (summary?.active_job_id && !job.running && job.jobId !== summary.active_job_id) {
       attach(summary.active_job_id, summary.active_job_stage ?? "");
+      // Backend stage labels match the wizard step ids, so a job picked up after
+      // a reload lands under the step that owns it rather than nowhere.
+      if (summary.active_job_stage) setJobOwner(summary.active_job_stage);
     }
   }, [summary?.active_job_id, summary?.active_job_stage, job.running, job.jobId, attach]);
 
@@ -152,9 +159,13 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
     [summary, downstream],
   );
 
-  async function runJob(start: () => Promise<{ job_id: string; stage: string }>) {
+  async function runJob(
+    start: () => Promise<{ job_id: string; stage: string }>,
+    ownerStage?: string,
+  ) {
     setError(null);
     reset();
+    setJobOwner(ownerStage ?? expanded);
     setBusy(true);
     try {
       const handle = await start();
@@ -321,7 +332,8 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
   );
 
   function renderStage(id: string) {
-    const showProgress = job.stage !== null || job.error;
+    // Only the stage that started the job shows its progress.
+    const showProgress = jobOwner === id && (job.stage !== null || job.error);
 
     switch (id) {
       case "ingest":
@@ -468,7 +480,7 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
               }
               confirming={busy || job.running}
             />
-            {showProgress && job.stage === "cluster" && <ProgressBar job={job} />}
+            {showProgress && <ProgressBar job={job} />}
           </div>
         );
 

@@ -71,3 +71,11 @@ body {
 #root {
   min-height: 100vh;
 }
+
+/* Indeterminate progress: used when a stage is running but has no countable
+   total (loading an embedding model, building a Ward tree). A static 0% bar
+   there is indistinguishable from a hang. */
+@keyframes jastudio-indeterminate {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}

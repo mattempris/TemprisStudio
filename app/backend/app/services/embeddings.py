@@ -9,8 +9,14 @@ for JobBERT-v3, just with a different underlying checkpoint per entity type.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from functools import lru_cache
 from typing import Literal
+
+# How many texts to encode between progress reports. A multiple of the usual
+# encode batch_size so GPU batching stays efficient, but small enough that the
+# bar moves every few seconds on a realistic corpus.
+_PROGRESS_CHUNK = 128
 
 import numpy as np
 import torch
@@ -31,6 +37,9 @@ def _resolve_device() -> str:
     return "cpu"
 
 
+_LOADED: set[str] = set()
+
+
 @lru_cache(maxsize=3)
 def _load_model(entity: EntityType) -> SentenceTransformer:
     model_dir = MODELS_DIR / _ENTITY_TO_DIR[entity]
@@ -42,17 +51,68 @@ def _load_model(entity: EntityType) -> SentenceTransformer:
     device = _resolve_device()
     print(f"[embeddings] loading {entity} model from {model_dir} on {device}...")
     model = SentenceTransformer(str(model_dir), device=device)
+    _LOADED.add(entity)
     return model
+
+
+def is_loaded(entity: EntityType) -> bool:
+    """Whether the model is already resident.
+
+    The first call of a session pulls ~1.2GB onto the GPU and can take tens of
+    seconds during which nothing else reports — callers use this to say "loading
+    the model" rather than leaving the user staring at a stalled bar.
+    """
+    return entity in _LOADED
 
 
 class EmbeddingService:
     """One instance covers all three entity types; each model loads lazily on first use."""
 
-    def embed_documents(self, entity: EntityType, texts: list[str], *, batch_size: int = 32) -> np.ndarray:
+    def embed_documents(
+        self,
+        entity: EntityType,
+        texts: list[str],
+        *,
+        batch_size: int = 32,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> np.ndarray:
         """Embed texts in 'document' mode (no query instruction prefix) — used for
-        dedup/clustering, where we're comparing item-to-item, not query-to-document."""
+        dedup/clustering, where we're comparing item-to-item, not query-to-document.
+
+        With a `progress` callback the work is chunked so the caller can report
+        partway through. `model.encode` already batches internally but only
+        returns once, so a single call over a few thousand texts is a long silent
+        block — which is indistinguishable from a hang at the UI.
+
+        Chunking does not change the result: each text is encoded independently
+        and normalisation is per-vector, so the output is identical either way.
+        """
         model = _load_model(entity)
-        return model.encode(texts, batch_size=batch_size, normalize_embeddings=True, show_progress_bar=False)
+        encode = lambda batch: model.encode(  # noqa: E731
+            batch, batch_size=batch_size, normalize_embeddings=True, show_progress_bar=False
+        )
+
+        if progress is None or len(texts) <= _PROGRESS_CHUNK:
+            out = encode(texts)
+            if progress:
+                progress(len(texts), len(texts))
+            return out
+
+        chunks: list[np.ndarray] = []
+        for start in range(0, len(texts), _PROGRESS_CHUNK):
+            chunks.append(encode(texts[start : start + _PROGRESS_CHUNK]))
+            progress(min(start + _PROGRESS_CHUNK, len(texts)), len(texts))
+        return np.vstack(chunks)
+
+    def warm(self, entity: EntityType) -> None:
+        """Load the model now rather than lazily inside the next encode.
+
+        Callers announce "loading the model" first, so the load has to happen
+        while that message is on screen. Left to happen inside embed_documents it
+        would occur *after* the caller had already switched the message to
+        "embedding", which is the silent stretch this exists to explain.
+        """
+        _load_model(entity)
 
     def embed_query(self, entity: EntityType, text: str) -> np.ndarray:
         """Embed a single query string using the model's query instruction prompt."""

@@ -157,7 +157,7 @@ async def infer_skills(
         reporter.stage_complete(summary)
         return summary
 
-    return _start_job(client_slug, project_slug, "review", work)
+    return _start_job(client_slug, project_slug, "skills", work)
 
 
 @router.get("")
@@ -186,11 +186,15 @@ async def build_skill_tree(client_slug: str, project_slug: str) -> dict:
     ids = [s.id for s in skills]
 
     def work(reporter: ProgressReporter) -> dict:
-        reporter.stage_start(2, f"Embedding {len(texts)} skills with skillQWEN")
-        emb = get_embedding_service().embed_documents("skill", texts)
-        reporter.progress(1, 2, "embedded")
+        if not embeddings.is_loaded("skill"):
+            reporter.message("Loading the skillQWEN model (first use this session)")
+            get_embedding_service().warm("skill")
+        reporter.stage_start(len(texts), f"Embedding {len(texts)} skills with skillQWEN")
+        emb = get_embedding_service().embed_documents(
+            "skill", texts, progress=lambda done, total: reporter.progress(done, total, "embedded")
+        )
+        reporter.message("Building the Ward tree")
         tree = bb.build_linkage_tree(emb)
-        reporter.progress(2, 2, "tree built")
 
         svc.save_array(client_slug, project_slug, "skill_embeddings", emb)
         svc.save_array(client_slug, project_slug, "skill_linkage", tree)
@@ -211,7 +215,7 @@ async def build_skill_tree(client_slug: str, project_slug: str) -> dict:
         reporter.stage_complete(summary)
         return summary
 
-    return _start_job(client_slug, project_slug, "cluster", work)
+    return _start_job(client_slug, project_slug, "skills", work)
 
 
 def _get_skill_tree(svc: ProjectService, state: ProjectState):
@@ -354,7 +358,7 @@ async def confirm_skill_cluster(
         reporter.stage_complete(summary)
         return summary
 
-    return _start_job(client_slug, project_slug, "cluster", work)
+    return _start_job(client_slug, project_slug, "skills", work)
 
 
 @router.get("/taxonomy")
@@ -654,7 +658,7 @@ async def generate_proficiency(
         reporter.stage_complete(summary)
         return summary
 
-    return _start_job(client_slug, project_slug, "review", work)
+    return _start_job(client_slug, project_slug, "skills", work)
 
 
 @router.get("/profiles/{profile_key}/requirements")

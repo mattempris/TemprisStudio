@@ -3,6 +3,7 @@ export interface StageSummary {
   stripped_records: number;
   dedupe_threshold: number | null;
   dedupe_groups: number;
+  dedupe_embeddings_ready: boolean;
   normalized_profiles: number;
   clustered: boolean;
   k_families: number | null;

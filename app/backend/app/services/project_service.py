@@ -93,6 +93,10 @@ class ProjectService:
         self.store.write_bytes(client_slug, path, buf.getvalue())
         return path
 
+    def array_exists(self, client_slug: str, project_slug: str, name: str) -> bool:
+        """Whether a cached array has been built, without downloading it."""
+        return self.store.blob_exists(client_slug, f"{project_slug}/artifacts/{name}.npy")
+
     def load_array(self, client_slug: str, path: str) -> np.ndarray | None:
         data = self.store.read_bytes(client_slug, path)
         if data is None:

@@ -497,6 +497,7 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
               onConfirm={(t) => void act(() => api.confirmDedupe(t))}
               confirming={busy}
               initialThreshold={summary!.dedupe_threshold ?? 0.9}
+              ready={summary!.dedupe_embeddings_ready}
             />
           </div>
         );

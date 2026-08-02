@@ -105,6 +105,10 @@ class StageSummary(BaseModel):
     stripped_records: int = 0
     dedupe_threshold: float | None = None
     dedupe_groups: int = 0
+    # Whether the dedupe embeddings exist. The threshold preview needs them, and
+    # without this the UI had no way to know a build had finished — it kept
+    # showing the "not built yet" error it got before the build ran.
+    dedupe_embeddings_ready: bool = False
     normalized_profiles: int = 0
     clustered: bool = False
     k_families: int | None = None
@@ -118,9 +122,35 @@ class StageSummary(BaseModel):
     active_job_stage: str | None = None
 
 
+def _dedupe_ready(
+    svc: ProjectService, client_slug: str, project_slug: str, state: ProjectState
+) -> bool:
+    """Whether the dedupe embeddings exist, answering locally where possible.
+
+    The summary is polled, so a blob HEAD on every call is worth avoiding — it
+    roughly doubled the endpoint's latency. Two cheap answers cover almost every
+    real case:
+
+      - the graph is in this process's cache, so it was built this session
+      - dedupe has been confirmed, which cannot have happened without them
+
+    Only a cold process with unconfirmed dedupe pays for the round-trip, which is
+    exactly the state where the answer is genuinely unknown. If the blob were
+    deleted after confirmation this would say True wrongly, and the preview would
+    then 409 — an acceptable trade for not charging every poll.
+    """
+    if (client_slug, project_slug) in _GRAPH_CACHE:
+        return True
+    if state.dedupe_groups:
+        return True
+    if not state.stripped_records:
+        return False  # nothing could have been embedded yet
+    return svc.array_exists(client_slug, project_slug, "dedupe_embeddings")
+
+
 @router.get("/summary")
 def get_summary(client_slug: str, project_slug: str) -> StageSummary:
-    _, state = _load(client_slug, project_slug)
+    svc, state = _load(client_slug, project_slug)
     active = get_registry().active_for_project(client_slug, project_slug)
     c = state.clustering
     return StageSummary(
@@ -128,6 +158,7 @@ def get_summary(client_slug: str, project_slug: str) -> StageSummary:
         stripped_records=len(state.stripped_records),
         dedupe_threshold=state.dedupe_threshold,
         dedupe_groups=len(state.dedupe_groups),
+        dedupe_embeddings_ready=_dedupe_ready(svc, client_slug, project_slug, state),
         normalized_profiles=len(state.normalized_profiles),
         clustered=c is not None,
         k_families=c.k_families if c else None,

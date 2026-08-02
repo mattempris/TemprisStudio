@@ -135,6 +135,15 @@ class BlobProjectStore:
         except ResourceNotFoundError:
             return None
 
+    def blob_exists(self, client_slug: str, path: str) -> bool:
+        """Existence without downloading — a HEAD, not a GET.
+
+        Used by the stage summary, which is polled: reading a multi-megabyte
+        embedding matrix just to answer "has this been built" would make every
+        poll pay for the whole array.
+        """
+        return self._container(client_slug).get_blob_client(self._app_path(path)).exists()
+
     def delete_blob(self, client_slug: str, path: str) -> None:
         try:
             self._container(client_slug).get_blob_client(self._app_path(path)).delete_blob()

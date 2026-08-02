@@ -15,9 +15,20 @@ interface Props {
   onConfirm: (threshold: number) => void;
   confirming: boolean;
   initialThreshold?: number;
+  /** Whether the embeddings the preview needs exist yet. The panel re-fetches when
+   *  this becomes true — previously it only fetched on a threshold change, so a
+   *  build finishing left the pre-build error on screen indefinitely and the
+   *  confirm button unusable until the slider was nudged. */
+  ready: boolean;
 }
 
-export function DedupePanel({ preview, onConfirm, confirming, initialThreshold = 0.9 }: Props) {
+export function DedupePanel({
+  preview,
+  onConfirm,
+  confirming,
+  initialThreshold = 0.9,
+  ready,
+}: Props) {
   const [threshold, setThreshold] = useState(initialThreshold);
   const [result, setResult] = useState<DedupePreview | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -40,9 +51,25 @@ export function DedupePanel({ preview, onConfirm, confirming, initialThreshold =
   );
 
   useEffect(() => {
+    if (!ready) {
+      // Drop any error from a fetch made before the build ran, so the panel shows
+      // the neutral "not built yet" state rather than a stale red message.
+      setError(null);
+      setResult(null);
+      return;
+    }
     const t = setTimeout(() => void fetchPreview(threshold), 120);
     return () => clearTimeout(t);
-  }, [threshold, fetchPreview]);
+  }, [threshold, fetchPreview, ready]);
+
+  if (!ready) {
+    return (
+      <p className="rounded-[10px] border border-border bg-panel px-4 py-3 text-[12.5px] text-text-secondary">
+        Embed the stripped records first — the threshold slider works off those
+        vectors, so there is nothing to preview until they exist.
+      </p>
+    );
+  }
 
   return (
     <div>

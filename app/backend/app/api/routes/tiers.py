@@ -560,6 +560,7 @@ async def tier_confirm(
             _ANALYSIS_CACHE[key] = analysis
 
         n_route = analysis.routed_count(req.gate)
+        llm.reset_cache_stats()
         # Naming and routing are reported as two phases. They used to share one bar
         # sized to the routed count, so naming — which at 150 clusters is minutes of
         # sequential calls — showed as a bar frozen at zero.
@@ -600,8 +601,11 @@ async def tier_confirm(
             _TIER_CACHE.pop((client_slug, project_slug, entity, above), None)
             _ANALYSIS_CACHE.pop((client_slug, project_slug, entity, above), None)
 
+        cache = llm.cache_stats()
         summary = {
             "entity": entity, "tier": tier, "k": req.k, "clusters": len(result.names),
+            "llm_calls": cache.calls,
+            "cache_hit_pct": round(100 * cache.saved_fraction),
             "routed": result.n_routed, "moved_by_model": result.n_moved,
             "low_confidence": result.low_confidence, "multi_home": result.multi_home,
             "tiers_invalidated": len(dropped),

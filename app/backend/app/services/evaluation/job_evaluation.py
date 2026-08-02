@@ -431,7 +431,11 @@ def evaluate_one(
     for attempt in range(attempts):
         candidate = llm.complete_json(
             prompt,
-            system=system,
+            # The framework — every domain, sub-factor weight and rubric descriptor —
+            # is identical for every profile in the run and is the bulk of the
+            # request. Sent as a cache prefix it is written once and read back at a
+            # tenth of the price for the remaining profiles.
+            cache_prefix=system,
             json_schema=schema,
             effort="medium",
             # Keep the transient budget small: this loop already retries, and the

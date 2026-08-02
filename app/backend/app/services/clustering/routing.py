@@ -67,9 +67,24 @@ class RouteResult:
 
 
 async def route_one(item_index: int, item_text: str, clusters_text: str, *, entity: str) -> dict:
+    """One routing decision.
+
+    The cluster list goes in as a cache prefix rather than inside the user message.
+    It is byte-identical for every item in a run and dwarfs everything else in the
+    request — a 934-cluster skill taxonomy carries ~19,500 tokens of it — so sending
+    it as cached system content turns the repetition from full price into a cache
+    read at a tenth of that. The item itself, the only part that varies, stays in
+    the user message where it cannot disturb the cached prefix.
+    """
     system = _route_system_prompt(entity)
-    prompt = f"Clusters:\n{clusters_text}\n\nItem to assign:\n{item_text}"
-    return await llm.acomplete_json(prompt, system=system, json_schema=ROUTE_SCHEMA, effort="low", max_tokens=600)
+    return await llm.acomplete_json(
+        f"Item to assign:\n{item_text}",
+        system=system,
+        cache_prefix=f"The clusters to choose from:\n{clusters_text}",
+        json_schema=ROUTE_SCHEMA,
+        effort="low",
+        max_tokens=600,
+    )
 
 
 async def route_all(
@@ -91,7 +106,30 @@ async def route_all(
         res = await route_one(idx, text, clusters_text, entity=entity)
         return res
 
-    first = await llm.amap(_first_pass, items, concurrency=concurrency, progress=progress, label="route")
+    # Route the first item alone before fanning out. Nothing is in the cache yet, so
+    # launching the full width immediately would have every one of those calls miss
+    # and every one of them write the same prefix — paying the 1.25x write premium N
+    # times instead of once. One call first means one write and the rest read.
+    warmed: list[dict] = []
+    if items and llm.is_cacheable(clusters_text):
+        warmed.append(await _first_pass(items[0]))
+        if progress:
+            progress(1, len(items), "route")
+
+    rest = items[len(warmed) :]
+    # amap counts only what it was given, so the warm-up call has to be added back
+    # or the bar restarts one short of the real total.
+    offset = len(warmed)
+    total = len(items)
+
+    def _offset_progress(done: int, _sub_total: int, label: str) -> None:
+        if progress:
+            progress(done + offset, total, label)
+
+    first = warmed + await llm.amap(
+        _first_pass, rest, concurrency=concurrency,
+        progress=_offset_progress if progress else None, label="route",
+    )
     out: dict[int, dict] = {idx: res for (idx, _text), res in zip(items, first)}
 
     low = [(idx, text) for (idx, text), res in zip(items, first) if res["primary"]["confidence"] < sc_confidence_threshold]

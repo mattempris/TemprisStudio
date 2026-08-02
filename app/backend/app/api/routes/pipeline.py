@@ -1271,6 +1271,7 @@ async def start_profile_generation(
         spec.sections = sections
 
     def work(reporter: ProgressReporter) -> dict:
+        llm.reset_cache_stats()
         reporter.stage_start(len(specs), f"Generating {len(specs)} job profile documents")
         contents = generator.generate_many(specs, workers=_workers, progress=reporter.pmap_callback())
 
@@ -1318,7 +1319,12 @@ async def start_profile_generation(
             action="generate-profiles",
             lineage_payload={"profiles": len(docs), "failed": unwritten},
         )
-        summary: dict = {"profiles_generated": len(docs)}
+        cache = llm.cache_stats()
+        summary: dict = {
+            "profiles_generated": len(docs),
+            "llm_calls": cache.calls,
+            "cache_hit_pct": round(100 * cache.saved_fraction),
+        }
         if unwritten:
             summary["profiles_failed"] = len(unwritten)
             summary["profiles_failed_clusters"] = unwritten[:10]
@@ -1363,6 +1369,7 @@ async def start_job_evaluation(
     docs = list(state.job_profiles)
 
     def work(reporter: ProgressReporter) -> dict:
+        llm.reset_cache_stats()
         reporter.stage_start(len(docs), f"Job evaluation ensemble across {len(docs)} profiles")
         je_inputs = [(d.profile_key, d.title, d.content) for d in docs]
         results = je.evaluate_many(
@@ -1407,8 +1414,11 @@ async def start_job_evaluation(
             lineage_payload={"evaluated": len(evaluated), "failed": failed},
         )
 
+        cache = llm.cache_stats()
         summary: dict = {
             "je_evaluated": len(evaluated),
+            "llm_calls": cache.calls,
+            "cache_hit_pct": round(100 * cache.saved_fraction),
             "levels": sorted({r.level_name for r in evaluated}),
             "mean_score": round(
                 sum(r.aggregate_score for r in evaluated) / max(1, len(evaluated)), 2

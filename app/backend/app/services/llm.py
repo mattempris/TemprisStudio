@@ -16,6 +16,7 @@ import json
 import re
 import threading
 import time
+from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, TypeVar
 
@@ -117,6 +118,103 @@ _RETRYABLE = (
 REQUEST_TIMEOUT_SECONDS = 240.0
 
 
+# ---------------------------------------------------------------------------
+# Prompt caching
+# ---------------------------------------------------------------------------
+# Several stages send the same large block of context with every one of hundreds
+# of calls: the routing stage repeats the entire cluster list for each item it
+# re-checks, and job evaluation repeats the whole scoring framework for each
+# profile. Marking that block with a cache breakpoint makes the first call write
+# it once and every subsequent call read it at a tenth of the input price.
+#
+# The routing case is the one that matters at scale. Re-checking a skill taxonomy
+# with 934 clusters carries a ~19,500-token cluster list on every call, so a run
+# routing 840 items sends ~16M input tokens of pure repetition.
+#
+# Below this many tokens the API does not cache at all, so the breakpoint is
+# skipped rather than sent — a marker that cannot take effect is just noise in the
+# request, and it makes `cache_prefix` safe to pass unconditionally.
+MIN_CACHEABLE_TOKENS = 1024
+
+# Rough enough to decide whether a prefix clears the minimum. Deliberately not a
+# real tokenizer call: this runs per request, and being wrong near the boundary
+# costs nothing (the API silently declines to cache, exactly as it would anyway).
+_CHARS_PER_TOKEN = 4
+
+
+def is_cacheable(text: str | None) -> bool:
+    return bool(text) and len(text) // _CHARS_PER_TOKEN >= MIN_CACHEABLE_TOKENS
+
+
+def _system_param(system: str | None, cache_prefix: str | None):
+    """Build the `system` argument, with a cache breakpoint after the shared part.
+
+    A breakpoint caches everything *before and including* the block it sits on, so
+    the ordering here matters: the short per-stage instructions come first and the
+    large shared context second, and one marker on the second block covers both.
+    """
+    if not cache_prefix:
+        return system
+    blocks: list[dict] = []
+    if system:
+        blocks.append({"type": "text", "text": system})
+    prefix_block: dict = {"type": "text", "text": cache_prefix}
+    if is_cacheable(cache_prefix if not system else system + cache_prefix):
+        prefix_block["cache_control"] = {"type": "ephemeral"}
+    blocks.append(prefix_block)
+    return blocks
+
+
+@dataclass
+class CacheStats:
+    """Input-token accounting, so cache effectiveness is observable rather than
+    assumed. Reset per stage; read after."""
+
+    calls: int = 0
+    uncached_input: int = 0
+    cache_writes: int = 0
+    cache_reads: int = 0
+
+    @property
+    def saved_fraction(self) -> float:
+        """Share of cacheable input that was served from cache."""
+        total = self.cache_writes + self.cache_reads
+        return self.cache_reads / total if total else 0.0
+
+    def summary(self) -> str:
+        if not self.cache_writes and not self.cache_reads:
+            return f"{self.calls} calls, {self.uncached_input:,} input tokens, no caching"
+        return (
+            f"{self.calls} calls · {self.uncached_input:,} uncached + "
+            f"{self.cache_writes:,} written + {self.cache_reads:,} read from cache "
+            f"({self.saved_fraction:.0%} of the repeated context was cached)"
+        )
+
+
+_cache_stats = CacheStats()
+
+
+def cache_stats() -> CacheStats:
+    return _cache_stats
+
+
+def reset_cache_stats() -> CacheStats:
+    global _cache_stats
+    previous, _cache_stats = _cache_stats, CacheStats()
+    return previous
+
+
+def _record_usage(resp) -> None:
+    usage = getattr(resp, "usage", None)
+    if usage is None:
+        return
+    with _print_lock:  # counters are touched from the thread-pool fan-outs
+        _cache_stats.calls += 1
+        _cache_stats.uncached_input += getattr(usage, "input_tokens", 0) or 0
+        _cache_stats.cache_writes += getattr(usage, "cache_creation_input_tokens", 0) or 0
+        _cache_stats.cache_reads += getattr(usage, "cache_read_input_tokens", 0) or 0
+
+
 def get_client() -> anthropic.Anthropic:
     global _client
     if _client is None:
@@ -189,6 +287,7 @@ def complete(
     json_schema: dict | None = None,
     effort: str = "medium",
     thinking: str = "adaptive",
+    cache_prefix: str | None = None,
 ) -> str:
     # NOTE: temperature/top_p/top_k are NOT accepted by claude-sonnet-5 (or the
     # rest of the 4.6+ model family) — sending them returns a 400. Determinism
@@ -208,8 +307,9 @@ def complete(
     client = get_client()
 
     kwargs: dict = dict(model=model, max_tokens=max_tokens, thinking={"type": thinking})
-    if system:
-        kwargs["system"] = system
+    system_param = _system_param(system, cache_prefix)
+    if system_param:
+        kwargs["system"] = system_param
     if json_schema is not None:
         kwargs["output_config"] = {"effort": effort, "format": {"type": "json_schema", "schema": json_schema}}
     else:
@@ -226,6 +326,7 @@ def complete(
             # Streaming costs nothing when we only want the final text.
             with client.messages.stream(**kwargs) as stream:
                 resp = stream.get_final_message()
+            _record_usage(resp)
             if resp.stop_reason == "max_tokens":
                 # Truncated mid-JSON. Its own exception type, because it is the one
                 # "transient" failure that is actually deterministic — see
@@ -282,6 +383,7 @@ def complete_json(
     json_schema: dict | None = None,
     effort: str = "medium",
     thinking: str = "adaptive",
+    cache_prefix: str | None = None,
 ) -> Any:
     # One shared retry budget covering BOTH failure modes, since either can be
     # transient. Previously this passed retries=1 into complete() and only caught
@@ -302,6 +404,7 @@ def complete_json(
                 json_schema=schema,
                 effort=effort,
                 thinking=thinking,
+                cache_prefix=cache_prefix,
             )
             return parse_json(text)
         except LLMRequestError:
@@ -411,6 +514,7 @@ async def acomplete_json(
     effort: str = "medium",
     retries: int = 4,
     thinking: str = "adaptive",
+    cache_prefix: str | None = None,
 ) -> Any:
     """Async counterpart to complete_json, with the same retry semantics —
     non-retryable request errors fail fast; transient errors and parse failures
@@ -420,8 +524,9 @@ async def acomplete_json(
     client = get_async_client()
 
     kwargs: dict = dict(model=model, max_tokens=max_tokens, thinking={"type": thinking})
-    if system:
-        kwargs["system"] = system
+    system_param = _system_param(system, cache_prefix)
+    if system_param:
+        kwargs["system"] = system_param
     if json_schema is not None:
         kwargs["output_config"] = {"effort": effort, "format": {"type": "json_schema", "schema": json_schema}}
     else:
@@ -433,6 +538,7 @@ async def acomplete_json(
         try:
             async with client.messages.stream(**kwargs) as stream:
                 resp = await stream.get_final_message()
+            _record_usage(resp)
             if resp.stop_reason == "max_tokens":
                 # Same escalation as the sync path: a repeat at the same budget
                 # truncates identically, so grow it in place instead of retrying.

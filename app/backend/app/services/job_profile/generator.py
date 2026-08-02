@@ -130,17 +130,20 @@ def build_prompt(spec: ProfileGenerationInput) -> str:
     if spec.headcount is not None:
         header.append(f"Total headcount across the cluster: {spec.headcount}")
     blocks = [_member_block(i, m) for i, m in enumerate(spec.members, start=1)]
-    # The user's template decides which sections exist and what they are called,
-    # so the per-section instructions are built from it rather than being fixed in
-    # SYSTEM. SYSTEM still carries the general field guidance.
-    sections = spec.sections or tpl.default_sections()
-    return (
-        "\n".join(header)
-        + "\n\n"
-        + "\n\n".join(blocks)
-        + "\n\nProduce exactly these sections:\n"
-        + tpl.prompt_section_guide(sections)
-    )
+    return "\n".join(header) + "\n\n" + "\n\n".join(blocks)
+
+
+def build_shared_context(sections: list[tpl.SectionConfig]) -> str:
+    """Everything identical for every profile in a run, as one block.
+
+    The per-section instructions come from the user's template rather than being
+    fixed in SYSTEM, but they do not vary between profiles — so they belong with
+    SYSTEM in the cached prefix rather than appended to each profile's own prompt,
+    where they would be re-sent at full price once per profile. A rich template
+    pushes this past the caching minimum on its own; a small one simply is not
+    cached, and nothing else changes.
+    """
+    return SYSTEM + "\n\nProduce exactly these sections:\n" + tpl.prompt_section_guide(sections)
 
 
 def generate_content(spec: ProfileGenerationInput) -> dict:
@@ -148,7 +151,7 @@ def generate_content(spec: ProfileGenerationInput) -> dict:
     sections = spec.sections or tpl.default_sections()
     result = llm.complete_json(
         build_prompt(spec),
-        system=SYSTEM,
+        cache_prefix=build_shared_context(sections),
         # Only the enabled sections are in the schema, so the model is never asked
         # for content that the template would discard.
         json_schema=tpl.build_schema(sections),

@@ -181,18 +181,41 @@ export function TierClusterStage({
     <div className="space-y-4">
       {!status.built ? (
         <div className="space-y-2">
+          {/* `built` means the Ward tree is in the server's memory, which it is not
+              after a restart. That says nothing about whether this tier was
+              confirmed, so a confirmed tier keeps showing its clusters below and
+              only the controls that need the tree are gated behind rebuilding. */}
           <p className="text-[12.5px] text-text-secondary">
-            {status.item_count ?? "?"} {status.item_noun} to group into {title.toLowerCase()}.
+            {status.confirmed
+              ? `Already grouped into ${status.k} ${title.toLowerCase()}, below. Rebuild the
+                 grouping to change the count or re-run it.`
+              : `${status.item_count ?? "?"} ${status.item_noun} to group into ${title.toLowerCase()}.`}
           </p>
           <div className="flex flex-wrap items-center gap-3">
-            <Button variant="primary" onClick={() => start("build", onBuild)} disabled={busy}>
+            <Button
+              variant={status.confirmed ? "default" : "primary"}
+              onClick={() => start("build", onBuild)}
+              disabled={busy}
+            >
               <span className="flex items-center gap-1.5">
-                <Play size={12} /> Prepare {title.toLowerCase()}
+                <Play size={12} />
+                {status.confirmed ? "Rebuild to re-cluster" : `Prepare ${title.toLowerCase()}`}
               </span>
             </Button>
             {activity}
           </div>
           {ran !== "analyse" && ran !== "confirm" && progress}
+
+          {clusters && (
+            <ClusterList
+              data={clusters}
+              itemNoun={status.item_noun}
+              subheading={tooltipSubheading(status)}
+              onRename={onRename}
+              onReassign={onReassign}
+              onChanged={refreshClusters}
+            />
+          )}
         </div>
       ) : (
         <>
@@ -742,8 +765,11 @@ function ClusterList({
                   <li key={m.item_id} className="flex items-center gap-2 py-0.5 text-[11.5px]">
                     <span className="min-w-0 flex-1 truncate text-text-secondary">{m.label}</span>
                     {m.moved_by_user ? (
-                      <Badge color="purple" title={`Moved by hand from ${m.moved_from ?? "another cluster"}`}>
-                        moved by you
+                      // "set" rather than "moved": the placement may well be back
+                      // where the model put it, and the point of the badge is that a
+                      // person chose it, not that it differs from the backbone.
+                      <Badge color="purple" title="Placement chosen by hand">
+                        set by you
                       </Badge>
                     ) : m.moved ? (
                       <Badge color="warning" title={`Moved from ${m.moved_from ?? "another cluster"}`}>

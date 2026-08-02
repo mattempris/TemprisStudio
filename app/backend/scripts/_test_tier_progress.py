@@ -89,7 +89,12 @@ def main() -> int:
                 isinstance(phases[0][1], tuple) and phases[0][1][1] == n_unstable)
     ok &= check(f"routing reported {len(routed)} times for {n_unstable} items",
                 len(routed) == n_unstable)
-    ok &= check(f"all {K} clusters named", len(result.names) == K)
+    # This stub routes every re-checked item into cluster 0, which empties the
+    # clusters they came from — and an emptied cluster loses its name by design.
+    occupied = {m.final_cluster_id for m in result.members}
+    ok &= check(f"names match surviving clusters ({len(result.names)} of {K})",
+                set(result.names) == occupied)
+    ok &= check("no named cluster is empty", all(c in occupied for c in result.names))
     ok &= check(f"n_routed recorded ({result.n_routed})", result.n_routed == n_unstable)
 
     print("\n" + ("PASSED" if ok else "FAILED"))

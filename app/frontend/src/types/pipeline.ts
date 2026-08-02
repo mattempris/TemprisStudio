@@ -117,12 +117,24 @@ export interface ClusterPreview {
 
 export type TierName = "profile" | "category" | "family";
 
+/** The three hierarchies the per-tier clustering flow drives. */
+export type ClusterEntity = "job" | "skill" | "task";
+
 export interface TierStatus {
+  entity: ClusterEntity;
   tier: TierName;
+  /** What this tier's clusters are called, e.g. "Job profiles", "Task domains". */
+  title: string;
   ready_to_run: boolean;
   below: TierName | null;
+  below_title: string | null;
   item_count: number | null;
   item_noun: string;
+  /** What the hover tooltip lists, e.g. "source job titles", "skills". */
+  label_noun: string;
+  /** True on the finest tier, the only one that embeds anything. */
+  embeds: boolean;
+  embedding_entity: string;
   built: boolean;
   analysed_k: number | null;
   /** False when the tier is large enough that stability needs its own pass. */
@@ -291,22 +303,6 @@ export interface TaxonomyNode {
   proportion_sum?: number;
   fte_equivalent?: number | null;
   proficiency_definitions?: Record<string, string>;
-}
-
-/** Each entity names its tiers differently on the wire: jobs use
- *  family/category/profile, skills family/category/cluster, tasks
- *  domain/category/task. All three variants are optional here and folded into
- *  one shape by toClusterPreview. */
-export interface EntityClusterPreview {
-  family_sizes?: number[];
-  domain_sizes?: number[];
-  category_sizes?: number[];
-  profile_sizes?: number[];
-  cluster_sizes?: number[];
-  task_sizes?: number[];
-  singleton_profiles?: number;
-  singleton_clusters?: number;
-  singleton_tasks?: number;
 }
 
 // ── 3rd-party taxonomy matching (step 11) ────────────────────────────────────

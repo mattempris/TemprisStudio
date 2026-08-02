@@ -4,7 +4,6 @@ import type {
   JobHandle,
   SizeStats,
   TierClusters,
-  TierName,
   TierPreview,
   TierStatus,
 } from "../../types/pipeline";
@@ -15,12 +14,15 @@ import { Tooltip, TitleListTooltip } from "../ui/Tooltip";
 import { cn } from "../../lib/cn";
 import { HEAT_GRADIENT, heatColor } from "../../lib/heat";
 
-/** Every tier resolves down to real job titles, so say which relationship it is. */
-const TOOLTIP_SUBHEADING: Record<TierName, string> = {
-  profile: "Source job titles:",
-  category: "Job titles beneath this category:",
-  family: "Job titles beneath this family:",
-};
+/** Every tier resolves all the way down to the real underlying records, so the
+ *  tooltip says which relationship it is showing. The noun comes from the server
+ *  because it differs per hierarchy: job titles, skills or tasks. */
+function tooltipSubheading(status: TierStatus): string {
+  const noun = status.label_noun;
+  return status.tier === "profile"
+    ? `${noun[0].toUpperCase()}${noun.slice(1)}:`
+    : `${noun[0].toUpperCase()}${noun.slice(1)} beneath this ${status.tier}:`;
+}
 
 /**
  * One tier of the hierarchy — used three times, for profiles, categories and
@@ -42,7 +44,8 @@ const TOOLTIP_SUBHEADING: Record<TierName, string> = {
  */
 
 interface Props {
-  title: string;
+  /** Overrides the server's own title. Rarely needed. */
+  title?: string;
   status: TierStatus;
   preview: (k: number) => Promise<TierPreview>;
   gatePreview: (gate: number) => Promise<TierPreview>;
@@ -57,7 +60,7 @@ interface Props {
 }
 
 export function TierClusterStage({
-  title,
+  title: titleOverride,
   status,
   preview,
   gatePreview,
@@ -70,6 +73,7 @@ export function TierClusterStage({
   busy,
   progress,
 }: Props) {
+  const title = titleOverride ?? status.title;
   const [k, setK] = useState<number>(status.k ?? 0);
   const [gate, setGate] = useState<number>(status.gate ?? 0.58);
   const [result, setResult] = useState<TierPreview | null>(null);
@@ -145,8 +149,9 @@ export function TierClusterStage({
   if (!status.ready_to_run) {
     return (
       <p className="rounded-[10px] border border-border bg-panel px-4 py-3 text-[12.5px] text-text-secondary">
-        Confirm the {status.below} tier first — {title.toLowerCase()} are groups of{" "}
-        {status.below === "profile" ? "job profiles" : `job ${status.below}s`}.
+        {status.below_title
+          ? `Confirm the ${status.below_title.toLowerCase()} first — ${title.toLowerCase()} are groups of ${status.item_noun}.`
+          : `Nothing to group yet — this step needs at least 3 ${status.item_noun}.`}
       </p>
     );
   }
@@ -198,7 +203,7 @@ export function TierClusterStage({
                       content={
                         <TitleListTooltip
                           heading={`Group ${i + 1} · ${size} ${status.item_noun}`}
-                          subheading={TOOLTIP_SUBHEADING[status.tier]}
+                          subheading={tooltipSubheading(status)}
                           titles={result.titles?.[i] ?? []}
                           total={result.title_counts?.[i] ?? 0}
                           omitted={result.titles_omitted?.[i] ?? 0}
@@ -354,6 +359,7 @@ export function TierClusterStage({
             <ClusterList
               data={clusters}
               itemNoun={status.item_noun}
+              subheading={tooltipSubheading(status)}
               onRename={onRename}
               onRenamed={refreshClusters}
             />
@@ -506,11 +512,13 @@ function SizeStatRow({
 function ClusterList({
   data,
   itemNoun,
+  subheading,
   onRename,
   onRenamed,
 }: {
   data: TierClusters;
   itemNoun: string;
+  subheading: string;
   onRename: (id: number, name: string) => Promise<unknown>;
   onRenamed: () => void;
 }) {
@@ -570,7 +578,7 @@ function ClusterList({
                   content={
                     <TitleListTooltip
                       heading={`${c.size} ${itemNoun}`}
-                      subheading={TOOLTIP_SUBHEADING[data.tier]}
+                      subheading={subheading}
                       titles={c.titles ?? []}
                       total={c.title_count ?? 0}
                       omitted={c.titles_omitted ?? 0}

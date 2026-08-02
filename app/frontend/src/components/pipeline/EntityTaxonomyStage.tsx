@@ -1,33 +1,43 @@
 import { useCallback, useEffect, useState } from "react";
 import { Play } from "lucide-react";
-import type { ClusterPreview, JobHandle, TaxonomyNode } from "../../types/pipeline";
-import { ClusterKPanel, type TierLabels } from "./ClusterKPanel";
+import type { JobHandle, TaxonomyNode, TierName, TierStatus } from "../../types/pipeline";
 import { TaxonomyBrowser, normalizeTaxonomy, type TaxonomyKind } from "./TaxonomyBrowser";
+import { TierClusterStage } from "./TierClusterStage";
+import type { TierApi } from "../../services/pipelineApi";
 import { Button } from "../ui/Button";
 
 /**
- * Skills (steps 8-9) and tasks (step 10) follow the same four moves: infer from
- * job profiles, embed and build the Ward tree, pick cluster counts, browse the
- * result. Only the entity, the labels and the extra proficiency step differ, so
- * this drives both rather than the flow being written out twice.
+ * Skills (steps 8-9) and tasks (step 10) follow the same moves: infer from job
+ * profiles, group into a three-tier taxonomy, browse the result. Only the entity,
+ * the labels and the extra proficiency step differ, so this drives both rather than
+ * the flow being written out twice.
+ *
+ * The grouping is the same per-tier flow the job hierarchy uses — clusters, then
+ * categories, then families, each with its own cluster count, its own stability gate
+ * with the routing cost shown before it is paid, and its own naming to confirm. It
+ * replaced a single panel with three k sliders and one confirm that named every
+ * level at once: that gave no way to see what a level contained before committing to
+ * the level above it, and no way to fix one tier without redoing all three.
+ *
+ * All three tiers live inside this one wizard step rather than becoming three steps
+ * of their own. The job hierarchy earns three steps because its levels are the
+ * deliverable; here the deliverable is the taxonomy, and the tiers are how it is
+ * built.
  */
 
 interface Props {
   kind: TaxonomyKind;
-  labels: TierLabels;
   /** [family/domain, category, cluster] — used by the browser's tier headings. */
   tierLabels: [string, string, string];
   inferredCount: number;
   profilesCovered: number;
   jobProfileCount: number;
-  clustered: boolean;
   named: boolean;
-  k: { families: number | null; categories: number | null; clusters: number | null };
+  /** Per-tier status, keyed by tier. Undefined until the first fetch lands. */
+  tiers: Partial<Record<TierName, TierStatus>>;
   audit: Record<string, number>;
   onInfer: () => Promise<JobHandle>;
-  onBuildTree: () => Promise<JobHandle>;
-  preview: (k: { families: number; categories: number; profiles: number }) => Promise<ClusterPreview>;
-  onConfirm: (k: { families: number; categories: number; profiles: number }, gate: number) => Promise<JobHandle>;
+  tierApi: (tier: TierName) => TierApi;
   loadTaxonomy: () => Promise<{ roots: TaxonomyNode[]; hasHeadcount: boolean }>;
   runJob: (start: () => Promise<JobHandle>) => void;
   busy: boolean;
@@ -45,21 +55,20 @@ interface Props {
   };
 }
 
+/** Finest first — the order they are confirmed in. */
+const TIER_ORDER: TierName[] = ["profile", "category", "family"];
+
 export function EntityTaxonomyStage({
   kind,
-  labels,
   tierLabels,
   inferredCount,
   profilesCovered,
   jobProfileCount,
-  clustered,
   named,
-  k,
+  tiers,
   audit,
   onInfer,
-  onBuildTree,
-  preview,
-  onConfirm,
+  tierApi,
   loadTaxonomy,
   runJob,
   busy,
@@ -102,34 +111,44 @@ export function EntityTaxonomyStage({
         )}
       </div>
 
-      {/* 2. Build the tree */}
-      {inferredCount >= 3 && !clustered && (
-        <Button variant="primary" onClick={() => runJob(onBuildTree)} disabled={busy}>
-          <span className="flex items-center gap-1.5">
-            <Play size={12} /> Embed and build the cluster tree
-          </span>
-        </Button>
-      )}
-
       {progress}
 
-      {/* 3. Choose cluster counts */}
-      {clustered && (
-        <ClusterKPanel
-          itemCount={inferredCount}
-          labels={labels}
-          initial={{
-            families: k.families ?? Math.max(2, Math.min(8, Math.floor(inferredCount / 15) || 2)),
-            categories: k.categories ?? Math.max(3, Math.min(20, Math.floor(inferredCount / 6) || 3)),
-            profiles: k.clusters ?? Math.max(4, Math.min(50, Math.floor(inferredCount / 3) || 4)),
-          }}
-          preview={preview}
-          onConfirm={(kk, gate) => runJob(() => onConfirm(kk, gate))}
-          confirming={busy}
-        />
-      )}
+      {/* 2. Group into the three tiers, bottom-up. Each is confirmed on its own,
+             so a coarser tier only appears once the one below it is settled. */}
+      {inferredCount >= 3 &&
+        TIER_ORDER.map((tier, i) => {
+          const st = tiers[tier];
+          if (!st) return null;
+          // Hide a tier that cannot run yet AND has nothing below it in progress:
+          // showing all three greyed out at once buries the one to act on.
+          const below = i === 0 ? null : tiers[TIER_ORDER[i - 1]];
+          if (!st.ready_to_run && !(below?.confirmed ?? true)) return null;
+          const api = tierApi(tier);
+          return (
+            <div key={tier} className="rounded-[10px] border border-border bg-panel px-4 py-3">
+              <p className="mb-2 text-[11px] font-extrabold uppercase tracking-wider text-text-muted">
+                {i + 1}. {st.title}
+              </p>
+              <TierClusterStage
+                status={st}
+                preview={api.preview}
+                gatePreview={api.gate}
+                onBuild={() => api.build()}
+                onAnalyse={api.analyse}
+                onConfirm={(k, gate) => api.confirm(k, gate)}
+                loadClusters={api.clusters}
+                onRename={api.rename}
+                runJob={runJob}
+                busy={busy}
+                // One progress bar for the step, rendered above, rather than one
+                // per tier: only one tier can be running at a time anyway.
+                progress={null}
+              />
+            </div>
+          );
+        })}
 
-      {/* 4. Proficiency (skills only) */}
+      {/* 3. Proficiency (skills only) */}
       {named && proficiency && (
         <div className="space-y-2.5 rounded-[10px] border border-border bg-panel px-4 py-3">
           <div>
@@ -156,7 +175,7 @@ export function EntityTaxonomyStage({
         </div>
       )}
 
-      {/* 5. Browse */}
+      {/* 4. Browse */}
       {tree && tree.roots.length > 0 && (
         <TaxonomyBrowser
           kind={kind}

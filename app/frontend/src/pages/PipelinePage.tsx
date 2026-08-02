@@ -8,6 +8,7 @@ import type {
   ProficiencyTemplate,
   Boilerplate,
   EmbeddingModelsInfo,
+  ClusterEntity,
   TierName,
   TierStatus,
   ProfileSection,
@@ -47,25 +48,26 @@ const STAGES = [
   { id: "cluster", title: "Job profiles", description: "Group the normalised jobs into job profiles, review what the model re-checked, and name them." },
   { id: "categories", title: "Job categories", description: "Group the confirmed job profiles into categories, then name them from what they contain." },
   { id: "families", title: "Job families", description: "Group the categories into job families — the top of the hierarchy." },
-  { id: "profiles", title: "Profile documents and evaluation", description: "Write a job profile document for each confirmed profile and score it against your job evaluation framework." },
+  { id: "profiles", title: "Job profile documents", description: "Write a job profile document for each confirmed profile, from the template and boilerplate you define here." },
+  { id: "evaluation", title: "Job evaluation", description: "Score each profile document against your job evaluation framework and map it to a level." },
   { id: "skills", title: "Skills taxonomy", description: "Infer the attributes each profile needs, cluster them into a taxonomy, and set proficiency levels." },
   { id: "tasks", title: "Task taxonomy", description: "Infer what each profile spends time on, cluster it, and analyse where the workforce's time goes." },
   { id: "matching", title: "3rd-party taxonomy match", description: "Place each job profile in the external market taxonomy and assign a career level." },
 ] as const;
 
+// Coarsest first — the order the taxonomy browser renders its headings in, which
+// is the opposite of the order the tiers are confirmed in.
 const SKILL_LABELS = {
   tiers: ["Skill families", "Skill categories", "Skill clusters"] as [string, string, string],
-  hints: ["Broadest grouping", "Groups of clusters", "Groups of skills"] as [string, string, string],
-  itemNoun: "inferred skills",
-  leafNoun: "cluster",
 };
 
 const TASK_LABELS = {
   tiers: ["Task domains", "Task categories", "Task clusters"] as [string, string, string],
-  hints: ["Broadest grouping", "Groups of clusters", "Groups of tasks"] as [string, string, string],
-  itemNoun: "inferred tasks",
-  leafNoun: "cluster",
 };
+
+/** Nine statuses: three hierarchies x three tiers. */
+type EntityTiers = Record<ClusterEntity, Partial<Record<TierName, TierStatus>>>;
+const EMPTY_TIERS: EntityTiers = { job: {}, skill: {}, task: {} };
 
 export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; projectSlug: string }) {
   const api = useMemo(() => pipelineApi(clientSlug, projectSlug), [clientSlug, projectSlug]);
@@ -92,7 +94,9 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
   const [embedModels, setEmbedModels] = useState<EmbeddingModelsInfo | null>(null);
   // Per-tier clustering status. Kept alongside the stage summary because the three
   // hierarchy steps gate on each other rather than on one "clustered" flag.
-  const [tiers, setTiers] = useState<Partial<Record<TierName, TierStatus>>>({});
+  // Per entity, per tier. Three hierarchies now use the same per-tier flow, so
+  // the wizard needs all nine statuses rather than just the job hierarchy's three.
+  const [tiers, setTiers] = useState<EntityTiers>(EMPTY_TIERS);
   // Per-run embedding choices. null model means "use the server default".
   const [jobModel, setJobModel] = useState<string | null>(null);
   const [forceCpu, setForceCpu] = useState(false);
@@ -128,19 +132,13 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
         if (mt.status === "fulfilled") setMatching(mt.value);
         if (ov.status === "fulfilled") setOverview(ov.value);
       }
-      // Tier status drives steps 5-7; a tier only becomes runnable once the one
-      // below it is confirmed, so this has to refresh after every job.
-      void Promise.allSettled(
-        (["profile", "category", "family"] as TierName[]).map((t) => api.tier(t).status()),
-      ).then((rs) =>
-        setTiers(
-          Object.fromEntries(
-            rs.flatMap((r, i) =>
-              r.status === "fulfilled" ? [[(["profile", "category", "family"] as TierName[])[i], r.value]] : [],
-            ),
-          ),
-        ),
-      );
+      // Tier status drives steps 5-7 and the two taxonomy steps; a tier only
+      // becomes runnable once the one below it is confirmed, so this has to
+      // refresh after every job.
+      void api
+        .allTierStatus()
+        .then((t) => setTiers({ job: t.job ?? {}, skill: t.skill ?? {}, task: t.task ?? {} }))
+        .catch(() => {});
       // Keeps the "loaded" badges honest after a run put a model in memory.
       void api.embeddingModels().then(setEmbedModels).catch(() => {});
       setBackendDown(false);
@@ -361,7 +359,13 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
               state={st}
               summary={stageSummaryLine(s.id, summary, downstream)}
               lockedReason={lockedReason(s.id)}
-              config={s.id === "profiles" ? profileConfig() : undefined}
+              config={
+                s.id === "profiles"
+                  ? profileConfig()
+                  : s.id === "evaluation"
+                    ? evaluationConfig()
+                    : undefined
+              }
               expanded={expanded === s.id}
               onToggle={() => setExpanded(expanded === s.id ? null : s.id)}
             >
@@ -438,18 +442,25 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
               />
             </Collapsible>
 
-            <Collapsible
-              title="Job evaluation framework"
-              subtitle="Domains, sub-factor weights, scoring rubric, and the level names each score maps to."
-            >
-              <LazyJEFramework
-                load={() => api.getJeFramework()}
-                loadDefaults={() => api.getJeFramework(true)}
-                save={api.putJeFramework}
-                hasResults={summary!.je_results > 0}
-              />
-            </Collapsible>
       </div>
+    );
+  }
+
+  /** The evaluation step's settings. The framework belongs here rather than with
+   *  the documents: editing it invalidates evaluations, not profiles. */
+  function evaluationConfig() {
+    return (
+      <Collapsible
+        title="Job evaluation framework"
+        subtitle="Domains, sub-factor weights, scoring rubric, and the level names each score maps to."
+      >
+        <LazyJEFramework
+          load={() => api.getJeFramework()}
+          loadDefaults={() => api.getJeFramework(true)}
+          save={api.putJeFramework}
+          hasResults={summary!.je_results > 0}
+        />
+      </Collapsible>
     );
   }
 
@@ -592,12 +603,11 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
       case "families": {
         const tierOf = { cluster: "profile", categories: "category", families: "family" } as const;
         const tier = tierOf[id as keyof typeof tierOf];
-        const st = tiers[tier];
+        const st = tiers.job[tier];
         if (!st) {
           return <p className="text-[12.5px] text-text-muted">Loading tier status…</p>;
         }
-        const titles = { profile: "Job profiles", category: "Job categories", family: "Job families" };
-        const api_t = api.tier(tier);
+        const api_t = api.tier("job", tier);
         return (
           <div className="space-y-4">
             {/* The profile tier embeds the normalised jobs, so the model choice
@@ -616,7 +626,6 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
               />
             )}
             <TierClusterStage
-              title={titles[tier]}
               status={st}
               preview={api_t.preview}
               gatePreview={api_t.gate}
@@ -648,13 +657,55 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
             <div className="space-y-3">
               <Button
                 variant="primary"
-                onClick={() => runJob(() => api.startProfileGeneration(true, workers))}
+                onClick={() => runJob(() => api.startProfileGeneration(workers))}
                 disabled={busy || job.running}
               >
                 <span className="flex items-center gap-1.5">
-                  <Play size={12} /> Generate job profiles and evaluate
+                  <Play size={12} />
+                  {summary!.job_profiles > 0
+                    ? "Regenerate " + summary!.job_profiles + " job profile documents"
+                    : "Generate job profile documents"}
                 </span>
               </Button>
+              <p className="text-[11.5px] leading-snug text-text-secondary">
+                One document per confirmed job profile, written from the template above.
+                Evaluated levels are added by the step that follows.
+              </p>
+              {showProgress && <ProgressBar job={job} />}
+            </div>
+
+            {profiles.length > 0 && (
+              <JEResultsBrowser
+                profiles={profiles}
+                onOpenProfile={(key) => window.open(api.exportUrl(key, "html"), "_blank")}
+                loadJe={api.getProfileJe}
+                exportUrl={api.exportUrl}
+                pdfAvailable={caps.pdf}
+              />
+            )}
+          </div>
+        );
+
+      case "evaluation":
+        return (
+          <div className="space-y-4">
+            <div className="space-y-3">
+              <Button
+                variant="primary"
+                onClick={() => runJob(() => api.startJobEvaluation(workers))}
+                disabled={busy || job.running || summary!.job_profiles === 0}
+              >
+                <span className="flex items-center gap-1.5">
+                  <Play size={12} />
+                  {summary!.je_results > 0
+                    ? "Re-evaluate " + summary!.job_profiles + " profiles"
+                    : "Evaluate " + summary!.job_profiles + " profiles"}
+                </span>
+              </Button>
+              <p className="text-[11.5px] leading-snug text-text-secondary">
+                Three scoring perspectives per profile, aggregated to one level and one
+                spread. Re-running against an edited framework leaves the documents alone.
+              </p>
               {showProgress && <ProgressBar job={job} />}
             </div>
 
@@ -674,23 +725,15 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
         return (
           <EntityTaxonomyStage
             kind="skill"
-            labels={SKILL_LABELS}
             tierLabels={SKILL_LABELS.tiers}
             inferredCount={skills?.inferred_skills ?? 0}
             profilesCovered={skills?.profiles_covered ?? 0}
             jobProfileCount={summary!.job_profiles}
-            clustered={skills?.clustered ?? false}
             named={skills?.named ?? false}
-            k={{
-              families: skills?.k_families ?? null,
-              categories: skills?.k_categories ?? null,
-              clusters: skills?.k_clusters ?? null,
-            }}
+            tiers={tiers.skill}
             audit={skills?.audit ?? {}}
             onInfer={() => api.skills.infer(undefined, workers)}
-            onBuildTree={api.skills.buildTree}
-            preview={api.skills.preview}
-            onConfirm={api.skills.confirm}
+            tierApi={(t) => api.tier("skill", t)}
             loadTaxonomy={async () => {
               const t = await api.skills.taxonomy();
               return { roots: t.families, hasHeadcount: t.has_headcount };
@@ -725,23 +768,15 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
         return (
           <EntityTaxonomyStage
             kind="task"
-            labels={TASK_LABELS}
             tierLabels={TASK_LABELS.tiers}
             inferredCount={tasks?.inferred_tasks ?? 0}
             profilesCovered={tasks?.profiles_covered ?? 0}
             jobProfileCount={summary!.job_profiles}
-            clustered={tasks?.clustered ?? false}
             named={tasks?.named ?? false}
-            k={{
-              families: tasks?.k_domains ?? null,
-              categories: tasks?.k_categories ?? null,
-              clusters: tasks?.k_tasks ?? null,
-            }}
+            tiers={tiers.task}
             audit={tasks?.audit ?? {}}
             onInfer={() => api.tasks.infer(undefined, workers)}
-            onBuildTree={api.tasks.buildTree}
-            preview={api.tasks.preview}
-            onConfirm={api.tasks.confirm}
+            tierApi={(t) => api.tier("task", t)}
             loadTaxonomy={async () => {
               const t = await api.tasks.taxonomy();
               return { roots: t.domains, hasHeadcount: t.has_headcount };
@@ -779,7 +814,7 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
 }
 
 interface Downstream {
-  tiers: Partial<Record<TierName, TierStatus>>;
+  tiers: EntityTiers;
   skills: SkillsSummary | null;
   tasks: TasksSummary | null;
   matching: MatchingSummary | null;
@@ -995,15 +1030,18 @@ function stageState(id: string, s: StageSummary, d: Downstream): StageState {
     case "families": {
       const tier = { cluster: "profile", categories: "category", families: "family" }[id] as
         | "profile" | "category" | "family";
-      const st = d.tiers[tier];
+      const st = d.tiers.job[tier];
       if (!st?.ready_to_run) return "locked";
       return st.confirmed ? "complete" : "active";
     }
     case "profiles":
       // Needs the full hierarchy: a profile document carries its category and
       // family in the breadcrumb.
-      if (!d.tiers.family?.confirmed) return "locked";
+      if (!d.tiers.job.family?.confirmed) return "locked";
       return s.job_profiles > 0 ? "complete" : "active";
+    case "evaluation":
+      if (s.job_profiles === 0) return "locked";
+      return s.je_results > 0 ? "complete" : "active";
     default:
       return "locked";
   }
@@ -1042,13 +1080,16 @@ function stageSummaryLine(id: string, s: StageSummary, d: Downstream): string | 
     case "families": {
       const tier = { cluster: "profile", categories: "category", families: "family" }[id] as
         | "profile" | "category" | "family";
-      const st = d.tiers[tier];
+      const st = d.tiers.job[tier];
       if (!st?.confirmed) return undefined;
       const noun = { profile: "profiles", category: "categories", family: "families" }[tier];
       return `${st.k} ${noun}${st.n_moved ? `, ${st.n_moved} moved by the model` : ""}`;
     }
     case "profiles":
-      return `${s.job_profiles} profiles, ${s.je_results} evaluated`;
+      return `${s.job_profiles} profile document${s.job_profiles === 1 ? "" : "s"}`;
+    case "evaluation":
+      if (s.je_results === 0) return undefined;
+      return `${s.je_results} of ${s.job_profiles} evaluated`;
     default:
       return undefined;
   }
@@ -1070,6 +1111,8 @@ function lockedReason(id: string): string {
       return "Confirm the job categories first.";
     case "profiles":
       return "Confirm all three hierarchy levels first.";
+    case "evaluation":
+      return "Generate the job profile documents first.";
     case "skills":
     case "tasks":
     case "matching":

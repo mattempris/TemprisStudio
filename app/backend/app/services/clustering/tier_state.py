@@ -1,20 +1,29 @@
 """Bridging the per-tier engine to persisted project state.
 
 Three jobs:
-  - assemble a tier's input items, from normalised profiles (profile tier) or from
-    the tier below's confirmed clusters (category, family);
+  - assemble a tier's input items, from the entity's own base records (finest tier)
+    or from the tier below's confirmed clusters (category, family);
   - persist a confirmed tier;
   - rebuild the flat `ClusteringState` that everything downstream reads.
 
 That last one is the point of this module. Splitting clustering into three
-confirmable steps changes how the hierarchy is *produced*, but job profile
+confirmable steps changes how a hierarchy is *produced*, but job profile
 generation, the overview, the exports and the skills/tasks headcount rollups all
 consume one denormalised structure — item -> (profile, category, family). Keeping
 that view as a derived artifact means the restructure does not ripple into any of
 them.
+
+**Entity-parameterised.** Jobs, skills and tasks are three hierarchies of the same
+shape, and the only differences are where the tier records live in state, what the
+finest tier's base items are, and what the tiers are called to a reader. Everything
+else — stability, gating, routing, naming, the denormalised rollup — is identical, so
+it is written once here and the entity is an argument. The skill and task taxonomies
+previously used a separate single-shot path that cut all three tiers at once; they
+now go through this, which is what gives them the same per-tier review.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import numpy as np
@@ -35,6 +44,95 @@ ORDER = ("profile", "category", "family")
 PARENT_OF = {"profile": "category", "category": "family"}
 CHILD_OF = {"category": "profile", "family": "category"}
 
+ENTITIES = ("job", "skill", "task")
+
+
+@dataclass(frozen=True)
+class EntitySpec:
+    """What differs between the three hierarchies.
+
+    `embeddings_entity` is the model key (jobQWEN/skillQWEN/taskQWEN);
+    `array_name` is the blob basename its vectors are stored under, which has to
+    match what the build step wrote; `nouns` is per-tier UI wording, finest first.
+    """
+
+    name: str
+    embeddings_entity: str
+    array_name: str
+    tier_titles: tuple[str, str, str]   # finest -> coarsest
+    nouns: tuple[str, str, str]         # what each tier groups, finest -> coarsest
+
+
+ENTITY_SPECS: dict[str, EntitySpec] = {
+    "job": EntitySpec(
+        "job", "job", "cluster_embeddings",
+        ("Job profiles", "Job categories", "Job families"),
+        ("normalised jobs", "job profiles", "job categories"),
+    ),
+    "skill": EntitySpec(
+        "skill", "skill", "skill_embeddings",
+        ("Skill clusters", "Skill categories", "Skill families"),
+        ("inferred skills", "skill clusters", "skill categories"),
+    ),
+    "task": EntitySpec(
+        "task", "task", "task_embeddings",
+        ("Task clusters", "Task categories", "Task domains"),
+        ("inferred tasks", "task clusters", "task categories"),
+    ),
+}
+
+
+def spec(entity: str) -> EntitySpec:
+    try:
+        return ENTITY_SPECS[entity]
+    except KeyError:
+        raise ValueError(f"unknown entity {entity!r}; expected one of {list(ENTITY_SPECS)}") from None
+
+
+def tier_noun(entity: str, tier: str) -> str:
+    return spec(entity).nouns[ORDER.index(tier)]
+
+
+def tier_title(entity: str, tier: str) -> str:
+    return spec(entity).tier_titles[ORDER.index(tier)]
+
+
+def tiers_of(state: ProjectState, entity: str) -> dict[str, TierState]:
+    """The tier records for this entity. Mutable — callers assign into it."""
+    if entity == "job":
+        return state.clustering_tiers
+    if entity == "skill":
+        return state.skills.clustering_tiers
+    if entity == "task":
+        return state.tasks.clustering_tiers
+    raise ValueError(f"unknown entity {entity!r}")
+
+
+def base_items(state: ProjectState, entity: str) -> list[tuple[str, str]]:
+    """(id, text) per base record, in state order — the finest tier's population.
+
+    The text is what gets embedded and what the router reads, so it carries the
+    same content in both places by construction.
+    """
+    if entity == "job":
+        return [
+            (
+                p.id,
+                NormalizedResult(
+                    purpose_statement=p.purpose_statement,
+                    key_tasks=p.key_tasks,
+                    management_line=p.management_line,
+                    budget_responsibility=p.budget_responsibility,
+                ).embedding_text(),
+            )
+            for p in state.normalized_profiles
+        ]
+    if entity == "skill":
+        return [(x.id, f"{x.name}. {x.description}") for x in state.skills.inferred]
+    if entity == "task":
+        return [(x.id, f"{x.name}. {x.description}") for x in state.tasks.inferred]
+    raise ValueError(f"unknown entity {entity!r}")
+
 
 class TierNotReady(RuntimeError):
     """A tier was asked for before the tier below it was confirmed."""
@@ -44,48 +142,37 @@ def previous_tier(tier: str) -> str | None:
     return CHILD_OF.get(tier)
 
 
-def is_confirmed(state: ProjectState, tier: str) -> bool:
-    t = state.clustering_tiers.get(tier)
+def is_confirmed(state: ProjectState, entity: str, tier: str) -> bool:
+    t = tiers_of(state, entity).get(tier)
     return bool(t and t.names)
 
 
 def build_items(
-    svc: ProjectService, state: ProjectState, tier: str
+    svc: ProjectService, state: ProjectState, entity: str, tier: str
 ) -> tier_engine.TierItems:
     """The items this tier clusters.
 
-    Profile tier: the normalised job profiles, using the embeddings the cluster
-    build already computed. Coarser tiers: the confirmed clusters below, using
-    their stored centroids — so no re-embedding happens as you move up.
+    Finest tier: the entity's base records, using the embeddings the build step
+    already computed. Coarser tiers: the confirmed clusters below, using their
+    stored centroids — so no re-embedding happens as you move up.
     """
     client, project = state.meta.client_slug, state.meta.project_slug
+    es = spec(entity)
 
     if tier == "profile":
-        emb = svc.load_array(client, f"{project}/artifacts/cluster_embeddings.npy")
-        ids = svc.load_index(client, f"{project}/artifacts/cluster_embeddings_index.json")
+        emb = svc.load_array(client, f"{project}/artifacts/{es.array_name}.npy")
+        ids = svc.load_index(client, f"{project}/artifacts/{es.array_name}_index.json")
         if emb is None or ids is None:
             raise TierNotReady(
-                "normalised profiles have not been embedded yet — run the profile "
-                "tier's build step first"
+                f"the {tier_noun(entity, 'profile')} have not been embedded yet — run "
+                f"this step's build first"
             )
-        by_id = {p.id: p for p in state.normalized_profiles}
-        texts = []
-        for item_id in ids:
-            p = by_id.get(item_id)
-            texts.append(
-                NormalizedResult(
-                    purpose_statement=p.purpose_statement,
-                    key_tasks=p.key_tasks,
-                    management_line=p.management_line,
-                    budget_responsibility=p.budget_responsibility,
-                ).embedding_text()
-                if p
-                else item_id
-            )
+        text_by_id = dict(base_items(state, entity))
+        texts = [text_by_id.get(item_id, item_id) for item_id in ids]
         return tier_engine.TierItems(ids=list(ids), texts=texts, embeddings=emb)
 
     below = CHILD_OF[tier]
-    prev = state.clustering_tiers.get(below)
+    prev = tiers_of(state, entity).get(below)
     if prev is None or not prev.names:
         raise TierNotReady(
             f"the {below} tier must be confirmed before the {tier} tier — "
@@ -114,6 +201,7 @@ def build_items(
 def save_tier(
     svc: ProjectService,
     state: ProjectState,
+    entity: str,
     tier: str,
     result: tier_engine.TierResult,
     *,
@@ -127,7 +215,9 @@ def save_tier(
     hierarchy whose upper levels silently describe an older lower level.
     """
     client, project = state.meta.client_slug, state.meta.project_slug
-    centroid_path = svc.save_array(client, project, f"tier_{tier}_centroids", result.centroids)
+    centroid_path = svc.save_array(
+        client, project, f"tier_{entity}_{tier}_centroids", result.centroids
+    )
 
     record = TierState(
         tier=tier,
@@ -155,28 +245,40 @@ def save_tier(
         n_moved=result.n_moved,
         computed_at=datetime.now(timezone.utc),
     )
-    state.clustering_tiers[tier] = record
+    tiers = tiers_of(state, entity)
+    tiers[tier] = record
 
     for above in ORDER[ORDER.index(tier) + 1 :]:
-        if above in state.clustering_tiers:
-            print(f"  [tier:{tier}] dropping the {above} tier — it was built on the previous {tier}s")
-            del state.clustering_tiers[above]
+        if above in tiers:
+            print(f"  [{entity}:{tier}] dropping the {above} tier — it was built on the previous {tier}s")
+            del tiers[above]
 
-    rebuild_denormalised(state)
+    rebuild_denormalised(state, entity)
     return record
 
 
-def rebuild_denormalised(state: ProjectState) -> None:
-    """Rebuild `state.clustering` from the tier records.
+def _set_clustering(state: ProjectState, entity: str, value: ClusteringState | None) -> None:
+    if entity == "job":
+        state.clustering = value
+    elif entity == "skill":
+        state.skills.clustering = value
+    elif entity == "task":
+        state.tasks.clustering = value
+    else:
+        raise ValueError(f"unknown entity {entity!r}")
+
+
+def rebuild_denormalised(state: ProjectState, entity: str) -> None:
+    """Rebuild the entity's flat `ClusteringState` from its tier records.
 
     Left as None until all three tiers exist, because a partial hierarchy is not
     something downstream can use: a job profile document needs its category and
     family for the breadcrumb, and the exports and analytics assume all three. The
     wizard gates on the tiers themselves, so nothing needs a half-built view.
     """
-    tiers = state.clustering_tiers
-    if not all(is_confirmed(state, t) for t in ORDER):
-        state.clustering = None
+    tiers = tiers_of(state, entity)
+    if not all(is_confirmed(state, entity, t) for t in ORDER):
+        _set_clustering(state, entity, None)
         return
 
     prof, cat, fam = tiers["profile"], tiers["category"], tiers["family"]
@@ -217,10 +319,11 @@ def rebuild_denormalised(state: ProjectState) -> None:
             )
         )
 
-    state.clustering = ClusteringState(
-        embedding_model=prof.embedding_model or "jobQWEN",
-        linkage_blob_path=f"{state.meta.project_slug}/artifacts/cluster_linkage.npy",
-        embedding_index_blob_path=f"{state.meta.project_slug}/artifacts/cluster_embeddings_index.json",
+    es = spec(entity)
+    _set_clustering(state, entity, ClusteringState(
+        embedding_model=prof.embedding_model or f"{entity}QWEN",
+        linkage_blob_path=f"{state.meta.project_slug}/artifacts/{es.array_name}_linkage.npy",
+        embedding_index_blob_path=f"{state.meta.project_slug}/artifacts/{es.array_name}_index.json",
         k_profiles=prof.k,
         k_categories=cat.k,
         k_families=fam.k,
@@ -232,14 +335,14 @@ def rebuild_denormalised(state: ProjectState) -> None:
         # governed the job-level assignments, and each tier keeps its own.
         gate=prof.gate,
         computed_at=fam.computed_at,
-    )
+    ))
 
 
-def hierarchy_summary(state: ProjectState) -> dict:
+def hierarchy_summary(state: ProjectState, entity: str = "job") -> dict:
     """Per-tier status for the wizard: what is confirmed, and what it produced."""
     out: dict[str, dict] = {}
     for t in ORDER:
-        rec = state.clustering_tiers.get(t)
+        rec = tiers_of(state, entity).get(t)
         out[t] = {
             "confirmed": bool(rec and rec.names),
             "k": rec.k if rec else None,
@@ -247,13 +350,14 @@ def hierarchy_summary(state: ProjectState) -> dict:
             "n_routed": rec.n_routed if rec else 0,
             "n_moved": rec.n_moved if rec else 0,
             "computed_at": rec.computed_at.isoformat() if rec and rec.computed_at else None,
-            "ready_to_run": _ready(state, t),
+            "ready_to_run": _ready(state, entity, t),
         }
     return out
 
 
-def _ready(state: ProjectState, tier: str) -> bool:
+def _ready(state: ProjectState, entity: str, tier: str) -> bool:
     below = CHILD_OF.get(tier)
     if below is None:
-        return bool(state.normalized_profiles)
-    return is_confirmed(state, below)
+        # The finest tier needs enough base records to cluster at all.
+        return len(base_items(state, entity)) >= 3
+    return is_confirmed(state, entity, below)

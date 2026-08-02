@@ -17,7 +17,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 CLIENT, PROJECT = "mercer-demo", sys.argv[1] if len(sys.argv) > 1 else "e2e-1785572258"
 P = f"http://localhost:9400/api/projects/{CLIENT}/{PROJECT}"
 
-handle = requests.post(f"{P}/profiles/generate?run_je=true", timeout=60)
+handle = requests.post(f"{P}/profiles/generate", timeout=60)
 handle.raise_for_status()
 job = handle.json()
 print(f"job {job['job_id']}")

@@ -102,7 +102,9 @@ follow(check(requests.post(f"{P}/cluster/confirm", json={
     "cluster+name", timeout=2400)
 
 step("6-7", "Job profiles + job evaluation")
-follow(check(requests.post(f"{P}/profiles/generate?run_je=true"), "profiles"), "profiles+JE", timeout=3600)
+# Two steps now: documents, then evaluation against the framework.
+follow(check(requests.post(f"{P}/profiles/generate"), "profiles"), "profiles", timeout=3600)
+follow(check(requests.post(f"{P}/evaluation/run"), "evaluation"), "evaluation", timeout=3600)
 profs = check(requests.get(f"{P}/profiles"), "list profiles")
 for p in profs["profiles"]:
     print(f"    {p['title']}: {p.get('level_name')} ({p.get('aggregate_score')})")

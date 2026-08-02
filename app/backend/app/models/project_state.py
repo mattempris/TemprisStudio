@@ -286,8 +286,10 @@ class SkillsState(BaseModel):
     """Everything from instructions.txt steps 8-9."""
 
     inferred: list[InferredSkillRecord] = Field(default_factory=list)
-    # Same shape as ClusteringState but over skills, produced by the same engine
-    # with skillQWEN embeddings.
+    # Per-tier records, confirmed one tier at a time by the same engine the job
+    # hierarchy uses (with skillQWEN embeddings). `clustering` is the denormalised
+    # view derived from them once all three exist — everything downstream reads it.
+    clustering_tiers: dict[str, TierState] = Field(default_factory=dict)
     clustering: ClusteringState | None = None
     proficiency_template: ProficiencyTemplateConfig = Field(default_factory=ProficiencyTemplateConfig)
     cluster_proficiencies: list[ClusterProficiencyRecord] = Field(default_factory=list)
@@ -309,6 +311,7 @@ class InferredTaskRecord(BaseModel):
 
 class TasksState(BaseModel):
     inferred: list[InferredTaskRecord] = Field(default_factory=list)
+    clustering_tiers: dict[str, TierState] = Field(default_factory=dict)
     clustering: ClusteringState | None = None
     audit: dict = Field(default_factory=dict)
 

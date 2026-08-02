@@ -8,22 +8,11 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import datetime, timezone
 
-import numpy as np
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from app.models.project_state import (
-    ClusteringState,
-    InferredTaskRecord,
-    ItemAssignmentRecord,
-    ProjectState,
-)
-from app.services.clustering import backbone as bb
-from app.services.clustering import engine as cluster_engine
-from app.services import embeddings
-from app.services.embeddings import get_embedding_service
+from app.models.project_state import InferredTaskRecord, ProjectState
 from app.services import llm
 from app.services.orchestrator import JobAlreadyRunning, ProgressReporter, get_registry, run_job
 from app.services.project_service import ProjectService
@@ -154,191 +143,17 @@ def list_tasks(client_slug: str, project_slug: str) -> dict:
     }
 
 
-_TASK_TREE_CACHE: dict[tuple[str, str], tuple] = {}
-
-
-@router.post("/cluster/build")
-async def build_task_tree(
-    client_slug: str, project_slug: str, device: str | None = None
-) -> dict:
-    svc, state = _load(client_slug, project_slug)
-    tasks = state.tasks.inferred
-    if len(tasks) < 3:
-        raise HTTPException(400, "need at least 3 inferred tasks to cluster")
-
-    texts = [f"{t.name}. {t.description}" for t in tasks]
-    ids = [t.id for t in tasks]
-
-    def work(reporter: ProgressReporter) -> dict:
-        if not embeddings.is_loaded("task"):
-            reporter.message("Loading the taskQWEN model (first use this session)")
-            get_embedding_service().warm("task", device)
-        reporter.stage_start(len(texts), f"Embedding {len(texts)} tasks with taskQWEN")
-        emb = get_embedding_service().embed_documents(
-            "task", texts, device=device,
-            progress=lambda done, total: reporter.progress(done, total, "embedded")
-        )
-        reporter.message("Building the Ward tree")
-        tree = bb.build_linkage_tree(emb)
-
-        svc.save_array(client_slug, project_slug, "task_embeddings", emb)
-        svc.save_array(client_slug, project_slug, "task_linkage", tree)
-        svc.save_index(
-            client_slug, project_slug, "task_embeddings", ids,
-            model_fingerprint=get_embedding_service().fingerprint("task"),
-        )
-        _TASK_TREE_CACHE[(client_slug, project_slug)] = (tree, emb, ids)
-
-        n = len(ids)
-        summary = {
-            "tasks": n,
-            "suggested_k_domains": max(2, min(8, n // 15 or 2)),
-            "suggested_k_categories": max(3, min(20, n // 6 or 3)),
-            "suggested_k_tasks": max(4, min(50, n // 3 or 4)),
-            "max_k": n - 1,
-        }
-        reporter.stage_complete(summary)
-        return summary
-
-    return _start_job(client_slug, project_slug, "tasks", work)
-
-
-def _get_task_tree(svc: ProjectService, state: ProjectState):
-    client, project = state.meta.client_slug, state.meta.project_slug
-    key = (client, project)
-    if key in _TASK_TREE_CACHE:
-        return _TASK_TREE_CACHE[key]
-    index_path = f"{project}/artifacts/task_embeddings_index.json"
-    tree = svc.load_array(client, f"{project}/artifacts/task_linkage.npy")
-    emb = svc.load_array(client, f"{project}/artifacts/task_embeddings.npy")
-    ids = svc.load_index(client, index_path)
-    if tree is None or emb is None or ids is None:
-        raise HTTPException(409, "task tree not built yet — run tasks/cluster/build first")
-    try:
-        embeddings.assert_cache_current("task", svc.load_index_fingerprint(client, index_path))
-    except embeddings.StaleEmbeddingCache as e:
-        raise HTTPException(409, str(e)) from e
-    _TASK_TREE_CACHE[key] = (tree, emb, ids)
-    return tree, emb, ids
-
-
-@router.get("/cluster/preview-cut")
-def preview_task_cut(
-    client_slug: str, project_slug: str, k_domains: int, k_categories: int, k_tasks: int
-) -> dict:
-    svc, state = _load(client_slug, project_slug)
-    tree, emb, ids = _get_task_tree(svc, state)
-    try:
-        cuts = cluster_engine.cut_three_tiers(
-            tree, k_family=k_domains, k_category=k_categories, k_profile=k_tasks
-        )
-    except ValueError as e:
-        raise HTTPException(422, str(e)) from e
-
-    def sizes(labels) -> list[int]:
-        return np.bincount(labels, minlength=int(labels.max()) + 1).tolist()
-
-    return {
-        "k_domains": k_domains,
-        "k_categories": k_categories,
-        "k_tasks": k_tasks,
-        "domain_sizes": sizes(cuts["family"]),
-        "category_sizes": sizes(cuts["category"]),
-        "task_sizes": sizes(cuts["profile"]),
-        "singleton_tasks": int(sum(1 for s in sizes(cuts["profile"]) if s == 1)),
-    }
-
-
-class ConfirmTaskClusterRequest(BaseModel):
-    k_domains: int = Field(ge=2)
-    k_categories: int = Field(ge=2)
-    k_tasks: int = Field(ge=2)
-    gate: float = Field(default=0.58, ge=0.0, le=1.0)
-    n_perturb: int = Field(default=50, ge=5, le=200)
-
-
-@router.post("/cluster/confirm")
-async def confirm_task_cluster(
-    client_slug: str, project_slug: str, req: ConfirmTaskClusterRequest
-) -> dict:
-    svc, state = _load(client_slug, project_slug)
-    tree, emb, ids = _get_task_tree(svc, state)
-    if req.k_tasks >= len(ids):
-        raise HTTPException(422, f"k_tasks must be < number of tasks ({len(ids)})")
-
-    by_id = {t.id: t for t in state.tasks.inferred}
-    item_texts = [f"{by_id[i].name}. {by_id[i].description}" if i in by_id else i for i in ids]
-
-    def work(reporter: ProgressReporter) -> dict:
-        reporter.stage_start(4, "Task taxonomy: stability, routing, naming")
-        result = asyncio.run(
-            cluster_engine.run_clustering_pipeline(
-                "task",
-                item_texts,
-                emb,
-                k_family=req.k_domains,
-                k_category=req.k_categories,
-                k_profile=req.k_tasks,
-                gate=req.gate,
-                n_perturb=req.n_perturb,
-                route_concurrency=8,
-                progress=reporter.pmap_callback(),
-            )
-        )
-
-        fresh = svc.load_state(client_slug, project_slug)
-        fresh.tasks.clustering = ClusteringState(
-            embedding_model="taskQWEN",
-            linkage_blob_path=f"{project_slug}/artifacts/task_linkage.npy",
-            embedding_index_blob_path=f"{project_slug}/artifacts/task_embeddings_index.json",
-            k_profiles=req.k_tasks,
-            k_categories=req.k_categories,
-            k_families=req.k_domains,
-            gate=req.gate,
-            computed_at=datetime.now(timezone.utc),
-            profile_names=result.profile_names,
-            category_names=result.category_names,
-            family_names=result.family_names,
-            assignments=[
-                ItemAssignmentRecord(
-                    item_id=ids[a.item_index],
-                    backbone_profile_id=a.backbone_profile_id,
-                    backbone_category_id=a.backbone_category_id,
-                    backbone_family_id=a.backbone_family_id,
-                    final_profile_id=a.final_profile_id,
-                    final_category_id=a.final_category_id,
-                    final_family_id=a.final_family_id,
-                    stability_score=a.stability_score,
-                    routed_by_llm=a.routed_by_llm,
-                    route_confidence=a.route_confidence,
-                    secondary_profile_id=a.secondary_profile_id,
-                    secondary_confidence=a.secondary_confidence,
-                    self_consistency=a.self_consistency,
-                )
-                for a in result.assignments
-            ],
-        )
-        svc.save_state(
-            fresh,
-            action="confirm-task-cluster",
-            lineage_payload={
-                "k_domains": req.k_domains,
-                "k_categories": req.k_categories,
-                "k_tasks": req.k_tasks,
-                "n_unstable": result.n_unstable,
-            },
-        )
-        summary = {
-            "tasks": len(result.assignments),
-            "domains": len(result.family_names),
-            "categories": len(result.category_names),
-            "task_clusters": len(result.profile_names),
-            "n_unstable_routed": result.n_unstable,
-        }
-        reporter.stage_complete(summary)
-        return summary
-
-    return _start_job(client_slug, project_slug, "tasks", work)
+# ===========================================================================
+# Clustering into a taxonomy is handled by the shared per-tier routes —
+# /cluster/{entity}/tier/{tier}/... in routes/tiers.py — with entity "task".
+#
+# There used to be a single-shot path here: one build, one preview cutting all
+# three tiers at once, one confirm that named every level in the same call. It has
+# been removed rather than kept alongside, because two code paths writing the same
+# `clustering` state is how the two drift apart, and the per-tier flow supersedes it
+# outright: a cluster count and a stability gate chosen per tier, the routing cost
+# shown before it is paid, and each level's names confirmed on their own.
+# ===========================================================================
 
 
 @router.get("/taxonomy")

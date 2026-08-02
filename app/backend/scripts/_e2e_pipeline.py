@@ -142,7 +142,7 @@ try:
 
     step("step 7 — job profiles + JE")
     h = check(
-        http.post(f"/api/projects/{CLIENT}/{proj}/profiles/generate", params={"run_je": "true"}),
+        http.post(f"/api/projects/{CLIENT}/{proj}/profiles/generate"),
         "profile generation",
     )
     s = wait_for_job(h, "profile generation + JE")

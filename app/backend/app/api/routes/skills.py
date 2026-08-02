@@ -9,25 +9,17 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.models.project_state import (
     ClusterProficiencyRecord,
-    ClusteringState,
     InferredSkillRecord,
-    ItemAssignmentRecord,
     ProficiencyTemplateConfig,
     ProfileSkillRequirementRecord,
     ProjectState,
 )
-from app.services.clustering import backbone as bb
-from app.services.clustering import engine as cluster_engine
-from app.services.clustering import rollup
-from app.services import embeddings
-from app.services.embeddings import get_embedding_service
 from app.services import llm
 from app.services.orchestrator import JobAlreadyRunning, ProgressReporter, get_registry, run_job
 from app.services.project_service import ProjectService
@@ -170,198 +162,16 @@ def list_skills(client_slug: str, project_slug: str) -> dict:
 
 
 # ===========================================================================
-# Step 9a — cluster the skills into a taxonomy
+# Clustering into a taxonomy is handled by the shared per-tier routes —
+# /cluster/{entity}/tier/{tier}/... in routes/tiers.py — with entity "skill".
+#
+# There used to be a single-shot path here: one build, one preview cutting all
+# three tiers at once, one confirm that named every level in the same call. It has
+# been removed rather than kept alongside, because two code paths writing the same
+# `clustering` state is how the two drift apart, and the per-tier flow supersedes it
+# outright: a cluster count and a stability gate chosen per tier, the routing cost
+# shown before it is paid, and each level's names confirmed on their own.
 # ===========================================================================
-_SKILL_TREE_CACHE: dict[tuple[str, str], tuple] = {}
-
-
-@router.post("/cluster/build")
-async def build_skill_tree(
-    client_slug: str, project_slug: str, device: str | None = None
-) -> dict:
-    svc, state = _load(client_slug, project_slug)
-    skills = state.skills.inferred
-    if len(skills) < 3:
-        raise HTTPException(400, "need at least 3 inferred skills to cluster")
-
-    texts = [f"{s.name}. {s.description}" for s in skills]
-    ids = [s.id for s in skills]
-
-    def work(reporter: ProgressReporter) -> dict:
-        if not embeddings.is_loaded("skill"):
-            reporter.message("Loading the skillQWEN model (first use this session)")
-            get_embedding_service().warm("skill", device)
-        reporter.stage_start(len(texts), f"Embedding {len(texts)} skills with skillQWEN")
-        emb = get_embedding_service().embed_documents(
-            "skill", texts, device=device,
-            progress=lambda done, total: reporter.progress(done, total, "embedded")
-        )
-        reporter.message("Building the Ward tree")
-        tree = bb.build_linkage_tree(emb)
-
-        svc.save_array(client_slug, project_slug, "skill_embeddings", emb)
-        svc.save_array(client_slug, project_slug, "skill_linkage", tree)
-        svc.save_index(
-            client_slug, project_slug, "skill_embeddings", ids,
-            model_fingerprint=get_embedding_service().fingerprint("skill"),
-        )
-        _SKILL_TREE_CACHE[(client_slug, project_slug)] = (tree, emb, ids)
-
-        n = len(ids)
-        summary = {
-            "skills": n,
-            "suggested_k_families": max(2, min(6, n // 15 or 2)),
-            "suggested_k_categories": max(3, min(15, n // 7 or 3)),
-            "suggested_k_clusters": max(4, min(40, n // 3 or 4)),
-            "max_k": n - 1,
-        }
-        reporter.stage_complete(summary)
-        return summary
-
-    return _start_job(client_slug, project_slug, "skills", work)
-
-
-def _get_skill_tree(svc: ProjectService, state: ProjectState):
-    client, project = state.meta.client_slug, state.meta.project_slug
-    key = (client, project)
-    if key in _SKILL_TREE_CACHE:
-        return _SKILL_TREE_CACHE[key]
-    index_path = f"{project}/artifacts/skill_embeddings_index.json"
-    tree = svc.load_array(client, f"{project}/artifacts/skill_linkage.npy")
-    emb = svc.load_array(client, f"{project}/artifacts/skill_embeddings.npy")
-    ids = svc.load_index(client, index_path)
-    if tree is None or emb is None or ids is None:
-        raise HTTPException(409, "skill tree not built yet — run skills/cluster/build first")
-    try:
-        embeddings.assert_cache_current("skill", svc.load_index_fingerprint(client, index_path))
-    except embeddings.StaleEmbeddingCache as e:
-        raise HTTPException(409, str(e)) from e
-    _SKILL_TREE_CACHE[key] = (tree, emb, ids)
-    return tree, emb, ids
-
-
-@router.get("/cluster/preview-cut")
-def preview_skill_cut(
-    client_slug: str, project_slug: str, k_families: int, k_categories: int, k_clusters: int
-) -> dict:
-    svc, state = _load(client_slug, project_slug)
-    tree, emb, ids = _get_skill_tree(svc, state)
-    try:
-        cuts = cluster_engine.cut_three_tiers(
-            tree, k_family=k_families, k_category=k_categories, k_profile=k_clusters
-        )
-    except ValueError as e:
-        raise HTTPException(422, str(e)) from e
-
-    import numpy as np
-
-    def sizes(labels) -> list[int]:
-        return np.bincount(labels, minlength=int(labels.max()) + 1).tolist()
-
-    return {
-        "k_families": k_families,
-        "k_categories": k_categories,
-        "k_clusters": k_clusters,
-        "family_sizes": sizes(cuts["family"]),
-        "category_sizes": sizes(cuts["category"]),
-        "cluster_sizes": sizes(cuts["profile"]),
-        "singleton_clusters": int(sum(1 for s in sizes(cuts["profile"]) if s == 1)),
-    }
-
-
-class ConfirmSkillClusterRequest(BaseModel):
-    k_families: int = Field(ge=2)
-    k_categories: int = Field(ge=2)
-    k_clusters: int = Field(ge=2)
-    gate: float = Field(default=0.58, ge=0.0, le=1.0)
-    n_perturb: int = Field(default=50, ge=5, le=200)
-
-
-@router.post("/cluster/confirm")
-async def confirm_skill_cluster(
-    client_slug: str, project_slug: str, req: ConfirmSkillClusterRequest
-) -> dict:
-    svc, state = _load(client_slug, project_slug)
-    tree, emb, ids = _get_skill_tree(svc, state)
-    if req.k_clusters >= len(ids):
-        raise HTTPException(422, f"k_clusters must be < number of skills ({len(ids)})")
-
-    by_id = {s.id: s for s in state.skills.inferred}
-    item_texts = [f"{by_id[i].name}. {by_id[i].description}" if i in by_id else i for i in ids]
-
-    def work(reporter: ProgressReporter) -> dict:
-        reporter.stage_start(4, "Skill taxonomy: stability, routing, naming")
-        result = asyncio.run(
-            cluster_engine.run_clustering_pipeline(
-                "skill",  # same engine, skill naming vocabulary
-                item_texts,
-                emb,
-                k_family=req.k_families,
-                k_category=req.k_categories,
-                k_profile=req.k_clusters,
-                gate=req.gate,
-                n_perturb=req.n_perturb,
-                route_concurrency=8,
-                progress=reporter.pmap_callback(),
-            )
-        )
-
-        fresh = svc.load_state(client_slug, project_slug)
-        fresh.skills.clustering = ClusteringState(
-            embedding_model="skillQWEN",
-            linkage_blob_path=f"{project_slug}/artifacts/skill_linkage.npy",
-            embedding_index_blob_path=f"{project_slug}/artifacts/skill_embeddings_index.json",
-            k_profiles=req.k_clusters,
-            k_categories=req.k_categories,
-            k_families=req.k_families,
-            gate=req.gate,
-            computed_at=datetime.now(timezone.utc),
-            profile_names=result.profile_names,
-            category_names=result.category_names,
-            family_names=result.family_names,
-            assignments=[
-                ItemAssignmentRecord(
-                    item_id=ids[a.item_index],
-                    backbone_profile_id=a.backbone_profile_id,
-                    backbone_category_id=a.backbone_category_id,
-                    backbone_family_id=a.backbone_family_id,
-                    final_profile_id=a.final_profile_id,
-                    final_category_id=a.final_category_id,
-                    final_family_id=a.final_family_id,
-                    stability_score=a.stability_score,
-                    routed_by_llm=a.routed_by_llm,
-                    route_confidence=a.route_confidence,
-                    secondary_profile_id=a.secondary_profile_id,
-                    secondary_confidence=a.secondary_confidence,
-                    self_consistency=a.self_consistency,
-                )
-                for a in result.assignments
-            ],
-        )
-        # re-clustering invalidates the proficiency work keyed to the old clusters
-        fresh.skills.cluster_proficiencies = []
-        fresh.skills.profile_requirements = []
-        svc.save_state(
-            fresh,
-            action="confirm-skill-cluster",
-            lineage_payload={
-                "k_families": req.k_families,
-                "k_categories": req.k_categories,
-                "k_clusters": req.k_clusters,
-                "n_unstable": result.n_unstable,
-            },
-        )
-        summary = {
-            "skills": len(result.assignments),
-            "families": len(result.family_names),
-            "categories": len(result.category_names),
-            "clusters": len(result.profile_names),
-            "n_unstable_routed": result.n_unstable,
-        }
-        reporter.stage_complete(summary)
-        return summary
-
-    return _start_job(client_slug, project_slug, "skills", work)
 
 
 @router.get("/taxonomy")

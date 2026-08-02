@@ -1,7 +1,11 @@
-"""Per-tier clustering routes — instructions.txt steps 5/6, split by tier.
+"""Per-tier clustering routes — instructions.txt steps 5/6, and the same flow for
+the skill and task taxonomies.
 
-One set of endpoints parameterised by tier, so the profile, category and family
-steps are the same code and the same UI three times over.
+One set of endpoints parameterised by entity AND tier, so nine steps across three
+hierarchies are the same code and the same UI. The skill and task taxonomies used to
+have their own single-shot endpoints that cut all three tiers at once and named them
+in one go; routing them through here is what gives them per-tier cluster counts, a
+per-tier stability gate with its cost preview, and per-tier naming the user confirms.
 
 The endpoint split follows what things cost:
 
@@ -25,7 +29,7 @@ from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
 from app.models.project_state import ProjectState
-from app.services import embeddings, llm, normalization
+from app.services import embeddings, llm
 from app.services.clustering import backbone as bb
 from app.services.clustering import tier as tier_engine
 from app.services.clustering import tier_state
@@ -34,7 +38,13 @@ from app.services.orchestrator import JobAlreadyRunning, ProgressReporter, get_r
 from app.services.project_service import ProjectService
 
 router = APIRouter(
-    prefix="/api/projects/{client_slug}/{project_slug}/cluster/tier/{tier}", tags=["clustering"]
+    prefix="/api/projects/{client_slug}/{project_slug}/cluster/{entity}/tier/{tier}",
+    tags=["clustering"],
+)
+
+# One route that is not per-tier: the whole-hierarchy status the wizard opens with.
+summary_router = APIRouter(
+    prefix="/api/projects/{client_slug}/{project_slug}/cluster", tags=["clustering"]
 )
 
 # Above this many items the bootstrap is too slow to run on every slider move
@@ -46,8 +56,8 @@ INLINE_STABILITY_LIMIT = 300
 # Per (client, project, tier): the built tree and items, and the last analysis.
 # Rebuilding either is deterministic and cheap relative to an LLM call, so a cold
 # cache costs a rebuild rather than correctness.
-_TIER_CACHE: dict[tuple[str, str, str], tuple[tier_engine.TierItems, np.ndarray]] = {}
-_ANALYSIS_CACHE: dict[tuple[str, str, str], tier_engine.TierAnalysis] = {}
+_TIER_CACHE: dict[tuple[str, str, str, str], tuple[tier_engine.TierItems, np.ndarray]] = {}
+_ANALYSIS_CACHE: dict[tuple[str, str, str, str], tier_engine.TierAnalysis] = {}
 
 
 # How many job titles travel with each cluster for the hover tooltip. Enough to
@@ -56,28 +66,41 @@ _ANALYSIS_CACHE: dict[tuple[str, str, str], tier_engine.TierAnalysis] = {}
 TOOLTIP_TITLES = 12
 
 
-def _title_map(state: ProjectState) -> dict[str, list[str]]:
-    """Source job titles beneath every item id, at every tier.
+# What the tooltip's list is called, per entity.
+_LABEL_NOUN = {
+    "job": "source job titles",
+    "skill": "skills",
+    "task": "tasks",
+}
 
-    Hovering a cluster has to answer "which real jobs are actually in here?", and at
-    the category and family tiers that means resolving all the way down rather than
-    listing the child clusters' names — a family called "Finance" containing three
-    categories tells you nothing you did not already know.
 
-    Built in tier order so each tier can reuse the tier below's resolution: profile
-    items resolve through their dedupe group to raw record titles, and each coarser
-    tier concatenates whatever its children resolved to.
+def _title_map(state: ProjectState, entity: str) -> dict[str, list[str]]:
+    """The real underlying names beneath every item id, at every tier.
+
+    Hovering a cluster has to answer "what is actually in here?", and at the category
+    and family tiers that means resolving all the way down rather than listing the
+    child clusters' names — a family called "Finance" containing three categories
+    tells you nothing you did not already know.
+
+    Built in tier order so each tier reuses the tier below's resolution. For jobs the
+    base resolution goes one step further and expands a dedupe group back to every
+    source record's title, since that is the level the user recognises; for skills and
+    tasks the base record is already the thing itself.
     """
-    titles = {r.id: (r.job_title or r.id) for r in state.raw_records}
-    groups = {g.group_id: g.member_ids for g in state.dedupe_groups}
-
     out: dict[str, list[str]] = {}
-    for p in state.normalized_profiles:
-        members = groups.get(p.id, [p.id])
-        out[p.id] = [titles.get(m, m) for m in members]
+    if entity == "job":
+        titles = {r.id: (r.job_title or r.id) for r in state.raw_records}
+        groups = {g.group_id: g.member_ids for g in state.dedupe_groups}
+        for p in state.normalized_profiles:
+            out[p.id] = [titles.get(m, m) for m in groups.get(p.id, [p.id])]
+    else:
+        records = state.skills.inferred if entity == "skill" else state.tasks.inferred
+        for r in records:
+            out[r.id] = [r.name]
 
+    tiers = tier_state.tiers_of(state, entity)
     for t in tier_engine.TIERS:
-        rec = state.clustering_tiers.get(t)
+        rec = tiers.get(t)
         if rec is None:
             break  # nothing above an unconfirmed tier can resolve either
         for m in rec.members:
@@ -105,10 +128,10 @@ def _title_sample(titles: list[str]) -> dict:
 
 
 def _titles_by_cluster(
-    items: tier_engine.TierItems, labels: np.ndarray, k: int, state: ProjectState
+    items: tier_engine.TierItems, labels: np.ndarray, k: int, state: ProjectState, entity: str
 ) -> list[dict]:
     """Per-cluster title samples, aligned with the size array."""
-    resolved = _title_map(state)
+    resolved = _title_map(state, entity)
     buckets: list[list[str]] = [[] for _ in range(k)]
     for i, item_id in enumerate(items.ids):
         buckets[int(labels[i])].extend(resolved.get(item_id, [item_id]))
@@ -142,19 +165,23 @@ def _load(client_slug: str, project_slug: str) -> tuple[ProjectService, ProjectS
         raise HTTPException(404, f"project not found: {client_slug}/{project_slug}") from e
 
 
-def _check_tier(tier: str) -> None:
+def _check(entity: str, tier: str) -> tier_state.EntitySpec:
     if tier not in tier_engine.TIERS:
         raise HTTPException(422, f"unknown tier {tier!r}; expected one of {list(tier_engine.TIERS)}")
+    try:
+        return tier_state.spec(entity)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
 
 
 def _items_and_tree(
-    svc: ProjectService, state: ProjectState, tier: str
+    svc: ProjectService, state: ProjectState, entity: str, tier: str
 ) -> tuple[tier_engine.TierItems, np.ndarray]:
-    key = (state.meta.client_slug, state.meta.project_slug, tier)
+    key = (state.meta.client_slug, state.meta.project_slug, entity, tier)
     if key in _TIER_CACHE:
         return _TIER_CACHE[key]
     try:
-        items = tier_state.build_items(svc, state, tier)
+        items = tier_state.build_items(svc, state, entity, tier)
     except tier_state.TierNotReady as e:
         raise HTTPException(409, str(e)) from e
     if len(items) < 3:
@@ -180,49 +207,93 @@ def _start_job(client_slug: str, project_slug: str, stage: str, work) -> dict:
     return {"job_id": job.job_id, "stage": stage, "websocket_url": f"/ws/pipeline/{job.job_id}"}
 
 
-# The wizard step each tier maps onto, for progress routing.
-_STAGE = {"profile": "cluster", "category": "categories", "family": "families"}
+# The wizard step each (entity, tier) maps onto, for progress routing. Skills and
+# tasks keep one wizard step each, with the three tier panels inside it, so all three
+# of their tiers report under the same stage.
+_JOB_STAGE = {"profile": "cluster", "category": "categories", "family": "families"}
 
 
-def _expected_item_count(svc: ProjectService, state: ProjectState, tier: str) -> int | None:
+def _stage(entity: str, tier: str) -> str:
+    return _JOB_STAGE[tier] if entity == "job" else f"{entity}s"
+
+
+def _expected_item_count(state: ProjectState, entity: str, tier: str) -> int | None:
     """How many items this tier will cluster, answerable before anything is built.
 
-    `build_items` needs artifacts that may not exist yet — the profile tier needs
-    the normalised jobs embedded first. Returning None then would understate the
-    count to zero, which makes `stability_inline` claim the bootstrap is instant
-    on a tier where it takes seconds, and leaves the slider with no upper bound.
-    Both are knowable from state without loading a single vector.
+    Derived from state alone, without loading a single vector. It used to call
+    `build_items` first and fall back to this, which meant every status response
+    fetched an embedding array (and centroids) from blob storage. That is fine for
+    one tier and not fine for nine: the wizard asks for all of them on every
+    refresh, and the whole step list rendered as locked for several seconds while
+    they came back.
+
+    Both answers here are exact rather than approximations: the finest tier clusters
+    its base records, and a coarser tier clusters exactly the k clusters the tier
+    below confirmed.
     """
-    if not tier_state._ready(state, tier):
+    if not tier_state._ready(state, entity, tier):
         return None
-    try:
-        return len(tier_state.build_items(svc, state, tier))
-    except tier_state.TierNotReady:
-        pass
     if tier == "profile":
-        return len(state.normalized_profiles) or None
+        return len(tier_state.base_items(state, entity)) or None
     below = tier_state.CHILD_OF[tier]
-    rec = state.clustering_tiers.get(below)
+    rec = tier_state.tiers_of(state, entity).get(below)
     return rec.k if rec else None
 
 
 @router.get("/status")
-def tier_status(client_slug: str, project_slug: str, tier: str) -> dict:
+def tier_status(client_slug: str, project_slug: str, entity: str, tier: str) -> dict:
     """What this tier can do right now, without building anything."""
-    _check_tier(tier)
-    svc, state = _load(client_slug, project_slug)
-    key = (client_slug, project_slug, tier)
-    rec = state.clustering_tiers.get(tier)
+    _check(entity, tier)
+    _, state = _load(client_slug, project_slug)
+    return _status_payload(client_slug, project_slug, state, entity, tier)
 
-    n_items = _expected_item_count(svc, state, tier)
+
+@summary_router.get("/tiers/status")
+def all_tier_status(client_slug: str, project_slug: str) -> dict:
+    """Every tier of every hierarchy, from ONE state read.
+
+    The wizard needs all nine at once — a tier only becomes runnable when the one
+    below it is confirmed, so the whole step list depends on the whole set. Asking
+    per tier meant nine requests each re-reading a project state blob that is ~9MB
+    on a real client, on every refresh after every job. The step list rendered as
+    locked for the seconds that took.
+    """
+    _, state = _load(client_slug, project_slug)
+    return {
+        entity: {
+            tier: _status_payload(client_slug, project_slug, state, entity, tier)
+            for tier in tier_engine.TIERS
+        }
+        for entity in tier_state.ENTITIES
+    }
+
+
+def _status_payload(
+    client_slug: str, project_slug: str, state: ProjectState, entity: str, tier: str
+) -> dict:
+    es = tier_state.spec(entity)
+    key = (client_slug, project_slug, entity, tier)
+    rec = tier_state.tiers_of(state, entity).get(tier)
+
+    n_items = _expected_item_count(state, entity, tier)
 
     return {
+        "entity": entity,
         "tier": tier,
+        "title": tier_state.tier_title(entity, tier),
         "clusters": tier_engine.TIERS,
-        "ready_to_run": tier_state._ready(state, tier),
+        "ready_to_run": tier_state._ready(state, entity, tier),
         "below": tier_state.previous_tier(tier),
+        "below_title": (
+            tier_state.tier_title(entity, tier_state.previous_tier(tier))
+            if tier_state.previous_tier(tier)
+            else None
+        ),
         "item_count": n_items,
-        "item_noun": {"profile": "normalised jobs", "category": "job profiles", "family": "job categories"}[tier],
+        "item_noun": tier_state.tier_noun(entity, tier),
+        "label_noun": _LABEL_NOUN[entity],
+        "embeds": tier == "profile",
+        "embedding_entity": es.embeddings_entity,
         "built": key in _TIER_CACHE,
         "analysed_k": _ANALYSIS_CACHE[key].k if key in _ANALYSIS_CACHE else None,
         "stability_inline": (n_items or 0) <= INLINE_STABILITY_LIMIT,
@@ -239,6 +310,7 @@ def tier_status(client_slug: str, project_slug: str, tier: str) -> dict:
 async def tier_build(
     client_slug: str,
     project_slug: str,
+    entity: str,
     tier: str,
     device: str | None = None,
     embedding_model: str | None = None,
@@ -246,28 +318,32 @@ async def tier_build(
     """Get this tier ready to cluster: embed if it needs embedding, then build its
     Ward tree so previews are instant.
 
-    The profile tier embeds the normalised job summaries; the coarser tiers reuse
+    The finest tier embeds the entity's base records; the coarser tiers reuse
     centroids from the tier below and never embed. This is one job on purpose —
     embedding used to be a separate endpoint the client called first, and since the
     registry allows one job per project the second call always lost with a 409
     while the embed ran on regardless, unattached and invisible.
     """
-    _check_tier(tier)
+    es = _check(entity, tier)
     svc, state = _load(client_slug, project_slug)
 
-    if tier == "profile" and not state.normalized_profiles:
-        raise HTTPException(400, "no normalised jobs yet — run the normalise step first")
+    if tier == "profile" and len(tier_state.base_items(state, entity)) < 3:
+        raise HTTPException(
+            400,
+            f"need at least 3 {tier_state.tier_noun(entity, 'profile')} to cluster — "
+            f"run the step that produces them first",
+        )
 
     try:
-        spec = embeddings.resolve_model("job", embedding_model)
+        model_spec = embeddings.resolve_model(es.embeddings_entity, embedding_model)
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
 
     def work(reporter: ProgressReporter) -> dict:
         if tier == "profile":
-            _embed_profiles(svc, state, reporter, spec.name, device, embedding_model)
-        reporter.message(f"Grouping into {tier} clusters")
-        items, _ = _items_and_tree(svc, state, tier)
+            _embed_base(svc, state, entity, reporter, model_spec.name, device, embedding_model)
+        reporter.message(f"Grouping into {tier_state.tier_title(entity, tier).lower()}")
+        items, _ = _items_and_tree(svc, state, entity, tier)
         n = len(items)
         summary = {
             "items": n,
@@ -277,84 +353,82 @@ async def tier_build(
         reporter.stage_complete(summary)
         return summary
 
-    return _start_job(client_slug, project_slug, _STAGE[tier], work)
+    return _start_job(client_slug, project_slug, _stage(entity, tier), work)
 
 
-def _embed_profiles(
+def _embed_base(
     svc: ProjectService,
     state: ProjectState,
+    entity: str,
     reporter: ProgressReporter,
     model_name: str,
     device: str | None,
     embedding_model: str | None,
 ) -> None:
-    """Embed the normalised job summaries, skipping the work if it is already done
-    with the same model.
+    """Embed the entity's base records, skipping the work if it is already done with
+    the same model.
 
-    Re-embedding 916 jobs is minutes of GPU time, so it is worth not repeating —
-    but only when the vectors came from the model now selected. The fingerprint is
-    the only thing that can tell, since both job models emit 1024 dimensions.
+    Re-embedding 916 jobs is minutes of GPU time, so it is worth not repeating — but
+    only when the vectors came from the model now selected. The fingerprint is the
+    only thing that can tell, since both job models emit 1024 dimensions.
     """
     client, project = state.meta.client_slug, state.meta.project_slug
-    index_path = f"{project}/artifacts/cluster_embeddings_index.json"
-    want = get_embedding_service().fingerprint("job", embedding_model)
+    es = tier_state.spec(entity)
+    index_path = f"{project}/artifacts/{es.array_name}_index.json"
+    want = get_embedding_service().fingerprint(es.embeddings_entity, embedding_model)
+    noun = tier_state.tier_noun(entity, "profile")
+
+    pairs = tier_state.base_items(state, entity)
+    ids = [i for i, _ in pairs]
+    texts = [t for _, t in pairs]
 
     existing = svc.load_index(client, index_path)
-    if existing is not None and svc.load_index_fingerprint(client, index_path) == want:
-        expected = [p.id for p in state.normalized_profiles]
-        if existing == expected:
-            reporter.message(f"Reusing existing {model_name} embeddings for {len(existing)} jobs")
-            return
-
-    texts, ids = [], []
-    for p in state.normalized_profiles:
-        ids.append(p.id)
-        texts.append(
-            normalization.NormalizedResult(
-                purpose_statement=p.purpose_statement,
-                key_tasks=p.key_tasks,
-                management_line=p.management_line,
-                budget_responsibility=p.budget_responsibility,
-            ).embedding_text()
-        )
+    if (
+        existing is not None
+        and svc.load_index_fingerprint(client, index_path) == want
+        and existing == ids
+    ):
+        reporter.message(f"Reusing existing {model_name} embeddings for {len(existing)} {noun}")
+        return
 
     svc_emb = get_embedding_service()
-    if not embeddings.is_loaded("job", embedding_model):
+    if not embeddings.is_loaded(es.embeddings_entity, embedding_model):
         reporter.message(f"Loading the {model_name} model (first use this session)")
-        svc_emb.warm("job", device, embedding_model)
+        svc_emb.warm(es.embeddings_entity, device, embedding_model)
 
-    reporter.stage_start(len(texts), f"Embedding {len(texts)} normalised job summaries with {model_name}")
+    reporter.stage_start(len(texts), f"Embedding {len(texts)} {noun} with {model_name}")
     emb = svc_emb.embed_documents(
-        "job", texts, device=device, model=embedding_model,
+        es.embeddings_entity, texts, device=device, model=embedding_model,
         progress=lambda done, total: reporter.progress(done, total, "embedded"),
     )
-    svc.save_array(client, project, "cluster_embeddings", emb)
-    svc.save_index(client, project, "cluster_embeddings", ids, model_fingerprint=want)
+    svc.save_array(client, project, es.array_name, emb)
+    svc.save_index(client, project, es.array_name, ids, model_fingerprint=want)
     # A fresh embedding invalidates any tier tree cached from the old vectors.
     for t in tier_engine.TIERS:
-        _TIER_CACHE.pop((client, project, t), None)
-        _ANALYSIS_CACHE.pop((client, project, t), None)
+        _TIER_CACHE.pop((client, project, entity, t), None)
+        _ANALYSIS_CACHE.pop((client, project, entity, t), None)
 
 
 @router.get("/preview")
-def tier_preview(client_slug: str, project_slug: str, tier: str, k: int) -> dict:
+def tier_preview(client_slug: str, project_slug: str, entity: str, tier: str, k: int) -> dict:
     """Cluster sizes at k, plus stability where it is cheap enough to compute now.
 
     Drives the slider, so it must stay fast. On small tiers that includes the
     stability distribution and the routed-count preview, which makes the gate
     control live in exactly the way the dedupe threshold is.
     """
-    _check_tier(tier)
+    es = _check(entity, tier)
     svc, state = _load(client_slug, project_slug)
-    items, tree = _items_and_tree(svc, state, tier)
+    items, tree = _items_and_tree(svc, state, entity, tier)
 
     if not (2 <= k < len(items)):
         raise HTTPException(422, f"k must be between 2 and {len(items) - 1} for {len(items)} items")
 
     labels = bb.cut_tree(tree, k)
     sizes = np.bincount(labels, minlength=int(labels.max()) + 1).tolist()
-    samples = _titles_by_cluster(items, labels, len(sizes), state)
+    samples = _titles_by_cluster(items, labels, len(sizes), state, entity)
     out: dict = {
+        "entity": entity,
         "tier": tier,
         "k": k,
         "item_count": len(items),
@@ -374,7 +448,7 @@ def tier_preview(client_slug: str, project_slug: str, tier: str, k: int) -> dict
             items, k=k, n_perturb=settings.stability_n_perturb,
             subsample_frac=settings.stability_subsample_frac, tree=tree,
         )
-        _ANALYSIS_CACHE[(client_slug, project_slug, tier)] = analysis
+        _ANALYSIS_CACHE[(client_slug, project_slug, entity, tier)] = analysis
         out.update(_stability_payload(analysis, settings.stability_gate))
     return out
 
@@ -384,15 +458,17 @@ class AnalyseRequest(BaseModel):
 
 
 @router.post("/analyse")
-async def tier_analyse(client_slug: str, project_slug: str, tier: str, req: AnalyseRequest) -> dict:
+async def tier_analyse(
+    client_slug: str, project_slug: str, entity: str, tier: str, req: AnalyseRequest
+) -> dict:
     """The bootstrap stability pass, for tiers too large to do it inline.
 
     No LLM calls, so it is safe to re-run while exploring cluster counts — it just
     is not fast enough to sit behind a slider at job scale.
     """
-    _check_tier(tier)
+    es = _check(entity, tier)
     svc, state = _load(client_slug, project_slug)
-    items, tree = _items_and_tree(svc, state, tier)
+    items, tree = _items_and_tree(svc, state, entity, tier)
     if not (2 <= req.k < len(items)):
         raise HTTPException(422, f"k must be between 2 and {len(items) - 1}")
 
@@ -408,20 +484,20 @@ async def tier_analyse(client_slug: str, project_slug: str, tier: str, req: Anal
             items, k=req.k, n_perturb=settings.stability_n_perturb,
             subsample_frac=settings.stability_subsample_frac, tree=tree,
         )
-        _ANALYSIS_CACHE[(client_slug, project_slug, tier)] = analysis
+        _ANALYSIS_CACHE[(client_slug, project_slug, entity, tier)] = analysis
         summary = {"k": req.k, "items": len(items), **_stability_payload(analysis, settings.stability_gate)}
         reporter.stage_complete({k: v for k, v in summary.items() if not isinstance(v, list)})
         return summary
 
-    return _start_job(client_slug, project_slug, _STAGE[tier], work)
+    return _start_job(client_slug, project_slug, _stage(entity, tier), work)
 
 
 @router.get("/gate")
-def tier_gate(client_slug: str, project_slug: str, tier: str, gate: float) -> dict:
+def tier_gate(client_slug: str, project_slug: str, entity: str, tier: str, gate: float) -> dict:
     """How many items this gate sends to the model — instant, from the cached
     analysis. This is the cost preview that has to exist before the user pays."""
-    _check_tier(tier)
-    key = (client_slug, project_slug, tier)
+    es = _check(entity, tier)
+    key = (client_slug, project_slug, entity, tier)
     analysis = _ANALYSIS_CACHE.get(key)
     if analysis is None:
         raise HTTPException(
@@ -429,7 +505,7 @@ def tier_gate(client_slug: str, project_slug: str, tier: str, gate: float) -> di
             f"no stability analysis cached for the {tier} tier — run its analyse "
             f"step (or move the cluster slider on a small tier) first",
         )
-    return {"tier": tier, "k": analysis.k, **_stability_payload(analysis, gate)}
+    return {"entity": entity, "tier": tier, "k": analysis.k, **_stability_payload(analysis, gate)}
 
 
 def _stability_payload(analysis: tier_engine.TierAnalysis, gate: float) -> dict:
@@ -456,23 +532,24 @@ class ConfirmRequest(BaseModel):
 async def tier_confirm(
     client_slug: str,
     project_slug: str,
+    entity: str,
     tier: str,
     req: ConfirmRequest,
     workers: int | None = None,
 ) -> dict:
     """Name the clusters and route the unstable slice. The step that spends."""
-    _check_tier(tier)
+    es = _check(entity, tier)
     svc, state = _load(client_slug, project_slug)
-    items, tree = _items_and_tree(svc, state, tier)
+    items, tree = _items_and_tree(svc, state, entity, tier)
     if not (2 <= req.k < len(items)):
         raise HTTPException(422, f"k must be between 2 and {len(items) - 1}")
 
     settings = get_settings()
     _workers = llm.resolve_workers(workers)
-    model_name = embeddings.resolve_model("job").name
+    model_name = embeddings.resolve_model(es.embeddings_entity).name
 
     def work(reporter: ProgressReporter) -> dict:
-        key = (client_slug, project_slug, tier)
+        key = (client_slug, project_slug, entity, tier)
         analysis = _ANALYSIS_CACHE.get(key)
         if analysis is None or analysis.k != req.k:
             reporter.message(f"Assessing stability at k={req.k}")
@@ -487,12 +564,14 @@ async def tier_confirm(
         # sized to the routed count, so naming — which at 150 clusters is minutes of
         # sequential calls — showed as a bar frozen at zero.
         reporter.stage_start(
-            req.k, f"Naming {req.k} {tier} clusters ({n_route} uncertain items to re-check after)"
+            req.k,
+            f"Naming {req.k} {tier_state.tier_title(entity, tier).lower()} "
+            f"({n_route} uncertain items to re-check after)",
         )
         result = asyncio.run(
             tier_engine.finalise(
                 items, analysis,
-                entity="job", tier=tier, gate=req.gate,
+                entity=entity, tier=tier, gate=req.gate,
                 sc_confidence_threshold=settings.self_consistency_conf_threshold,
                 sc_votes=settings.self_consistency_votes,
                 route_concurrency=_workers,
@@ -504,24 +583,25 @@ async def tier_confirm(
 
         fresh = svc.load_state(client_slug, project_slug)
         dropped = [t for t in tier_state.ORDER[tier_state.ORDER.index(tier) + 1 :]
-                   if t in fresh.clustering_tiers]
-        tier_state.save_tier(svc, fresh, tier, result, embedding_model=model_name)
+                   if t in tier_state.tiers_of(fresh, entity)]
+        tier_state.save_tier(svc, fresh, entity, tier, result, embedding_model=model_name)
+        _invalidate_downstream(fresh, entity, tier)
         svc.save_state(
             fresh,
-            action=f"confirm-{tier}-tier",
+            action=f"confirm-{entity}-{tier}-tier",
             lineage_payload={
-                "tier": tier, "k": req.k, "gate": req.gate,
+                "entity": entity, "tier": tier, "k": req.k, "gate": req.gate,
                 "n_routed": result.n_routed, "n_moved": result.n_moved,
                 "tiers_invalidated": dropped,
             },
         )
         # The tier above now clusters different things, so its cached tree is stale.
         for above in tier_state.ORDER[tier_state.ORDER.index(tier) + 1 :]:
-            _TIER_CACHE.pop((client_slug, project_slug, above), None)
-            _ANALYSIS_CACHE.pop((client_slug, project_slug, above), None)
+            _TIER_CACHE.pop((client_slug, project_slug, entity, above), None)
+            _ANALYSIS_CACHE.pop((client_slug, project_slug, entity, above), None)
 
         summary = {
-            "tier": tier, "k": req.k, "clusters": len(result.names),
+            "entity": entity, "tier": tier, "k": req.k, "clusters": len(result.names),
             "routed": result.n_routed, "moved_by_model": result.n_moved,
             "low_confidence": result.low_confidence, "multi_home": result.multi_home,
             "tiers_invalidated": len(dropped),
@@ -529,20 +609,20 @@ async def tier_confirm(
         reporter.stage_complete(summary)
         return summary
 
-    return _start_job(client_slug, project_slug, _STAGE[tier], work)
+    return _start_job(client_slug, project_slug, _stage(entity, tier), work)
 
 
 @router.get("/clusters")
-def tier_clusters(client_slug: str, project_slug: str, tier: str) -> dict:
+def tier_clusters(client_slug: str, project_slug: str, entity: str, tier: str) -> dict:
     """The confirmed clusters with their members and audit trail, for review."""
-    _check_tier(tier)
+    es = _check(entity, tier)
     _, state = _load(client_slug, project_slug)
-    rec = state.clustering_tiers.get(tier)
+    rec = tier_state.tiers_of(state, entity).get(tier)
     if rec is None or not rec.names:
         raise HTTPException(409, f"the {tier} tier has not been confirmed yet")
 
-    label_for = _member_labeller(state, tier)
-    resolved = _title_map(state)
+    label_for = _member_labeller(state, entity, tier)
+    resolved = _title_map(state, entity)
     titles_for: dict[int, list[str]] = {}
     for m in rec.members:
         titles_for.setdefault(m.final_cluster_id, []).extend(resolved.get(m.item_id, []))
@@ -578,7 +658,7 @@ def tier_clusters(client_slug: str, project_slug: str, tier: str) -> dict:
     clusters.sort(key=lambda c: -c["size"])
     sizes = [c["size"] for c in clusters]
     return {
-        "tier": tier, "k": rec.k, "gate": rec.gate,
+        "entity": entity, "tier": tier, "k": rec.k, "gate": rec.gate,
         "n_routed": rec.n_routed, "n_moved": rec.n_moved,
         "clusters": clusters,
         **_size_stats(sizes),
@@ -587,22 +667,28 @@ def tier_clusters(client_slug: str, project_slug: str, tier: str) -> dict:
     }
 
 
-def _member_labeller(state: ProjectState, tier: str):
-    """Human-readable name for a tier member — a source job title at the profile
-    tier, the confirmed cluster name at the coarser tiers."""
+def _member_labeller(state: ProjectState, entity: str, tier: str):
+    """Human-readable name for a tier member — the base record's own name at the
+    finest tier, the confirmed cluster name at the coarser tiers."""
     if tier == "profile":
-        titles = {r.id: r.job_title for r in state.raw_records}
-        groups = {g.group_id: g.member_ids for g in state.dedupe_groups}
+        if entity == "job":
+            titles = {r.id: r.job_title for r in state.raw_records}
+            groups = {g.group_id: g.member_ids for g in state.dedupe_groups}
 
-        def label(item_id: str) -> str:
-            members = groups.get(item_id, [item_id])
-            names = [titles.get(m, m) for m in members]
-            return names[0] + (f" (+{len(names) - 1})" if len(names) > 1 else "")
+            def label(item_id: str) -> str:
+                members = groups.get(item_id, [item_id])
+                names = [titles.get(m, m) for m in members]
+                return names[0] + (f" (+{len(names) - 1})" if len(names) > 1 else "")
 
-        return label
+            return label
+
+        records = state.skills.inferred if entity == "skill" else state.tasks.inferred
+        by_id = {r.id: r.name for r in records}
+        return lambda item_id: by_id.get(item_id, item_id)
 
     below = tier_state.CHILD_OF[tier]
-    names = state.clustering_tiers[below].names if below in state.clustering_tiers else {}
+    tiers = tier_state.tiers_of(state, entity)
+    names = tiers[below].names if below in tiers else {}
 
     def label(item_id: str) -> str:
         try:
@@ -619,19 +705,39 @@ class RenameRequest(BaseModel):
 
 
 @router.post("/rename")
-def tier_rename(client_slug: str, project_slug: str, tier: str, req: RenameRequest) -> dict:
+def tier_rename(
+    client_slug: str, project_slug: str, entity: str, tier: str, req: RenameRequest
+) -> dict:
     """Edit a cluster name. Kept per tier so a correction does not require
     re-running anything — it is a label, not a placement."""
-    _check_tier(tier)
+    es = _check(entity, tier)
     svc, state = _load(client_slug, project_slug)
-    rec = state.clustering_tiers.get(tier)
+    rec = tier_state.tiers_of(state, entity).get(tier)
     if rec is None or req.cluster_id not in rec.names:
         raise HTTPException(404, f"no cluster {req.cluster_id} in the {tier} tier")
     rec.names[req.cluster_id] = req.name.strip()
-    tier_state.rebuild_denormalised(state)
+    tier_state.rebuild_denormalised(state, entity)
     svc.save_state(
         state,
-        action=f"rename-{tier}-cluster",
-        lineage_payload={"tier": tier, "cluster_id": req.cluster_id, "name": req.name},
+        action=f"rename-{entity}-{tier}-cluster",
+        lineage_payload={
+            "entity": entity, "tier": tier, "cluster_id": req.cluster_id, "name": req.name
+        },
     )
-    return {"tier": tier, "cluster_id": req.cluster_id, "name": rec.names[req.cluster_id]}
+    return {
+        "entity": entity, "tier": tier,
+        "cluster_id": req.cluster_id, "name": rec.names[req.cluster_id],
+    }
+
+
+def _invalidate_downstream(state: ProjectState, entity: str, tier: str) -> None:
+    """Drop work keyed to the clusters this tier just replaced.
+
+    Skill proficiency criteria are written per skill cluster and each job's assigned
+    level points at one, so re-clustering skills leaves both describing clusters that
+    no longer exist. Dropping them is the honest outcome; the alternative is a
+    proficiency map that silently refers to an older taxonomy.
+    """
+    if entity == "skill":
+        state.skills.cluster_proficiencies = []
+        state.skills.profile_requirements = []

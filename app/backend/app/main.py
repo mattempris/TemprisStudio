@@ -26,6 +26,7 @@ app.include_router(matching.router)
 app.include_router(matching.project_router)
 app.include_router(overview.router)
 app.include_router(exports.router)
+app.include_router(tiers.summary_router)
 app.include_router(tiers.router)
 app.include_router(websocket.router)
 

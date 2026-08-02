@@ -27,6 +27,7 @@ StageName = Literal[
     "categories",
     "families",
     "profiles",
+    "evaluation",
     "skills",
     "tasks",
     "matching",

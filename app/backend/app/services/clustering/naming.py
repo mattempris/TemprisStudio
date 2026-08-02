@@ -46,6 +46,25 @@ _ENTITY_VOCAB = {
     },
 }
 
+# Seniority is a property of an individual job, not of a field of work — a category
+# called "Administration & Entry Level Support" describes the grade of the people in
+# it rather than what they do, and the same work reappears under a different label
+# the moment someone is promoted. So the category and family tiers name the work
+# only. The single exception is the board: an executive office genuinely IS a
+# distinct field of work, not a senior version of another one.
+_NO_SENIORITY = (
+    "- Never refer to seniority, grade or career stage. No 'Senior', 'Junior', "
+    "'Entry Level', 'Head of', 'Lead', 'Trainee', 'Apprentice', 'Assistant', "
+    "'Support Staff', 'Graduate' — and never as an appended qualifier either: "
+    "'Administration' is right, 'Administration & Entry Level Support' is wrong. "
+    "Name the work, not the level of the people doing it.\n"
+    "- The ONLY exception is the board: an executive office at that level is its own "
+    "field of work, so 'Executive Leadership' or 'Executive Office' is allowed for a "
+    "cluster of genuine board-level executives (CEO, CFO, COO, Chief Risk Officer, "
+    "Managing Director of a division). Do not use it for senior management below "
+    "the board.\n"
+)
+
 # What a name at each tier has to BE, not merely what it is about. Separate from
 # _ENTITY_VOCAB because the three job tiers want three different kinds of noun, and
 # saying "short, specific label" at all three produced the wrong thing at two of
@@ -73,18 +92,20 @@ _JOB_LEVEL_RULES = {
         "Name each cluster as a FIELD OF WORK, not as a job title — this tier groups "
         "job titles, so a title here would collide with its own children.\n"
         "- Use the discipline or activity: 'Software Engineering', 'Advisory', "
-        "'Design', 'Underwriting', 'Leadership', 'Credit Risk', 'Customer Service'.\n"
+        "'Design', 'Underwriting', 'Credit Risk', 'Customer Service', "
+        "'Administration'.\n"
         "- Never a person noun: 'Engineering' not 'Engineer', 'Advisory' not 'Adviser'.\n"
-        "- Never a seniority: no 'Head of', 'Senior', 'Director' at this tier.\n"
+        f"{_NO_SENIORITY}"
         "- One to three words, specific enough to distinguish it from its siblings."
     ),
     "family": (
         "Name each cluster as a BROAD DOMAIN — the handful of top-level groupings a "
         "whole organisation divides into.\n"
         "- Division-scale: 'Technology', 'Finance', 'Risk & Compliance', "
-        "'Operations', 'Commercial', 'People'.\n"
+        "'Operations', 'Commercial', 'People', 'Administration'.\n"
         "- General enough to plausibly contain several fields of work beneath it, and "
         "recognisable to someone outside the function.\n"
+        f"{_NO_SENIORITY}"
         "- One to three words. Not a job title and not a specific discipline."
     ),
 }

@@ -93,19 +93,19 @@ svc.indexes["p/artifacts/cluster_embeddings_index.json"] = [f"grp-{i}" for i in 
 
 
 def confirm(tier: str, k: int) -> None:
-    items = tier_state.build_items(svc, state, tier)  # type: ignore[arg-type]
+    items = tier_state.build_items(svc, state, "job", tier)  # type: ignore[arg-type]
     analysis = tier_engine.analyse(items, k=k, n_perturb=10)
     result = asyncio.run(
         tier_engine.finalise(items, analysis, entity="job", tier=tier, gate=0.58)
     )
-    tier_state.save_tier(svc, state, tier, result, embedding_model="jobQWEN")  # type: ignore[arg-type]
+    tier_state.save_tier(svc, state, "job", tier, result, embedding_model="jobQWEN")  # type: ignore[arg-type]
     print(f"  {tier:9} k={k:<3} items={len(items):<3} clusters={len(result.names)}")
 
 
 print("=== a coarse tier cannot be built before the one below it ===")
 for tier in ("category", "family"):
     try:
-        tier_state.build_items(svc, state, tier)  # type: ignore[arg-type]
+        tier_state.build_items(svc, state, "job", tier)  # type: ignore[arg-type]
     except tier_state.TierNotReady as e:
         print(f"  {tier}: {str(e)[:78]}")
     else:
@@ -167,7 +167,7 @@ assert state.clustering is not None and len(state.clustering.assignments) == N
 print(f"  flat view restored with {len(state.clustering.assignments)} assignments: OK")
 
 print("\n=== hierarchy_summary reports per-tier status ===")
-for t, info in tier_state.hierarchy_summary(state).items():
+for t, info in tier_state.hierarchy_summary(state, "job").items():
     print(f"  {t:9} confirmed={info['confirmed']} k={info['k']} ready_to_run={info['ready_to_run']}")
 
 print("\nTIER STATE TESTS PASSED (no GPU, no LLM, no blob)")

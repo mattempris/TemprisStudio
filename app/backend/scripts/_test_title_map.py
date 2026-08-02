@@ -19,7 +19,7 @@ def main() -> int:
           f"{len(state.dedupe_groups)} groups, {len(state.normalized_profiles)} normalised, "
           f"tiers confirmed: {sorted(state.clustering_tiers)}")
 
-    m = R._title_map(state)
+    m = R._title_map(state, "job")
     prof_keys = [k for k in m if not k.startswith(("profile:", "category:", "family:"))]
     print(f"\nresolved ids: {len(m)} total, {len(prof_keys)} normalised-job ids")
 
@@ -36,6 +36,15 @@ def main() -> int:
 
     ok = total_titles == len(state.raw_records)
     print(f"\n{'OK  ' if ok else 'FAIL'}  every raw record is reachable exactly once")
+
+    # Skills resolve to their own names rather than through dedupe groups.
+    if state.skills.inferred:
+        ms = R._title_map(state, "skill")
+        base = [k for k in ms if not k.startswith(("profile:", "category:", "family:"))]
+        good = len(base) == len(state.skills.inferred) and all(len(ms[k]) == 1 for k in base)
+        print(f"\n  {'OK  ' if good else 'FAIL'}  skill entity: {len(base)} skills resolve "
+              f"to one name each, e.g. {ms[base[0]]}")
+        ok &= good
 
     for tier in ("profile", "category", "family"):
         rec = state.clustering_tiers.get(tier)

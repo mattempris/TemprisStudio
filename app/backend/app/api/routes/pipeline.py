@@ -1216,18 +1216,17 @@ def put_je_framework(client_slug: str, project_slug: str, framework: JEFramework
 
 @router.post("/profiles/generate")
 async def start_profile_generation(
-    client_slug: str, project_slug: str, run_je: bool = True, workers: int | None = None
+    client_slug: str, project_slug: str, workers: int | None = None
 ) -> dict:
-    """Generate a Job Profile document per profile cluster, then (optionally) run
-    the JE ensemble over them."""
+    """Generate a Job Profile document per profile cluster.
+
+    Evaluation is a separate step — see `/evaluation/run`.
+    """
     svc, state = _load(client_slug, project_slug)
     _workers = llm.resolve_workers(workers)
     c = state.clustering
     if c is None or not c.profile_names:
         raise HTTPException(400, "clustering and naming must be complete first")
-
-    framework = state.je_framework if state.je_framework.domains else je.load_default_framework()
-    fw_hash = framework_hash(framework.model_dump(mode="json"))
 
     norm_by_id = {p.id: p for p in state.normalized_profiles}
     headcount_by_item: dict[str, int] = {}
@@ -1324,61 +1323,104 @@ async def start_profile_generation(
             summary["profiles_failed"] = len(unwritten)
             summary["profiles_failed_clusters"] = unwritten[:10]
 
-        if run_je:
-            reporter.stage_start(len(docs), f"Job evaluation ensemble across {len(docs)} profiles")
-            je_inputs = [(d.profile_key, d.title, d.content) for d in docs]
-            results = je.evaluate_many(je_inputs, framework, workers=_workers, progress=reporter.pmap_callback())
-
-            # None entries are profiles whose evaluation could not be produced —
-            # the rest are kept rather than the whole stage being discarded.
-            evaluated = [r for r in results if r is not None]
-            failed = [d.profile_key for d, r in zip(docs, results) if r is None]
-
-            fresh2 = svc.load_state(client_slug, project_slug)
-            fresh2.je_results = [
-                JEEvaluationResult(
-                    profile_key=r.profile_key,
-                    clustering_version=fresh2.meta.clustering_version,
-                    framework_version_hash=fw_hash,
-                    personas=r.personas,
-                    aggregate_score=r.aggregate_score,
-                    level_name=r.level_name,
-                    computed_at=datetime.now(timezone.utc),
-                )
-                for r in evaluated
-            ]
-            # re-render each profile HTML now that its evaluated level is known
-            for doc, res in zip(fresh2.job_profiles, results):
-                doc.html = generator.render_html(
-                    doc.content,
-                    accent_color=accent,
-                    company_name=company,
-                    about_company=about_company,
-                    diversity_statement=diversity,
-                    job_level=res.level_name if res else None,
-                    headings=section_headings,
-                    sections=sections,
-                )
-                svc.save_profile_html(client_slug, project_slug, doc.profile_key, doc.html)
-            svc.save_state(
-                fresh2,
-                action="run-je-evaluation",
-                lineage_payload={"evaluated": len(evaluated), "failed": failed},
-            )
-
-            summary["je_evaluated"] = len(evaluated)
-            summary["levels"] = sorted({r.level_name for r in evaluated})
-            summary["mean_score"] = round(
-                sum(r.aggregate_score for r in evaluated) / max(1, len(evaluated)), 2
-            )
-            if failed:
-                summary["je_failed"] = len(failed)
-                summary["je_failed_profiles"] = failed[:10]
-
         reporter.stage_complete(summary)
         return summary
 
     return _start_job(client_slug, project_slug, "profiles", work)
+
+
+@router.post("/evaluation/run")
+async def start_job_evaluation(
+    client_slug: str, project_slug: str, workers: int | None = None
+) -> dict:
+    """Score the generated profile documents against the JE framework.
+
+    Its own step rather than a tail on profile generation. They are separate
+    decisions: writing the documents is about content and template, evaluating them
+    is about the framework and the level bands — and the framework is routinely
+    edited and the evaluation re-run against documents that have not changed. Bolted
+    together, re-levelling meant regenerating every document first.
+    """
+    svc, state = _load(client_slug, project_slug)
+    _workers = llm.resolve_workers(workers)
+    if not state.job_profiles:
+        raise HTTPException(400, "no job profile documents yet — generate the profiles first")
+
+    framework = state.je_framework if state.je_framework.domains else je.load_default_framework()
+    problems = je.validate_framework(framework)
+    if problems:
+        raise HTTPException(
+            422, {"message": "the job evaluation framework is not valid", "problems": problems}
+        )
+    fw_hash = framework_hash(framework.model_dump(mode="json"))
+
+    accent = state.meta.accent_color
+    company = state.meta.display_name
+    about_company = state.meta.client_company_description
+    diversity = state.meta.diversity_statement
+    sections = _resolve_sections(state)
+    section_headings = tpl.headings(sections)
+    docs = list(state.job_profiles)
+
+    def work(reporter: ProgressReporter) -> dict:
+        reporter.stage_start(len(docs), f"Job evaluation ensemble across {len(docs)} profiles")
+        je_inputs = [(d.profile_key, d.title, d.content) for d in docs]
+        results = je.evaluate_many(
+            je_inputs, framework, workers=_workers, progress=reporter.pmap_callback()
+        )
+
+        # None entries are profiles whose evaluation could not be produced — the
+        # rest are kept rather than the whole stage being discarded.
+        evaluated = [r for r in results if r is not None]
+        failed = [d.profile_key for d, r in zip(docs, results) if r is None]
+
+        fresh = svc.load_state(client_slug, project_slug)
+        fresh.je_results = [
+            JEEvaluationResult(
+                profile_key=r.profile_key,
+                clustering_version=fresh.meta.clustering_version,
+                framework_version_hash=fw_hash,
+                personas=r.personas,
+                aggregate_score=r.aggregate_score,
+                level_name=r.level_name,
+                computed_at=datetime.now(timezone.utc),
+            )
+            for r in evaluated
+        ]
+        # re-render each profile HTML now that its evaluated level is known
+        level_by_key = {r.profile_key: r.level_name for r in evaluated}
+        for doc in fresh.job_profiles:
+            doc.html = generator.render_html(
+                doc.content,
+                accent_color=accent,
+                company_name=company,
+                about_company=about_company,
+                diversity_statement=diversity,
+                job_level=level_by_key.get(doc.profile_key),
+                headings=section_headings,
+                sections=sections,
+            )
+            svc.save_profile_html(client_slug, project_slug, doc.profile_key, doc.html)
+        svc.save_state(
+            fresh,
+            action="run-je-evaluation",
+            lineage_payload={"evaluated": len(evaluated), "failed": failed},
+        )
+
+        summary: dict = {
+            "je_evaluated": len(evaluated),
+            "levels": sorted({r.level_name for r in evaluated}),
+            "mean_score": round(
+                sum(r.aggregate_score for r in evaluated) / max(1, len(evaluated)), 2
+            ),
+        }
+        if failed:
+            summary["je_failed"] = len(failed)
+            summary["je_failed_profiles"] = failed[:10]
+        reporter.stage_complete(summary)
+        return summary
+
+    return _start_job(client_slug, project_slug, "evaluation", work)
 
 
 def _profile_key(name: str, item_ids: list[str]) -> str:

@@ -134,6 +134,49 @@ class ClusteringState(BaseModel):
     version: int = 1
 
 
+class TierMemberRecord(BaseModel):
+    """One item's outcome at one tier of the hierarchy.
+
+    `item_id` is a raw record id at the profile tier and a synthetic
+    "profile:<n>" / "category:<n>" at the coarser tiers, because what gets
+    clustered there is the previous tier's clusters.
+    """
+
+    item_id: str
+    backbone_cluster_id: int
+    final_cluster_id: int
+    stability_score: float | None = None
+    routed_by_llm: bool = False
+    route_confidence: float | None = None
+    secondary_cluster_id: int | None = None
+    secondary_confidence: float | None = None
+    self_consistency: dict | None = None
+
+
+class TierState(BaseModel):
+    """A confirmed tier: the counts chosen, the gate used, the names, and the full
+    audit trail of what the model moved.
+
+    Each tier is confirmed separately (instructions.txt steps 5-6, split so profiles,
+    categories and families are each reviewed on their own), so each carries its own
+    k and gate rather than sharing one setting across the hierarchy.
+    """
+
+    tier: str  # "profile" | "category" | "family"
+    k: int
+    gate: float
+    embedding_model: str = ""
+    names: dict[int, str] = Field(default_factory=dict)
+    members: list[TierMemberRecord] = Field(default_factory=list)
+    # A few member texts per cluster, kept so the next tier can describe its items
+    # without reloading and re-summarising the tier below.
+    exemplars: dict[int, list[str]] = Field(default_factory=dict)
+    centroids_blob_path: str = ""
+    n_routed: int = 0
+    n_moved: int = 0
+    computed_at: datetime | None = None
+
+
 class JESubdomainConfig(BaseModel):
     name: str
     weight: float
@@ -329,6 +372,11 @@ class ProjectState(BaseModel):
     dedupe_threshold: float | None = None
     dedupe_groups: list[DedupeGroup] = Field(default_factory=list)
     normalized_profiles: list[NormalizedProfile] = Field(default_factory=list)
+    # Per-tier records, keyed "profile" | "category" | "family". This is the
+    # authoritative account of the hierarchy; `clustering` below is a denormalised
+    # view rebuilt from these so that everything downstream — job profiles, the
+    # overview, exports, the headcount rollups — keeps reading one flat structure.
+    clustering_tiers: dict[str, TierState] = Field(default_factory=dict)
     clustering: ClusteringState | None = None
     je_framework: JEFrameworkConfig = Field(default_factory=JEFrameworkConfig)
     profile_template: JobProfileTemplateConfig = Field(default_factory=JobProfileTemplateConfig)

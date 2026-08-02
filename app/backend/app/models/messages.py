@@ -24,6 +24,8 @@ StageName = Literal[
     "dedupe",
     "normalize",
     "cluster",
+    "categories",
+    "families",
     "profiles",
     "skills",
     "tasks",

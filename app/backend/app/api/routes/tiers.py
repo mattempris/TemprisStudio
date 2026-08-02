@@ -100,6 +100,28 @@ def _start_job(client_slug: str, project_slug: str, stage: str, work) -> dict:
 _STAGE = {"profile": "cluster", "category": "categories", "family": "families"}
 
 
+def _expected_item_count(svc: ProjectService, state: ProjectState, tier: str) -> int | None:
+    """How many items this tier will cluster, answerable before anything is built.
+
+    `build_items` needs artifacts that may not exist yet — the profile tier needs
+    the normalised jobs embedded first. Returning None then would understate the
+    count to zero, which makes `stability_inline` claim the bootstrap is instant
+    on a tier where it takes seconds, and leaves the slider with no upper bound.
+    Both are knowable from state without loading a single vector.
+    """
+    if not tier_state._ready(state, tier):
+        return None
+    try:
+        return len(tier_state.build_items(svc, state, tier))
+    except tier_state.TierNotReady:
+        pass
+    if tier == "profile":
+        return len(state.normalized_profiles) or None
+    below = tier_state.CHILD_OF[tier]
+    rec = state.clustering_tiers.get(below)
+    return rec.k if rec else None
+
+
 @router.get("/status")
 def tier_status(client_slug: str, project_slug: str, tier: str) -> dict:
     """What this tier can do right now, without building anything."""
@@ -108,12 +130,7 @@ def tier_status(client_slug: str, project_slug: str, tier: str) -> dict:
     key = (client_slug, project_slug, tier)
     rec = state.clustering_tiers.get(tier)
 
-    n_items = None
-    if tier_state._ready(state, tier):
-        try:
-            n_items = len(tier_state.build_items(svc, state, tier))
-        except tier_state.TierNotReady:
-            n_items = None
+    n_items = _expected_item_count(svc, state, tier)
 
     return {
         "tier": tier,

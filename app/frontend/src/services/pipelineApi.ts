@@ -20,6 +20,10 @@ import type {
   SkillsSummary,
   StageSummary,
   TasksSummary,
+  TierClusters,
+  TierName,
+  TierPreview,
+  TierStatus,
   TaxonomyMatch,
   TaxonomyNode,
   TaxonomySearchHit,
@@ -171,6 +175,31 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
         method: "PUT",
         body: JSON.stringify(v),
       }),
+
+    /** Steps 5/6/7 — one tier of the hierarchy. Same shape for profiles,
+     *  categories and families. */
+    tier: (tier: TierName) => {
+      const t = `${base}/cluster/tier/${tier}`;
+      return {
+        status: () => request<TierStatus>(`${t}/status`),
+        build: () => request<JobHandle>(`${t}/build`, { method: "POST" }),
+        preview: (k: number) => request<TierPreview>(`${t}/preview?k=${k}`),
+        analyse: (k: number) =>
+          request<JobHandle>(`${t}/analyse`, { method: "POST", body: JSON.stringify({ k }) }),
+        gate: (gate: number) => request<TierPreview>(`${t}/gate?gate=${gate}`),
+        confirm: (k: number, gate: number, workers?: number) =>
+          request<JobHandle>(`${t}/confirm${qs({ workers })}`, {
+            method: "POST",
+            body: JSON.stringify({ k, gate }),
+          }),
+        clusters: () => request<TierClusters>(`${t}/clusters`),
+        rename: (clusterId: number, name: string) =>
+          request<unknown>(`${t}/rename`, {
+            method: "POST",
+            body: JSON.stringify({ cluster_id: clusterId, name }),
+          }),
+      };
+    },
 
     /** Step 7: the user-defined job profile template — which sections a profile
      *  has, their headings, order and per-section generation guidance. */

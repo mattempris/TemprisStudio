@@ -113,6 +113,69 @@ export interface ClusterPreview {
   largest_profile_size: number;
 }
 
+// ── Per-tier clustering (steps 5/6/7) ────────────────────────────────────────
+
+export type TierName = "profile" | "category" | "family";
+
+export interface TierStatus {
+  tier: TierName;
+  ready_to_run: boolean;
+  below: TierName | null;
+  item_count: number | null;
+  item_noun: string;
+  built: boolean;
+  analysed_k: number | null;
+  /** False when the tier is large enough that stability needs its own pass. */
+  stability_inline: boolean;
+  confirmed: boolean;
+  k: number | null;
+  gate: number | null;
+  n_routed: number;
+  n_moved: number;
+  max_k: number | null;
+}
+
+export interface StabilityBucket {
+  from: number;
+  to: number;
+  count: number;
+}
+
+export interface TierPreview {
+  tier: TierName;
+  k: number;
+  item_count: number;
+  sizes: number[];
+  singletons: number;
+  largest: number;
+  stability_included: boolean;
+  gate?: number;
+  n_routed?: number;
+  pct_routed?: number;
+  mean_stability?: number | null;
+  min_stability?: number | null;
+  distribution?: StabilityBucket[];
+}
+
+export interface TierClusterMember {
+  item_id: string;
+  label: string;
+  stability_score: number | null;
+  routed_by_llm: boolean;
+  route_confidence: number | null;
+  moved: boolean;
+  moved_from: string | null;
+}
+
+export interface TierClusters {
+  tier: TierName;
+  k: number;
+  gate: number;
+  n_routed: number;
+  n_moved: number;
+  clusters: { id: number; name: string; size: number; members: TierClusterMember[] }[];
+}
+
 export interface ProfileRow {
   profile_key: string;
   title: string;

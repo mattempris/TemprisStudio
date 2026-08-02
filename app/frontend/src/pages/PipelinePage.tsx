@@ -8,6 +8,8 @@ import type {
   ProficiencyTemplate,
   Boilerplate,
   EmbeddingModelsInfo,
+  TierName,
+  TierStatus,
   ProfileSection,
   ProfileTemplate,
   MatchingSummary,
@@ -19,11 +21,11 @@ import type {
 } from "../types/pipeline";
 import { StageSection, type StageState } from "../components/wizard/StageSection";
 import { ProgressBar } from "../components/wizard/ProgressBar";
-import { ClusterKPanel } from "../components/pipeline/ClusterKPanel";
 import { DedupePanel } from "../components/pipeline/DedupePanel";
 import { JEResultsBrowser } from "../components/pipeline/JEResultsBrowser";
 import { EntityTaxonomyStage } from "../components/pipeline/EntityTaxonomyStage";
 import { EmbeddingOptions } from "../components/pipeline/EmbeddingOptions";
+import { TierClusterStage } from "../components/pipeline/TierClusterStage";
 import { MatchingPanel } from "../components/pipeline/MatchingPanel";
 import { OverviewBrowser } from "../components/pipeline/OverviewBrowser";
 import { ExportBar } from "../components/pipeline/ExportBar";
@@ -42,7 +44,9 @@ const STAGES = [
   { id: "strip", title: "Strip irrelevant content", description: "Remove company boilerplate, benefits and recruitment logistics — keeping only what already exists." },
   { id: "dedupe", title: "Deduplicate", description: "Group jobs that describe the same role, using a similarity threshold you control." },
   { id: "normalize", title: "Normalise descriptions", description: "Produce a structured summary per distinct job: purpose, key tasks, reporting line, budget." },
-  { id: "cluster", title: "Cluster and name", description: "Build the Family › Category › Profile hierarchy and give each cluster an industry-standard name." },
+  { id: "cluster", title: "Job profiles", description: "Group the normalised jobs into job profiles, review what the model re-checked, and name them." },
+  { id: "categories", title: "Job categories", description: "Group the confirmed job profiles into categories, then name them from what they contain." },
+  { id: "families", title: "Job families", description: "Group the categories into job families — the top of the hierarchy." },
   { id: "profiles", title: "Job profiles and evaluation", description: "Generate a job profile document per cluster and evaluate it against your job evaluation framework." },
   { id: "skills", title: "Skills taxonomy", description: "Infer the attributes each profile needs, cluster them into a taxonomy, and set proficiency levels." },
   { id: "tasks", title: "Task taxonomy", description: "Infer what each profile spends time on, cluster it, and analyse where the workforce's time goes." },
@@ -86,6 +90,9 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
   // start reads as waiting rather than as a broken app.
   const [backendDown, setBackendDown] = useState(false);
   const [embedModels, setEmbedModels] = useState<EmbeddingModelsInfo | null>(null);
+  // Per-tier clustering status. Kept alongside the stage summary because the three
+  // hierarchy steps gate on each other rather than on one "clustered" flag.
+  const [tiers, setTiers] = useState<Partial<Record<TierName, TierStatus>>>({});
   // Per-run embedding choices. null model means "use the server default".
   const [jobModel, setJobModel] = useState<string | null>(null);
   const [forceCpu, setForceCpu] = useState(false);
@@ -121,6 +128,19 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
         if (mt.status === "fulfilled") setMatching(mt.value);
         if (ov.status === "fulfilled") setOverview(ov.value);
       }
+      // Tier status drives steps 5-7; a tier only becomes runnable once the one
+      // below it is confirmed, so this has to refresh after every job.
+      void Promise.allSettled(
+        (["profile", "category", "family"] as TierName[]).map((t) => api.tier(t).status()),
+      ).then((rs) =>
+        setTiers(
+          Object.fromEntries(
+            rs.flatMap((r, i) =>
+              r.status === "fulfilled" ? [[(["profile", "category", "family"] as TierName[])[i], r.value]] : [],
+            ),
+          ),
+        ),
+      );
       // Keeps the "loaded" badges honest after a run put a model in memory.
       void api.embeddingModels().then(setEmbedModels).catch(() => {});
       setBackendDown(false);
@@ -173,8 +193,8 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
   // own declaration is a temporal dead zone error at runtime, which the type
   // checker does not catch.
   const downstream = useMemo<Downstream>(
-    () => ({ skills, tasks, matching }),
-    [skills, tasks, matching],
+    () => ({ tiers, skills, tasks, matching }),
+    [tiers, skills, tasks, matching],
   );
 
   // Open the first stage that still needs attention.
@@ -515,11 +535,22 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
         );
 
       case "cluster":
+      case "categories":
+      case "families": {
+        const tierOf = { cluster: "profile", categories: "category", families: "family" } as const;
+        const tier = tierOf[id as keyof typeof tierOf];
+        const st = tiers[tier];
+        if (!st) {
+          return <p className="text-[12.5px] text-text-muted">Loading tier status…</p>;
+        }
+        const titles = { profile: "Job profiles", category: "Job categories", family: "Job families" };
+        const api_t = api.tier(tier);
         return (
           <div className="space-y-4">
-            {!summary!.clustered && (
-              <div className="space-y-3">
-            {embedModels && (
+            {/* The profile tier embeds the normalised jobs, so the model choice
+                belongs here. The coarser tiers cluster centroids from the tier
+                below and never embed, so there is nothing to choose. */}
+            {tier === "profile" && !st.built && embedModels && (
               <EmbeddingOptions
                 info={embedModels}
                 entity="job"
@@ -527,52 +558,38 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
                 onModel={setJobModel}
                 forceCpu={forceCpu}
                 onForceCpu={setForceCpu}
-                hasExistingTree={false}
+                hasExistingTree={st.confirmed}
                 disabled={busy || job.running}
               />
             )}
-                <Button
-                  variant="primary"
-                  onClick={() =>
-                    runJob(() =>
-                      api.startClusterBuild({
+            <TierClusterStage
+              title={titles[tier]}
+              status={st}
+              preview={api_t.preview}
+              gatePreview={api_t.gate}
+              onBuild={
+                tier === "profile"
+                  ? async () => {
+                      // The profile tier needs its embeddings before a tree exists.
+                      await api.startClusterBuild({
                         embedding_model: jobModel,
                         device: forceCpu ? "cpu" : null,
-                      }),
-                    )
-                  }
-                  disabled={busy || job.running}
-                >
-                  <span className="flex items-center gap-1.5">
-                    <Play size={12} /> Build the cluster tree
-                  </span>
-                </Button>
-                {showProgress && <ProgressBar job={job} />}
-              </div>
-            )}
-            <ClusterKPanel
-              itemCount={summary!.normalized_profiles}
-              initial={{
-                families: summary!.k_families ?? Math.max(2, Math.min(8, Math.floor(summary!.normalized_profiles / 12) || 2)),
-                categories: summary!.k_categories ?? Math.max(3, Math.min(24, Math.floor(summary!.normalized_profiles / 5) || 3)),
-                profiles: summary!.k_profiles ?? Math.max(4, Math.min(64, Math.floor(summary!.normalized_profiles / 2) || 4)),
-              }}
-              preview={api.clusterPreview}
-              onConfirm={(k, gate) =>
-                runJob(() =>
-                  api.confirmCluster({
-                    k_families: k.families,
-                    k_categories: k.categories,
-                    k_profiles: k.profiles,
-                    gate,
-                  }),
-                )
+                      });
+                      return api_t.build();
+                    }
+                  : api_t.build
               }
-              confirming={busy || job.running}
+              onAnalyse={api_t.analyse}
+              onConfirm={(k, gate) => api_t.confirm(k, gate, workers)}
+              loadClusters={api_t.clusters}
+              onRename={api_t.rename}
+              runJob={runJob}
+              busy={busy || job.running}
+              progress={showProgress ? <ProgressBar job={job} /> : null}
             />
-            {showProgress && <ProgressBar job={job} />}
           </div>
         );
+      }
 
       case "profiles":
         return (
@@ -753,6 +770,7 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
 }
 
 interface Downstream {
+  tiers: Partial<Record<TierName, TierStatus>>;
   skills: SkillsSummary | null;
   tasks: TasksSummary | null;
   matching: MatchingSummary | null;
@@ -964,10 +982,18 @@ function stageState(id: string, s: StageSummary, d: Downstream): StageState {
       if (s.dedupe_groups === 0) return "locked";
       return s.normalized_profiles > 0 ? "complete" : "active";
     case "cluster":
-      if (s.normalized_profiles < 3) return "locked";
-      return s.named ? "complete" : "active";
+    case "categories":
+    case "families": {
+      const tier = { cluster: "profile", categories: "category", families: "family" }[id] as
+        | "profile" | "category" | "family";
+      const st = d.tiers[tier];
+      if (!st?.ready_to_run) return "locked";
+      return st.confirmed ? "complete" : "active";
+    }
     case "profiles":
-      if (!s.named) return "locked";
+      // Needs the full hierarchy: a profile document carries its category and
+      // family in the breadcrumb.
+      if (!d.tiers.family?.confirmed) return "locked";
       return s.job_profiles > 0 ? "complete" : "active";
     default:
       return "locked";
@@ -1003,7 +1029,15 @@ function stageSummaryLine(id: string, s: StageSummary, d: Downstream): string | 
     case "normalize":
       return `${s.normalized_profiles} normalised`;
     case "cluster":
-      return `${s.k_families} families › ${s.k_categories} categories › ${s.k_profiles} profiles`;
+    case "categories":
+    case "families": {
+      const tier = { cluster: "profile", categories: "category", families: "family" }[id] as
+        | "profile" | "category" | "family";
+      const st = d.tiers[tier];
+      if (!st?.confirmed) return undefined;
+      const noun = { profile: "profiles", category: "categories", family: "families" }[tier];
+      return `${st.k} ${noun}${st.n_moved ? `, ${st.n_moved} moved by the model` : ""}`;
+    }
     case "profiles":
       return `${s.job_profiles} profiles, ${s.je_results} evaluated`;
     default:
@@ -1021,8 +1055,12 @@ function lockedReason(id: string): string {
       return "Confirm deduplication first.";
     case "cluster":
       return "Normalise at least 3 jobs first.";
+    case "categories":
+      return "Confirm the job profiles first.";
+    case "families":
+      return "Confirm the job categories first.";
     case "profiles":
-      return "Name the clusters first.";
+      return "Confirm all three hierarchy levels first.";
     case "skills":
     case "tasks":
     case "matching":

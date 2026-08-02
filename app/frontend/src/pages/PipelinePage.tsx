@@ -47,7 +47,7 @@ const STAGES = [
   { id: "cluster", title: "Job profiles", description: "Group the normalised jobs into job profiles, review what the model re-checked, and name them." },
   { id: "categories", title: "Job categories", description: "Group the confirmed job profiles into categories, then name them from what they contain." },
   { id: "families", title: "Job families", description: "Group the categories into job families — the top of the hierarchy." },
-  { id: "profiles", title: "Job profiles and evaluation", description: "Generate a job profile document per cluster and evaluate it against your job evaluation framework." },
+  { id: "profiles", title: "Profile documents and evaluation", description: "Write a job profile document for each confirmed profile and score it against your job evaluation framework." },
   { id: "skills", title: "Skills taxonomy", description: "Infer the attributes each profile needs, cluster them into a taxonomy, and set proficiency levels." },
   { id: "tasks", title: "Task taxonomy", description: "Infer what each profile spends time on, cluster it, and analyse where the workforce's time goes." },
   { id: "matching", title: "3rd-party taxonomy match", description: "Place each job profile in the external market taxonomy and assign a career level." },

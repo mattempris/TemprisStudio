@@ -214,11 +214,29 @@ gives 5.6× rather than 8× — one 6KB description gates the batch.
 
 Two panels carry most of the method:
 
-- **Cluster and name** — sliders re-cut a cached Ward tree, so previewing
-  different cluster counts costs nothing. The stability gate decides how much
-  gets sent to the model: items the geometry places confidently are free, and
-  only the uncertain tail is routed. 0.55–0.60 is a good range; above 0.70 tends
-  to pay for assignments the model just confirms.
+- **The three hierarchy steps** (job profiles, then categories, then families).
+  Each clusters the tier below it: profiles group normalised jobs, categories
+  group confirmed profiles, families group categories. Nesting is therefore
+  structural — every job has exactly one profile, every profile one category —
+  rather than reconstructed by rolling labels up.
+
+  Each step has two sliders. The cluster count re-cuts a cached Ward tree, so
+  previewing costs nothing. The **stability gate** decides how much goes to the
+  model: items the geometry places confidently are free, only the uncertain tail
+  is routed, and the panel always shows how many items a given gate would send
+  before you commit. A histogram behind the slider shows where the data actually
+  sits, so the threshold is chosen against it rather than from memory. 0.55-0.60
+  is a good range; above 0.70 tends to pay for assignments the model just
+  confirms.
+
+  On categories and families the stability numbers arrive with the size preview,
+  so both sliders are live. The profile tier asks for one explicit "Assess
+  stability" press first, because the bootstrap takes about 6.7s over 916 jobs
+  against 0.13s over 120 profiles.
+
+  Confirming a tier drops the tiers above it — they were built on the previous
+  version of it — and the downstream steps stay locked until all three exist,
+  since a profile document carries its category and family in the breadcrumb.
 - **3rd-party taxonomy match** — the structure view is the deliverable; the
   "Needs review" tab lists only uncertain matches, worst first, each with the
   shortlist it chose from and an override control. A profile with no defensible

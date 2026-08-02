@@ -241,5 +241,15 @@ def generate_many(
     *,
     workers: int = 6,
     progress=None,
-) -> list[dict]:
-    return llm.pmap(generate_content, specs, workers=workers, label="profile-gen", progress=progress)
+) -> list[dict | None]:
+    """One entry per spec, in order; None where that profile could not be generated.
+
+    Failures are tolerated rather than fatal. A real taxonomy is hundreds of
+    profiles and each is an independent call, so a single failure — a server-side
+    grammar-compilation timeout under load, say — used to abort the whole stage and
+    throw away every document already generated and paid for.
+    """
+    return llm.pmap(
+        generate_content, specs, workers=workers, label="profile-gen",
+        progress=progress, tolerate_errors=True,
+    )

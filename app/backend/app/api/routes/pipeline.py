@@ -1281,7 +1281,13 @@ async def start_profile_generation(
         diversity = state.meta.diversity_statement
 
         docs: list[JobProfileDoc] = []
+        unwritten: list[str] = []
         for spec, pid, content in zip(specs, profile_cluster_ids, contents):
+            if content is None:
+                # Generation failed for this cluster. Recorded and skipped so the
+                # rest of the run is kept — re-running the step regenerates it.
+                unwritten.append(spec.cluster_name)
+                continue
             html = generator.render_html(
                 content,
                 accent_color=accent,
@@ -1308,8 +1314,15 @@ async def start_profile_generation(
         fresh = svc.load_state(client_slug, project_slug)
         fresh.job_profiles = docs
         fresh.meta.current_stage = StageName.profile_je
-        svc.save_state(fresh, action="generate-profiles", lineage_payload={"profiles": len(docs)})
+        svc.save_state(
+            fresh,
+            action="generate-profiles",
+            lineage_payload={"profiles": len(docs), "failed": unwritten},
+        )
         summary: dict = {"profiles_generated": len(docs)}
+        if unwritten:
+            summary["profiles_failed"] = len(unwritten)
+            summary["profiles_failed_clusters"] = unwritten[:10]
 
         if run_je:
             reporter.stage_start(len(docs), f"Job evaluation ensemble across {len(docs)} profiles")

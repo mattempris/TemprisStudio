@@ -176,7 +176,9 @@ _SKILL_TREE_CACHE: dict[tuple[str, str], tuple] = {}
 
 
 @router.post("/cluster/build")
-async def build_skill_tree(client_slug: str, project_slug: str) -> dict:
+async def build_skill_tree(
+    client_slug: str, project_slug: str, device: str | None = None
+) -> dict:
     svc, state = _load(client_slug, project_slug)
     skills = state.skills.inferred
     if len(skills) < 3:
@@ -188,10 +190,11 @@ async def build_skill_tree(client_slug: str, project_slug: str) -> dict:
     def work(reporter: ProgressReporter) -> dict:
         if not embeddings.is_loaded("skill"):
             reporter.message("Loading the skillQWEN model (first use this session)")
-            get_embedding_service().warm("skill")
+            get_embedding_service().warm("skill", device)
         reporter.stage_start(len(texts), f"Embedding {len(texts)} skills with skillQWEN")
         emb = get_embedding_service().embed_documents(
-            "skill", texts, progress=lambda done, total: reporter.progress(done, total, "embedded")
+            "skill", texts, device=device,
+            progress=lambda done, total: reporter.progress(done, total, "embedded")
         )
         reporter.message("Building the Ward tree")
         tree = bb.build_linkage_tree(emb)

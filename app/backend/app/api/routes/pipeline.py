@@ -577,7 +577,9 @@ def _get_dedupe_graph(
 
 
 @router.post("/dedupe/build")
-async def start_dedupe_build(client_slug: str, project_slug: str) -> dict:
+async def start_dedupe_build(
+    client_slug: str, project_slug: str, device: str | None = None
+) -> dict:
     """Embed stripped records once; the threshold slider then works off the cache."""
     svc, state = _load(client_slug, project_slug)
     if not state.stripped_records:
@@ -590,10 +592,11 @@ async def start_dedupe_build(client_slug: str, project_slug: str) -> dict:
         svc_emb = get_embedding_service()
         if not embeddings.is_loaded("job"):
             reporter.message("Loading the jobQWEN model (first use this session)")
-            svc_emb.warm("job")
+            svc_emb.warm("job", device)
         reporter.stage_start(len(texts), f"Embedding {len(texts)} records with jobQWEN")
         emb = svc_emb.embed_documents(
-            "job", texts, progress=lambda done, total: reporter.progress(done, total, "embedded")
+            "job", texts, device=device,
+            progress=lambda done, total: reporter.progress(done, total, "embedded")
         )
         reporter.message("Computing the similarity graph")
 
@@ -777,7 +780,9 @@ _TREE_CACHE: dict[tuple[str, str], tuple[np.ndarray, np.ndarray, list[str]]] = {
 
 
 @router.post("/cluster/build")
-async def start_cluster_build(client_slug: str, project_slug: str) -> dict:
+async def start_cluster_build(
+    client_slug: str, project_slug: str, device: str | None = None
+) -> dict:
     """Embed normalised profiles and build ONE Ward tree.
 
     Stability is deliberately NOT computed here — it depends on the chosen
@@ -803,10 +808,11 @@ async def start_cluster_build(client_slug: str, project_slug: str) -> dict:
     def work(reporter: ProgressReporter) -> dict:
         if not embeddings.is_loaded("job"):
             reporter.message("Loading the jobQWEN model (first use this session)")
-            get_embedding_service().warm("job")
+            get_embedding_service().warm("job", device)
         reporter.stage_start(len(texts), f"Embedding {len(texts)} profiles with jobQWEN")
         emb = get_embedding_service().embed_documents(
-            "job", texts, progress=lambda done, total: reporter.progress(done, total, "embedded")
+            "job", texts, device=device,
+            progress=lambda done, total: reporter.progress(done, total, "embedded")
         )
         reporter.message("Building the Ward tree")
         tree = bb.build_linkage_tree(emb)

@@ -36,22 +36,53 @@ EntityType = Literal["job", "skill", "task"]
 _ENTITY_TO_DIR = {"job": "jobQWEN", "skill": "skillQWEN", "task": "taskQWEN"}
 
 
-def _resolve_device() -> str:
+def _resolve_device(override: str | None = None) -> str:
+    """Pick the device, refusing CUDA when there is not enough free VRAM.
+
+    `torch.cuda.is_available()` is True whenever a usable driver and card exist —
+    it says nothing about whether there is memory left. On a 6GB laptop GPU shared
+    with a training run that distinction is the whole game: the old check would
+    happily select CUDA with 21MiB free, then fail on the first allocation, and a
+    CUDA OOM can take neighbouring work down with it rather than just this job.
+
+    Falling back to CPU is slower but finishes. An explicit `override` (per-run,
+    from the API) wins over the configured default so a user can keep the GPU
+    clear without restarting the server.
+    """
     import torch
 
     settings = get_settings()
-    if settings.embedding_device == "cuda" and torch.cuda.is_available():
-        return "cuda"
-    if settings.embedding_device == "cuda":
+    want = (override or settings.embedding_device or "cpu").lower()
+    if want != "cuda":
+        return "cpu"
+
+    if not torch.cuda.is_available():
         print("[embeddings] CUDA requested but not available — falling back to CPU")
-    return "cpu"
+        return "cpu"
+
+    free_bytes, total_bytes = torch.cuda.mem_get_info()
+    free_mb, total_mb = free_bytes // 1024**2, total_bytes // 1024**2
+    need_mb = settings.embedding_min_free_vram_mb
+    if free_mb < need_mb:
+        print(
+            f"[embeddings] CUDA has only {free_mb}MiB of {total_mb}MiB free, "
+            f"need ~{need_mb}MiB — falling back to CPU. Free the GPU or lower "
+            f"EMBEDDING_MIN_FREE_VRAM_MB to override."
+        )
+        return "cpu"
+
+    print(f"[embeddings] using CUDA ({free_mb}MiB of {total_mb}MiB free)")
+    return "cuda"
 
 
 _LOADED: set[str] = set()
 
 
-@lru_cache(maxsize=3)
-def _load_model(entity: EntityType) -> SentenceTransformer:
+@lru_cache(maxsize=6)
+def _load_model(entity: EntityType, device: str | None = None) -> SentenceTransformer:
+    """Cached per (entity, device). The device is part of the key because a model
+    already resident on CUDA is not usable as a CPU model — without it, asking for
+    CPU after a GPU load would silently hand back the GPU copy."""
     model_dir = MODELS_DIR / _ENTITY_TO_DIR[entity]
     if not model_dir.exists():
         raise FileNotFoundError(
@@ -60,9 +91,9 @@ def _load_model(entity: EntityType) -> SentenceTransformer:
         )
     from sentence_transformers import SentenceTransformer
 
-    device = _resolve_device()
-    print(f"[embeddings] loading {entity} model from {model_dir} on {device}...")
-    model = SentenceTransformer(str(model_dir), device=device)
+    resolved = _resolve_device(device)
+    print(f"[embeddings] loading {entity} model from {model_dir} on {resolved}...")
+    model = SentenceTransformer(str(model_dir), device=resolved)
     _LOADED.add(entity)
     return model
 
@@ -87,6 +118,7 @@ class EmbeddingService:
         *,
         batch_size: int = 32,
         progress: Callable[[int, int], None] | None = None,
+        device: str | None = None,
     ) -> np.ndarray:
         """Embed texts in 'document' mode (no query instruction prefix) — used for
         dedup/clustering, where we're comparing item-to-item, not query-to-document.
@@ -99,7 +131,7 @@ class EmbeddingService:
         Chunking does not change the result: each text is encoded independently
         and normalisation is per-vector, so the output is identical either way.
         """
-        model = _load_model(entity)
+        model = _load_model(entity, device)
         encode = lambda batch: model.encode(  # noqa: E731
             batch, batch_size=batch_size, normalize_embeddings=True, show_progress_bar=False
         )
@@ -116,7 +148,7 @@ class EmbeddingService:
             progress(min(start + _PROGRESS_CHUNK, len(texts)), len(texts))
         return np.vstack(chunks)
 
-    def warm(self, entity: EntityType) -> None:
+    def warm(self, entity: EntityType, device: str | None = None) -> None:
         """Load the model now rather than lazily inside the next encode.
 
         Callers announce "loading the model" first, so the load has to happen
@@ -124,7 +156,7 @@ class EmbeddingService:
         would occur *after* the caller had already switched the message to
         "embedding", which is the silent stretch this exists to explain.
         """
-        _load_model(entity)
+        _load_model(entity, device)
 
     def embed_query(self, entity: EntityType, text: str) -> np.ndarray:
         """Embed a single query string using the model's query instruction prompt."""

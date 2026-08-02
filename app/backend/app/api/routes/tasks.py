@@ -158,7 +158,9 @@ _TASK_TREE_CACHE: dict[tuple[str, str], tuple] = {}
 
 
 @router.post("/cluster/build")
-async def build_task_tree(client_slug: str, project_slug: str) -> dict:
+async def build_task_tree(
+    client_slug: str, project_slug: str, device: str | None = None
+) -> dict:
     svc, state = _load(client_slug, project_slug)
     tasks = state.tasks.inferred
     if len(tasks) < 3:
@@ -170,10 +172,11 @@ async def build_task_tree(client_slug: str, project_slug: str) -> dict:
     def work(reporter: ProgressReporter) -> dict:
         if not embeddings.is_loaded("task"):
             reporter.message("Loading the taskQWEN model (first use this session)")
-            get_embedding_service().warm("task")
+            get_embedding_service().warm("task", device)
         reporter.stage_start(len(texts), f"Embedding {len(texts)} tasks with taskQWEN")
         emb = get_embedding_service().embed_documents(
-            "task", texts, progress=lambda done, total: reporter.progress(done, total, "embedded")
+            "task", texts, device=device,
+            progress=lambda done, total: reporter.progress(done, total, "embedded")
         )
         reporter.message("Building the Ward tree")
         tree = bb.build_linkage_tree(emb)

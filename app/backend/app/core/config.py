@@ -47,6 +47,11 @@ class Settings(BaseSettings):
 
     # Embeddings
     embedding_device: str = "cuda"  # falls back to cpu automatically if unavailable
+    # Minimum free VRAM before CUDA is chosen. The fine-tuned Qwen3-0.6B models
+    # load in fp32 (~2.4GB of weights) plus activations, and were measured taking
+    # ~5.9GB of a 6.1GB card at batch_size 32 on multi-KB job descriptions. Below
+    # this we run on CPU rather than risk an OOM that can disturb other GPU work.
+    embedding_min_free_vram_mb: int = 3000
 
     # Clustering / stability gating defaults (see plan's methodology section)
     stability_n_perturb: int = 50

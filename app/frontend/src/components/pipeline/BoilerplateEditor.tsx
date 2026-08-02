@@ -1,8 +1,9 @@
-import { useState } from "react";
-import { Save } from "lucide-react";
+import { useRef, useState } from "react";
+import { Code2, FileUp, Save, Type } from "lucide-react";
 import type { Boilerplate } from "../../types/pipeline";
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
+import { cn } from "../../lib/cn";
 
 /**
  * Step 7's "default boiler plate documents": the fixed text that wraps every
@@ -108,6 +109,10 @@ export function BoilerplateEditor({ value, onSave, saving }: Props) {
   );
 }
 
+/** A real tag, not a stray "<" — mirrors the backend's own check so the badge the
+ *  user sees matches how the content will actually be treated. */
+const HTML_MARKUP = /<(p|div|br|ul|ol|li|strong|em|b|i|span|h[1-6]|table|a)[^>]*>/i;
+
 function Field({
   label,
   hint,
@@ -119,18 +124,78 @@ function Field({
   value: string;
   onChange: (v: string) => void;
 }) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [preview, setPreview] = useState(false);
+  const isHtml = HTML_MARKUP.test(value);
+
   return (
     <div>
-      <label className="mb-1 block text-[11px] font-extrabold uppercase tracking-wider text-text-muted">
-        {label}
-      </label>
-      <textarea
-        value={value}
-        rows={3}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full resize-y rounded-[6px] border border-border bg-card px-2 py-1.5 text-[11.5px] leading-snug text-text outline-none focus:border-accent"
+      <div className="mb-1 flex flex-wrap items-center gap-2">
+        <label className="text-[11px] font-extrabold uppercase tracking-wider text-text-muted">
+          {label}
+        </label>
+        {value.trim() && (
+          <Badge color={isHtml ? "purple" : "teal"}>
+            <span className="inline-flex items-center gap-1">
+              {isHtml ? <Code2 size={9} /> : <Type size={9} />}
+              {isHtml ? "html" : "text"}
+            </span>
+          </Badge>
+        )}
+        <span className="flex-1" />
+        <button
+          onClick={() => fileRef.current?.click()}
+          className="flex items-center gap-1 text-[10.5px] font-bold text-accent hover:underline"
+        >
+          <FileUp size={10} /> Import a file
+        </button>
+        {isHtml && (
+          <button
+            onClick={() => setPreview((v) => !v)}
+            className="text-[10.5px] font-bold text-accent hover:underline"
+          >
+            {preview ? "Edit source" : "Preview"}
+          </button>
+        )}
+      </div>
+
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".html,.htm,.txt,.md"
+        className="hidden"
+        onChange={async (e) => {
+          const f = e.target.files?.[0];
+          e.target.value = "";
+          if (f) onChange(await f.text());
+        }}
       />
-      <p className="mt-0.5 text-[11px] text-text-muted">{hint}</p>
+
+      {preview && isHtml ? (
+        // Shown as it will appear in the profile. The backend strips scripts,
+        // styles and event handlers on save; this is the author's own content
+        // previewed back to them, not third-party input.
+        <div
+          className="prose-sm max-h-48 overflow-y-auto rounded-[6px] border border-accent-border bg-card px-3 py-2 text-[11.5px] leading-relaxed text-text [&_li]:ml-4 [&_li]:list-disc [&_p]:mb-1.5"
+          dangerouslySetInnerHTML={{ __html: value }}
+        />
+      ) : (
+        <textarea
+          value={value}
+          rows={isHtml ? 6 : 3}
+          onChange={(e) => onChange(e.target.value)}
+          className={cn(
+            "w-full resize-y rounded-[6px] border border-border bg-card px-2 py-1.5 text-[11.5px] leading-snug text-text outline-none focus:border-accent",
+            isHtml && "font-mono text-[10.5px]",
+          )}
+        />
+      )}
+      <p className="mt-0.5 text-[11px] text-text-muted">
+        {hint}{" "}
+        {isHtml
+          ? "Detected as HTML — formatting is kept in the HTML and PDF versions and flattened to paragraphs in Word. Scripts and styles are removed on save."
+          : "Plain text: blank lines become paragraphs. Paste or import HTML to keep formatting."}
+      </p>
     </div>
   );
 }

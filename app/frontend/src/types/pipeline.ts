@@ -141,11 +141,28 @@ export interface StabilityBucket {
   count: number;
 }
 
-export interface TierPreview {
+/** Cluster-size spread, returned alongside both the preview and the confirmed
+ *  clusters so the same read is available before and after committing. */
+export interface SizeStats {
+  smallest?: number;
+  size_p25?: number;
+  size_median?: number;
+  size_p75?: number;
+  size_mean?: number;
+}
+
+export interface TierPreview extends SizeStats {
   tier: TierName;
   k: number;
   item_count: number;
   sizes: number[];
+  /** Sample of the source job titles under each cluster, aligned with `sizes`.
+   *  Repeats are collapsed as "Title ×N". */
+  titles?: string[][];
+  /** Every source record under each cluster, not just the sampled titles. */
+  title_counts?: number[];
+  /** Distinct titles the sample left out, per cluster. */
+  titles_omitted?: number[];
   singletons: number;
   largest: number;
   stability_included: boolean;
@@ -167,13 +184,23 @@ export interface TierClusterMember {
   moved_from: string | null;
 }
 
-export interface TierClusters {
+export interface TierClusters extends SizeStats {
   tier: TierName;
   k: number;
   gate: number;
   n_routed: number;
   n_moved: number;
-  clusters: { id: number; name: string; size: number; members: TierClusterMember[] }[];
+  singletons?: number;
+  largest?: number;
+  clusters: {
+    id: number;
+    name: string;
+    size: number;
+    members: TierClusterMember[];
+    titles?: string[];
+    title_count?: number;
+    titles_omitted?: number;
+  }[];
 }
 
 export interface ProfileRow {

@@ -107,7 +107,8 @@
       {%- if content.about_company %}
       <section>
         <h2>About {{ company_name or "the Organisation" }}</h2>
-        <p>{{ content.about_company }}</p>
+        {# pre-rendered and sanitised by services/job_profile/boilerplate.py #}
+        {{ content.about_company | safe }}
       </section>
       {%- endif %}
 
@@ -210,7 +211,7 @@
       {%- if content.diversity_statement %}
       <section>
         <h2>Diversity Statement</h2>
-        <p>{{ content.diversity_statement }}</p>
+        {{ content.diversity_statement | safe }}
       </section>
       {%- endif %}
 

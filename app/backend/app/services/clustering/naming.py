@@ -85,6 +85,26 @@ def build_cluster_block(
     return f"[{cluster_id}]{parent_note} {items}"
 
 
+# Clusters named per call. Naming a whole level in one call is what forces mutual
+# distinctiveness, so this wants to be as large as it can be — but a real client
+# taxonomy has 150+ job profiles, and one call for all of them means a giant prompt,
+# minutes of silence, and an output that overruns any sane token budget. Batching at
+# this size keeps each call a manageable unit of progress while still giving the
+# model enough siblings at once to differentiate between; names already assigned in
+# earlier batches are passed forward so distinctiveness holds across the whole level.
+NAME_BATCH = 30
+
+
+def _token_budget(n: int) -> int:
+    """Output budget for naming `n` clusters.
+
+    A name is ~10 tokens, but with adaptive thinking the reasoning shares this
+    budget and grows with the number of siblings being kept distinct. A fixed 4000
+    was the original value and truncated at around 40 clusters.
+    """
+    return min(24_000, 3_000 + 400 * n)
+
+
 def name_level(
     entity: str,
     level: str,
@@ -92,12 +112,39 @@ def name_level(
     n_expected: int,
     *,
     has_parent_context: bool = False,
+    progress=None,
 ) -> dict[int, str]:
-    """blocks: one build_cluster_block() string per cluster, in cluster-id order."""
+    """blocks: one build_cluster_block() string per cluster, in cluster-id order.
+
+    `progress(named, total)` is called after each batch — naming a large level takes
+    minutes, and without it the UI shows a stalled bar through the whole thing.
+    """
     system = _build_system_prompt(entity, level, has_parent_context=has_parent_context)
-    prompt = "Name each cluster:\n\n" + "\n".join(blocks)
-    result = llm.complete_json(prompt, system=system, json_schema=NAME_SCHEMA, effort="low", max_tokens=4000)
-    names = {c["id"]: c["name"].strip() for c in result["clusters"]}
+    names: dict[int, str] = {}
+
+    for start in range(0, len(blocks), NAME_BATCH):
+        batch = blocks[start : start + NAME_BATCH]
+        prompt = "Name each cluster:\n\n" + "\n".join(batch)
+        if names:
+            # Sequential batches, not parallel, precisely so this list exists: the
+            # model can only avoid near-duplicates it has been shown.
+            used = "; ".join(sorted(names.values()))
+            prompt = (
+                "These names are already in use by other clusters in this same "
+                f"taxonomy level. Yours must be clearly distinct from all of them:\n{used}\n\n"
+                + prompt
+            )
+        result = llm.complete_json(
+            prompt,
+            system=system,
+            json_schema=NAME_SCHEMA,
+            effort="low",
+            max_tokens=_token_budget(len(batch)),
+        )
+        names.update({c["id"]: c["name"].strip() for c in result["clusters"]})
+        if progress:
+            progress(min(len(names), n_expected), n_expected)
+
     missing = set(range(n_expected)) - set(names)
     if missing:
         print(f"  [naming] {entity}/{level}: got {len(names)}/{n_expected} clusters — missing ids {sorted(missing)}")

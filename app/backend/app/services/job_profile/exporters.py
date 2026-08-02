@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import io
 
+from app.services.job_profile import boilerplate as bp
+
 
 class PdfExportUnavailable(RuntimeError):
     """WeasyPrint's native deps (Pango/Cairo, via GTK3 on Windows) are missing."""
@@ -130,7 +132,8 @@ def render_docx(
     # ---- body sections ----
     if about_company:
         doc.add_heading(f"About {company_name or 'the Organisation'}", level=2)
-        doc.add_paragraph(about_company)
+        for para in bp.to_text(about_company):
+            doc.add_paragraph(para)
 
     if content.get("about_role"):
         doc.add_heading(heading_for("about_role", "About the Role"), level=2)
@@ -187,7 +190,10 @@ def render_docx(
 
     if diversity_statement:
         doc.add_heading("Diversity Statement", level=2)
-        doc.add_paragraph(diversity_statement)
+        # Flattened rather than inserted: python-docx has no notion of markup, so
+        # an imported HTML fragment has to become real paragraphs.
+        for para in bp.to_text(diversity_statement):
+            doc.add_paragraph(para)
 
     footer = doc.add_paragraph(
         "This job profile describes the general scope of the role and is not an "

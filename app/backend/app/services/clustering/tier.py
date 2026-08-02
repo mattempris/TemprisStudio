@@ -141,6 +141,8 @@ async def finalise(
     sc_votes: int = 3,
     route_concurrency: int = 8,
     progress=None,
+    naming_progress=None,
+    on_phase=None,
 ) -> TierResult:
     """Name the clusters, then route the items the geometry was unsure about.
 
@@ -149,19 +151,33 @@ async def finalise(
     the profile tier and carries the already-confirmed child names upward at the
     coarser tiers, which is what makes naming bottom-up: a category is named from
     the profiles it contains rather than from a family that does not exist yet.
+
+    Two separately-reported phases, because at real scale naming is minutes of work
+    on its own: `naming_progress(done, total)` covers it, then `on_phase(label,
+    total)` re-baselines the caller's progress bar before routing starts.
     """
     exemplars = bb.compute_exemplars(items.embeddings, analysis.labels)
     blocks = [
         naming.build_cluster_block(cid, [items.texts[i] for i in idxs])
         for cid, idxs in exemplars.by_cluster.items()
     ]
-    names = naming.name_level(entity, tier, blocks, analysis.k, has_parent_context=False)
+    names = naming.name_level(
+        entity, tier, blocks, analysis.k, has_parent_context=False, progress=naming_progress
+    )
 
     final = analysis.labels.copy()
     unstable = [
         i for i in range(len(items))
         if not np.isnan(analysis.stability[i]) and analysis.stability[i] < gate
     ]
+
+    if on_phase:
+        on_phase(
+            f"Re-checking {len(unstable)} uncertain {tier} assignments with the model"
+            if unstable
+            else "No uncertain assignments to re-check",
+            len(unstable),
+        )
 
     route_results: dict[int, routing.RouteResult] = {}
     if unstable:

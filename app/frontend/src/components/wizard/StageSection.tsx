@@ -16,6 +16,10 @@ interface StageSectionProps {
   onToggle: () => void;
   lockedReason?: string;
   children: ReactNode;
+  /** Settings that belong to this step but do not depend on its inputs — shown
+   *  even while the step is locked, so a template or framework can be prepared
+   *  before the pipeline reaches the step that consumes it. */
+  config?: ReactNode;
 }
 
 /**
@@ -35,8 +39,13 @@ export function StageSection({
   onToggle,
   lockedReason,
   children,
+  config,
 }: StageSectionProps) {
   const locked = state === "locked";
+  // A locked step is still worth opening when it carries settings; without this
+  // the profile template and evaluation framework were unreachable until the
+  // whole hierarchy was built, which is backwards — they are inputs to it.
+  const expandable = !locked || !!config;
 
   return (
     <section
@@ -48,12 +57,12 @@ export function StageSection({
     >
       <button
         type="button"
-        onClick={locked ? undefined : onToggle}
+        onClick={expandable ? onToggle : undefined}
         aria-expanded={expanded}
-        disabled={locked}
+        disabled={!expandable}
         className={cn(
           "flex w-full items-start gap-4 p-6 text-left",
-          !locked && "cursor-pointer",
+          expandable && "cursor-pointer",
         )}
       >
         <span
@@ -84,7 +93,7 @@ export function StageSection({
           )}
         </span>
 
-        {!locked && (
+        {expandable && (
           <ChevronDown
             size={18}
             className={cn("mt-1 shrink-0 text-text-muted transition-transform", expanded && "rotate-180")}
@@ -92,7 +101,20 @@ export function StageSection({
         )}
       </button>
 
-      {expanded && !locked && <div className="border-t border-border px-6 py-5">{children}</div>}
+      {expanded && (
+        <div className="border-t border-border px-6 py-5">
+          {config}
+          {locked ? (
+            config && (
+              <p className="mt-4 rounded-[10px] border border-border bg-panel px-4 py-3 text-[12.5px] text-text-secondary">
+                {lockedReason} The settings above can be prepared now.
+              </p>
+            )
+          ) : (
+            <div className={config ? "mt-4" : undefined}>{children}</div>
+          )}
+        </div>
+      )}
     </section>
   );
 }

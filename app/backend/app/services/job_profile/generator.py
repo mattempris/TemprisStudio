@@ -15,6 +15,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from app.core.config import DEFAULTS_DIR
 from app.services import llm
+from app.services.job_profile import boilerplate as bp
 from app.services.job_profile import template_config as tpl
 
 PROFILE_SCHEMA = {
@@ -208,10 +209,12 @@ def render_html(
     """
     r, g, b = _hex_to_rgb(accent_color)
     ctx = dict(tpl.filter_content(content, sections) if sections else content)
+    # Either field may be plain text or an imported HTML fragment; both end up as
+    # sanitised HTML here so the template can emit them directly.
     if about_company is not None:
-        ctx["about_company"] = about_company
+        ctx["about_company"] = bp.to_html(about_company)
     if diversity_statement is not None:
-        ctx["diversity_statement"] = diversity_statement
+        ctx["diversity_statement"] = bp.to_html(diversity_statement)
 
     template = _get_env().get_template("job_profile.html.j2")
     return template.render(

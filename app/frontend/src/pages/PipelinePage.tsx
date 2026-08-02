@@ -361,6 +361,7 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
               state={st}
               summary={stageSummaryLine(s.id, summary, downstream)}
               lockedReason={lockedReason(s.id)}
+              config={s.id === "profiles" ? profileConfig() : undefined}
               expanded={expanded === s.id}
               onToggle={() => setExpanded(expanded === s.id ? null : s.id)}
             >
@@ -399,6 +400,58 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
       </div>
     </div>
   );
+
+  /** Step 8's settings — the profile template, its boilerplate and the evaluation
+   *  framework. Rendered through StageSection's config slot so they are reachable
+   *  before the hierarchy is finished, since they are inputs to it rather than
+   *  results of it. */
+  function profileConfig() {
+    return (
+      <div className="space-y-3">
+            {/* Step 7 opens with "User defines job profile template, Job
+                Evaluation Framework and level names / JE score mapping", so both
+                are editable here — before the run that consumes them. */}
+            <Collapsible
+              title="Document boilerplate"
+              subtitle="Company description, equality statement and accent colour applied to every profile."
+            >
+              <LazyBoilerplate
+                load={api.getBoilerplate}
+                save={api.putBoilerplate}
+                onSaved={() => void refresh()}
+              />
+            </Collapsible>
+
+            <Collapsible
+              title="Job profile template"
+              subtitle="Which sections each profile has, their headings and order, and the guidance used to write them."
+            >
+              <LazyProfileTemplate
+                load={() => api.getProfileTemplate()}
+                loadDefaults={() => api.getProfileTemplate(true)}
+                save={api.putProfileTemplate}
+                profileCount={summary!.job_profiles}
+                onSaved={(n) => {
+                  if (n > 0) setNotice(`Template saved. ${n} existing profile${n === 1 ? "" : "s"} marked stale — regenerate to apply it.`);
+                  void refresh();
+                }}
+              />
+            </Collapsible>
+
+            <Collapsible
+              title="Job evaluation framework"
+              subtitle="Domains, sub-factor weights, scoring rubric, and the level names each score maps to."
+            >
+              <LazyJEFramework
+                load={() => api.getJeFramework()}
+                loadDefaults={() => api.getJeFramework(true)}
+                save={api.putJeFramework}
+                hasResults={summary!.je_results > 0}
+              />
+            </Collapsible>
+      </div>
+    );
+  }
 
   function renderStage(id: string) {
     // Only the stage that started the job shows its progress.
@@ -567,17 +620,15 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
               status={st}
               preview={api_t.preview}
               gatePreview={api_t.gate}
-              onBuild={
-                tier === "profile"
-                  ? async () => {
-                      // The profile tier needs its embeddings before a tree exists.
-                      await api.startClusterBuild({
-                        embedding_model: jobModel,
-                        device: forceCpu ? "cpu" : null,
-                      });
-                      return api_t.build();
-                    }
-                  : api_t.build
+              // One call: the endpoint embeds when the tier needs it. Chaining two
+              // jobs here could not work — the registry allows one per project, so
+              // the second always 409'd while the first ran on unattached.
+              onBuild={() =>
+                api_t.build(
+                  tier === "profile"
+                    ? { embedding_model: jobModel, device: forceCpu ? "cpu" : null }
+                    : undefined,
+                )
               }
               onAnalyse={api_t.analyse}
               onConfirm={(k, gate) => api_t.confirm(k, gate, workers)}
@@ -594,48 +645,6 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
       case "profiles":
         return (
           <div className="space-y-4">
-            {/* Step 7 opens with "User defines job profile template, Job
-                Evaluation Framework and level names / JE score mapping", so both
-                are editable here — before the run that consumes them. */}
-            <Collapsible
-              title="Document boilerplate"
-              subtitle="Company description, equality statement and accent colour applied to every profile."
-            >
-              <LazyBoilerplate
-                load={api.getBoilerplate}
-                save={api.putBoilerplate}
-                onSaved={() => void refresh()}
-              />
-            </Collapsible>
-
-            <Collapsible
-              title="Job profile template"
-              subtitle="Which sections each profile has, their headings and order, and the guidance used to write them."
-            >
-              <LazyProfileTemplate
-                load={() => api.getProfileTemplate()}
-                loadDefaults={() => api.getProfileTemplate(true)}
-                save={api.putProfileTemplate}
-                profileCount={summary!.job_profiles}
-                onSaved={(n) => {
-                  if (n > 0) setNotice(`Template saved. ${n} existing profile${n === 1 ? "" : "s"} marked stale — regenerate to apply it.`);
-                  void refresh();
-                }}
-              />
-            </Collapsible>
-
-            <Collapsible
-              title="Job evaluation framework"
-              subtitle="Domains, sub-factor weights, scoring rubric, and the level names each score maps to."
-            >
-              <LazyJEFramework
-                load={() => api.getJeFramework()}
-                loadDefaults={() => api.getJeFramework(true)}
-                save={api.putJeFramework}
-                hasResults={summary!.je_results > 0}
-              />
-            </Collapsible>
-
             <div className="space-y-3">
               <Button
                 variant="primary"

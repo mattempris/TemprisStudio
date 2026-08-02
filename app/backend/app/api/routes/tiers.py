@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
 from app.models.project_state import ProjectState
-from app.services import embeddings, llm
+from app.services import embeddings, llm, normalization
 from app.services.clustering import backbone as bb
 from app.services.clustering import tier as tier_engine
 from app.services.clustering import tier_state
@@ -48,6 +48,90 @@ INLINE_STABILITY_LIMIT = 300
 # cache costs a rebuild rather than correctness.
 _TIER_CACHE: dict[tuple[str, str, str], tuple[tier_engine.TierItems, np.ndarray]] = {}
 _ANALYSIS_CACHE: dict[tuple[str, str, str], tier_engine.TierAnalysis] = {}
+
+
+# How many job titles travel with each cluster for the hover tooltip. Enough to
+# recognise what a cluster is; not the whole membership, which at the family tier
+# would be hundreds of titles per cluster on every slider move.
+TOOLTIP_TITLES = 12
+
+
+def _title_map(state: ProjectState) -> dict[str, list[str]]:
+    """Source job titles beneath every item id, at every tier.
+
+    Hovering a cluster has to answer "which real jobs are actually in here?", and at
+    the category and family tiers that means resolving all the way down rather than
+    listing the child clusters' names — a family called "Finance" containing three
+    categories tells you nothing you did not already know.
+
+    Built in tier order so each tier can reuse the tier below's resolution: profile
+    items resolve through their dedupe group to raw record titles, and each coarser
+    tier concatenates whatever its children resolved to.
+    """
+    titles = {r.id: (r.job_title or r.id) for r in state.raw_records}
+    groups = {g.group_id: g.member_ids for g in state.dedupe_groups}
+
+    out: dict[str, list[str]] = {}
+    for p in state.normalized_profiles:
+        members = groups.get(p.id, [p.id])
+        out[p.id] = [titles.get(m, m) for m in members]
+
+    for t in tier_engine.TIERS:
+        rec = state.clustering_tiers.get(t)
+        if rec is None:
+            break  # nothing above an unconfirmed tier can resolve either
+        for m in rec.members:
+            out.setdefault(f"{t}:{m.final_cluster_id}", []).extend(out.get(m.item_id, []))
+    return out
+
+
+def _title_sample(titles: list[str]) -> dict:
+    """A readable sample of a cluster's job titles, plus how much was left out.
+
+    Duplicates are collapsed with a multiplier rather than listed: a dedupe group of
+    18 identically-titled branch roles is one line reading "... ×18", where printing
+    it 18 times would fill the whole tooltip and say less.
+    """
+    counts: dict[str, int] = {}
+    for t in titles:
+        counts[t] = counts.get(t, 0) + 1
+    ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    shown = ordered[:TOOLTIP_TITLES]
+    return {
+        "titles": [f"{t} ×{n}" if n > 1 else t for t, n in shown],
+        "title_count": len(titles),          # every source record, for the heading
+        "titles_omitted": len(ordered) - len(shown),
+    }
+
+
+def _titles_by_cluster(
+    items: tier_engine.TierItems, labels: np.ndarray, k: int, state: ProjectState
+) -> list[dict]:
+    """Per-cluster title samples, aligned with the size array."""
+    resolved = _title_map(state)
+    buckets: list[list[str]] = [[] for _ in range(k)]
+    for i, item_id in enumerate(items.ids):
+        buckets[int(labels[i])].extend(resolved.get(item_id, [item_id]))
+    return [_title_sample(b) for b in buckets]
+
+
+def _size_stats(sizes: list[int]) -> dict:
+    """Spread of cluster sizes.
+
+    Mean and largest alone hide the shape: 40 clusters averaging 4 members reads the
+    same whether every cluster has 4 or one has 90 and the rest have 1. The quartiles
+    are what make an unbalanced cut visible before it is confirmed.
+    """
+    if not sizes:
+        return {}
+    arr = np.asarray(sizes, dtype=float)
+    return {
+        "smallest": int(arr.min()),
+        "size_p25": round(float(np.percentile(arr, 25)), 1),
+        "size_median": round(float(np.percentile(arr, 50)), 1),
+        "size_p75": round(float(np.percentile(arr, 75)), 1),
+        "size_mean": round(float(arr.mean()), 1),
+    }
 
 
 def _load(client_slug: str, project_slug: str) -> tuple[ProjectService, ProjectState]:
@@ -152,23 +236,104 @@ def tier_status(client_slug: str, project_slug: str, tier: str) -> dict:
 
 
 @router.post("/build")
-async def tier_build(client_slug: str, project_slug: str, tier: str) -> dict:
-    """Assemble the tier's items and build its Ward tree, so previews are instant."""
+async def tier_build(
+    client_slug: str,
+    project_slug: str,
+    tier: str,
+    device: str | None = None,
+    embedding_model: str | None = None,
+) -> dict:
+    """Get this tier ready to cluster: embed if it needs embedding, then build its
+    Ward tree so previews are instant.
+
+    The profile tier embeds the normalised job summaries; the coarser tiers reuse
+    centroids from the tier below and never embed. This is one job on purpose —
+    embedding used to be a separate endpoint the client called first, and since the
+    registry allows one job per project the second call always lost with a 409
+    while the embed ran on regardless, unattached and invisible.
+    """
     _check_tier(tier)
     svc, state = _load(client_slug, project_slug)
 
+    if tier == "profile" and not state.normalized_profiles:
+        raise HTTPException(400, "no normalised jobs yet — run the normalise step first")
+
+    try:
+        spec = embeddings.resolve_model("job", embedding_model)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
     def work(reporter: ProgressReporter) -> dict:
-        reporter.message(f"Assembling the {tier} tier's items")
+        if tier == "profile":
+            _embed_profiles(svc, state, reporter, spec.name, device, embedding_model)
+        reporter.message(f"Grouping into {tier} clusters")
         items, _ = _items_and_tree(svc, state, tier)
         n = len(items)
-        reporter.stage_complete({"items": n})
-        return {
+        summary = {
             "items": n,
             "suggested_k": max(2, min(n - 1, round(n / {"profile": 6, "category": 5, "family": 4}[tier]))),
             "max_k": n - 1,
         }
+        reporter.stage_complete(summary)
+        return summary
 
     return _start_job(client_slug, project_slug, _STAGE[tier], work)
+
+
+def _embed_profiles(
+    svc: ProjectService,
+    state: ProjectState,
+    reporter: ProgressReporter,
+    model_name: str,
+    device: str | None,
+    embedding_model: str | None,
+) -> None:
+    """Embed the normalised job summaries, skipping the work if it is already done
+    with the same model.
+
+    Re-embedding 916 jobs is minutes of GPU time, so it is worth not repeating —
+    but only when the vectors came from the model now selected. The fingerprint is
+    the only thing that can tell, since both job models emit 1024 dimensions.
+    """
+    client, project = state.meta.client_slug, state.meta.project_slug
+    index_path = f"{project}/artifacts/cluster_embeddings_index.json"
+    want = get_embedding_service().fingerprint("job", embedding_model)
+
+    existing = svc.load_index(client, index_path)
+    if existing is not None and svc.load_index_fingerprint(client, index_path) == want:
+        expected = [p.id for p in state.normalized_profiles]
+        if existing == expected:
+            reporter.message(f"Reusing existing {model_name} embeddings for {len(existing)} jobs")
+            return
+
+    texts, ids = [], []
+    for p in state.normalized_profiles:
+        ids.append(p.id)
+        texts.append(
+            normalization.NormalizedResult(
+                purpose_statement=p.purpose_statement,
+                key_tasks=p.key_tasks,
+                management_line=p.management_line,
+                budget_responsibility=p.budget_responsibility,
+            ).embedding_text()
+        )
+
+    svc_emb = get_embedding_service()
+    if not embeddings.is_loaded("job", embedding_model):
+        reporter.message(f"Loading the {model_name} model (first use this session)")
+        svc_emb.warm("job", device, embedding_model)
+
+    reporter.stage_start(len(texts), f"Embedding {len(texts)} normalised job summaries with {model_name}")
+    emb = svc_emb.embed_documents(
+        "job", texts, device=device, model=embedding_model,
+        progress=lambda done, total: reporter.progress(done, total, "embedded"),
+    )
+    svc.save_array(client, project, "cluster_embeddings", emb)
+    svc.save_index(client, project, "cluster_embeddings", ids, model_fingerprint=want)
+    # A fresh embedding invalidates any tier tree cached from the old vectors.
+    for t in tier_engine.TIERS:
+        _TIER_CACHE.pop((client, project, t), None)
+        _ANALYSIS_CACHE.pop((client, project, t), None)
 
 
 @router.get("/preview")
@@ -188,13 +353,18 @@ def tier_preview(client_slug: str, project_slug: str, tier: str, k: int) -> dict
 
     labels = bb.cut_tree(tree, k)
     sizes = np.bincount(labels, minlength=int(labels.max()) + 1).tolist()
+    samples = _titles_by_cluster(items, labels, len(sizes), state)
     out: dict = {
         "tier": tier,
         "k": k,
         "item_count": len(items),
         "sizes": sizes,
+        "titles": [s["titles"] for s in samples],
+        "title_counts": [s["title_count"] for s in samples],
+        "titles_omitted": [s["titles_omitted"] for s in samples],
         "singletons": sum(1 for s in sizes if s == 1),
         "largest": max(sizes) if sizes else 0,
+        **_size_stats(sizes),
         "stability_included": False,
     }
 
@@ -313,9 +483,11 @@ async def tier_confirm(
             _ANALYSIS_CACHE[key] = analysis
 
         n_route = analysis.routed_count(req.gate)
+        # Naming and routing are reported as two phases. They used to share one bar
+        # sized to the routed count, so naming — which at 150 clusters is minutes of
+        # sequential calls — showed as a bar frozen at zero.
         reporter.stage_start(
-            max(1, n_route),
-            f"Naming {req.k} {tier} clusters, then routing {n_route} uncertain items",
+            req.k, f"Naming {req.k} {tier} clusters ({n_route} uncertain items to re-check after)"
         )
         result = asyncio.run(
             tier_engine.finalise(
@@ -325,6 +497,8 @@ async def tier_confirm(
                 sc_votes=settings.self_consistency_votes,
                 route_concurrency=_workers,
                 progress=reporter.pmap_callback(),
+                naming_progress=lambda done, total: reporter.progress(done, total, "named"),
+                on_phase=lambda label, total: reporter.stage_start(max(1, total), label),
             )
         )
 
@@ -368,6 +542,11 @@ def tier_clusters(client_slug: str, project_slug: str, tier: str) -> dict:
         raise HTTPException(409, f"the {tier} tier has not been confirmed yet")
 
     label_for = _member_labeller(state, tier)
+    resolved = _title_map(state)
+    titles_for: dict[int, list[str]] = {}
+    for m in rec.members:
+        titles_for.setdefault(m.final_cluster_id, []).extend(resolved.get(m.item_id, []))
+
     by_cluster: dict[int, list[dict]] = {}
     for m in rec.members:
         by_cluster.setdefault(m.final_cluster_id, []).append(
@@ -389,14 +568,22 @@ def tier_clusters(client_slug: str, project_slug: str, tier: str) -> dict:
             "name": rec.names.get(cid, "?"),
             "members": sorted(by_cluster.get(cid, []), key=lambda x: x["label"]),
             "size": len(by_cluster.get(cid, [])),
+            # The underlying source job titles, for the hover tooltip. At the profile
+            # tier these expand a member's dedupe group; above it they resolve through
+            # every tier below.
+            **_title_sample(titles_for.get(cid, [])),
         }
         for cid in sorted(rec.names)
     ]
     clusters.sort(key=lambda c: -c["size"])
+    sizes = [c["size"] for c in clusters]
     return {
         "tier": tier, "k": rec.k, "gate": rec.gate,
         "n_routed": rec.n_routed, "n_moved": rec.n_moved,
         "clusters": clusters,
+        **_size_stats(sizes),
+        "singletons": sum(1 for s in sizes if s == 1),
+        "largest": max(sizes) if sizes else 0,
     }
 
 

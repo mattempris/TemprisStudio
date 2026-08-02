@@ -1,9 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Check, ChevronRight, Play, Sparkles } from "lucide-react";
-import type { JobHandle, TierClusters, TierPreview, TierStatus } from "../../types/pipeline";
+import type {
+  JobHandle,
+  SizeStats,
+  TierClusters,
+  TierName,
+  TierPreview,
+  TierStatus,
+} from "../../types/pipeline";
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
+import { Collapsible } from "../ui/Collapsible";
+import { Tooltip, TitleListTooltip } from "../ui/Tooltip";
 import { cn } from "../../lib/cn";
+
+/** Every tier resolves down to real job titles, so say which relationship it is. */
+const TOOLTIP_SUBHEADING: Record<TierName, string> = {
+  profile: "Source job titles:",
+  category: "Job titles beneath this category:",
+  family: "Job titles beneath this family:",
+};
 
 /**
  * One tier of the hierarchy — used three times, for profiles, categories and
@@ -90,17 +106,27 @@ export function TierClusterStage({
     return () => clearTimeout(t);
   }, [k, status.built, fetchPreview]);
 
-  // The gate only needs a round-trip when stability was computed by an explicit
-  // analyse pass; when it came back with the preview the numbers are already here.
+  // Stability is known either because the preview computed it inline (small tiers)
+  // or because an analyse pass has run at this exact k. The second half matters:
+  // the analyse job's results live server-side, so without it a large tier finished
+  // its bootstrap and then showed nothing — the gate slider never appeared and the
+  // "Assess stability" button sat there as if the pass had not happened.
+  const analysed = status.analysed_k === k;
+  const stabilityKnown = !!result?.stability_included || analysed;
+  const needsAnalyse = !!status.built && !status.stability_inline && !stabilityKnown;
+
   useEffect(() => {
-    if (!result?.stability_included) return;
+    if (!stabilityKnown) return;
     const t = setTimeout(() => {
       void gatePreview(gate)
-        .then((r) => setResult((prev) => (prev ? { ...prev, ...r } : r)))
+        // Merged onto the preview, never used in place of it: the gate response
+        // carries only the stability fields, so adopting it wholesale left the
+        // component with no `sizes` and crashed the step on load.
+        .then((r) => setResult((prev) => (prev ? { ...prev, ...r } : prev)))
         .catch(() => {});
     }, 150);
     return () => clearTimeout(t);
-  }, [gate, result?.stability_included, result?.k, gatePreview]);
+  }, [gate, stabilityKnown, result?.k, gatePreview]);
 
   const refreshClusters = useCallback(async () => {
     if (!status.confirmed) return;
@@ -123,9 +149,6 @@ export function TierClusterStage({
       </p>
     );
   }
-
-  const stabilityKnown = !!result?.stability_included;
-  const needsAnalyse = !!status.built && !status.stability_inline && !stabilityKnown;
 
   return (
     <div className="space-y-4">
@@ -165,13 +188,23 @@ export function TierClusterStage({
             {result && result.k === k && (
               <div className="mt-1.5 flex flex-wrap gap-1">
                 {result.sizes.map((size, i) => (
-                  <span
+                  <Tooltip
                     key={i}
-                    title={`Cluster ${i}: ${size}`}
-                    className="rounded-sm bg-accent-bg px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-accent"
+                    width={330}
+                    content={
+                      <TitleListTooltip
+                        heading={`Group ${i + 1} · ${size} ${status.item_noun}`}
+                        subheading={TOOLTIP_SUBHEADING[status.tier]}
+                        titles={result.titles?.[i] ?? []}
+                        total={result.title_counts?.[i] ?? 0}
+                        omitted={result.titles_omitted?.[i] ?? 0}
+                      />
+                    }
                   >
-                    {size}
-                  </span>
+                    <span className="cursor-default rounded-sm bg-accent-bg px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-accent">
+                      {size}
+                    </span>
+                  </Tooltip>
                 ))}
               </div>
             )}
@@ -179,15 +212,9 @@ export function TierClusterStage({
 
           {result && result.k === k && (
             <div className="flex flex-wrap gap-x-6 gap-y-2 rounded-[10px] border border-border bg-panel px-4 py-3">
-              <Stat label="Singletons" value={result.singletons} />
-              <Stat label="Largest" value={result.largest} />
+              <SizeStatRow stats={result} singletons={result.singletons} largest={result.largest} />
               {result.mean_stability != null && (
                 <Stat label="Mean stability" value={result.mean_stability.toFixed(2)} />
-              )}
-              {result.singletons > result.sizes.length / 2 && (
-                <p className="w-full text-[11.5px] text-warning">
-                  Over half these clusters hold a single item — consider fewer.
-                </p>
               )}
             </div>
           )}
@@ -267,6 +294,13 @@ export function TierClusterStage({
                 {(result?.n_routed ?? 0) === 0 &&
                   " Nothing needs routing at this gate; confirming will just name the clusters."}
               </p>
+
+              <StabilityGuidance
+                noun={status.item_noun}
+                gate={gate}
+                pctRouted={result?.pct_routed ?? 0}
+                meanStability={result?.mean_stability ?? null}
+              />
             </div>
           )}
 
@@ -297,7 +331,14 @@ export function TierClusterStage({
 
           {progress}
 
-          {clusters && <ClusterList data={clusters} onRename={onRename} onRenamed={refreshClusters} />}
+          {clusters && (
+            <ClusterList
+              data={clusters}
+              itemNoun={status.item_noun}
+              onRename={onRename}
+              onRenamed={refreshClusters}
+            />
+          )}
         </>
       )}
     </div>
@@ -313,12 +354,127 @@ function Stat({ label, value }: { label: string; value: string | number }) {
   );
 }
 
+/**
+ * How to read the stability numbers.
+ *
+ * Two parts, because they answer different questions. The one-line read is about
+ * *this* cut and changes as the gate moves; the collapsible explains what the score
+ * is at all. Without the second part the gate is a slider with no units — and the
+ * defaults it ships with come from a real measurement, not a guess, which is worth
+ * saying rather than leaving the user to discover by trial.
+ */
+function StabilityGuidance({
+  noun,
+  gate,
+  pctRouted,
+  meanStability,
+}: {
+  noun: string;
+  gate: number;
+  pctRouted: number;
+  meanStability: number | null;
+}) {
+  const read =
+    pctRouted === 0
+      ? `Every ${noun.replace(/s$/, "")} sits above the gate: the grouping is stable and nothing needs a second opinion.`
+      : pctRouted < 15
+        ? `A small tail is uncertain. This is the usual shape — spend is low and the clusters that come back are largely the geometry's own.`
+        : pctRouted < 40
+          ? `A meaningful minority is uncertain, which is normal for a mixed workforce: cross-functional and generalist roles genuinely sit between groups.`
+          : `Most items are uncertain at this gate. Either the cluster count is fighting the data, or the gate is set high enough to re-check assignments the model will simply confirm — try lowering it before paying for all of these.`;
+
+  return (
+    <div className="mt-3 space-y-2 border-t border-border pt-2.5">
+      <p className="text-[11.5px] leading-snug text-text-secondary">
+        {meanStability != null && (
+          <>
+            Mean stability <span className="font-bold tabular-nums text-text">{meanStability.toFixed(2)}</span>.{" "}
+          </>
+        )}
+        {read}
+      </p>
+
+      <Collapsible title="How to read stability" subtitle="What the score measures, and where the default gate comes from">
+        <div className="space-y-2 text-[11.5px] leading-relaxed text-text-secondary">
+          <p>
+            Each item's score is how often it lands with the <em>same peers</em> when the
+            grouping is rebuilt from 50 random 90% samples of the data. 1.00 means it
+            grouped with the same items every single time; 0.20 means its placement
+            depends on which items happen to be present.
+          </p>
+          <p>
+            It measures <strong>confidence in the placement, not quality of the role</strong>.
+            A low score is not a data problem to fix — role descriptions in a single
+            organisation sit at roughly 0.73–0.75 mean pairwise similarity, so genuinely
+            cross-functional roles sit between groups no matter which algorithm is used.
+            That tail is what the model is for.
+          </p>
+          <ul className="ml-4 list-disc space-y-1">
+            <li>
+              <strong>Above 0.80</strong> — unambiguous. Re-checking these wastes money;
+              the model almost always confirms what the geometry already said.
+            </li>
+            <li>
+              <strong>0.55–0.80</strong> — the useful band. Placement is defensible but not
+              obvious, and a model re-check changes a real fraction of it.
+            </li>
+            <li>
+              <strong>Below 0.55</strong> — genuinely ambiguous. Worth re-checking, and worth
+              reading afterwards: a cluster of items that all route with low confidence
+              usually means a group is <em>missing</em> from the taxonomy rather than
+              mis-assigned.
+            </li>
+          </ul>
+          <p>
+            The default gate of <strong>0.58</strong> comes from a sweep across 0.55/0.60/0.70
+            on a 2,736-role build: 0.70 sent far more items and changed almost nothing extra.
+            Currently at <strong className="tabular-nums">{gate.toFixed(2)}</strong>.
+          </p>
+        </div>
+      </Collapsible>
+    </div>
+  );
+}
+
+/**
+ * The spread of cluster sizes. Quartiles rather than just mean and largest,
+ * because the mean hides the shape: 40 clusters averaging 4 members looks the same
+ * whether every cluster holds 4 or one holds 90 and the rest hold 1.
+ *
+ * Single-member clusters are reported as a plain count with no warning attached — a
+ * job that genuinely has no near neighbours is a legitimate profile of one, not a
+ * sign the cluster count is wrong.
+ */
+function SizeStatRow({
+  stats,
+  singletons,
+  largest,
+}: {
+  stats: SizeStats;
+  singletons: number;
+  largest: number;
+}) {
+  return (
+    <>
+      {stats.smallest != null && <Stat label="Smallest" value={stats.smallest} />}
+      {stats.size_p25 != null && <Stat label="p25" value={stats.size_p25} />}
+      {stats.size_median != null && <Stat label="Median" value={stats.size_median} />}
+      {stats.size_p75 != null && <Stat label="p75" value={stats.size_p75} />}
+      <Stat label="Largest" value={largest} />
+      {stats.size_mean != null && <Stat label="Mean" value={stats.size_mean} />}
+      <Stat label="Single-item" value={singletons} />
+    </>
+  );
+}
+
 function ClusterList({
   data,
+  itemNoun,
   onRename,
   onRenamed,
 }: {
   data: TierClusters;
+  itemNoun: string;
   onRename: (id: number, name: string) => Promise<unknown>;
   onRenamed: () => void;
 }) {
@@ -331,6 +487,15 @@ function ClusterList({
       <p className="text-[11px] font-extrabold uppercase tracking-wider text-text-muted">
         {data.clusters.length} clusters · {data.n_moved} moved by the model
       </p>
+      {data.size_median != null && (
+        <div className="flex flex-wrap gap-x-6 gap-y-2 rounded-[10px] border border-border bg-panel px-4 py-3">
+          <SizeStatRow
+            stats={data}
+            singletons={data.singletons ?? 0}
+            largest={data.largest ?? 0}
+          />
+        </div>
+      )}
       <ul className="space-y-1">
         {data.clusters.map((c) => (
           <li key={c.id} className="overflow-hidden rounded-[10px] border border-border bg-card">
@@ -359,16 +524,34 @@ function ClusterList({
                   className="min-w-0 flex-1 rounded-[6px] border border-accent bg-card px-2 py-0.5 text-[12.5px] font-semibold text-text outline-none"
                 />
               ) : (
-                <button
-                  onClick={() => {
-                    setEditing(c.id);
-                    setDraft(c.name);
-                  }}
-                  title="Click to rename"
-                  className="min-w-0 flex-1 truncate text-left text-[12.5px] font-semibold text-text hover:text-accent"
+                // Hovering the name shows the underlying job titles — the question
+                // you actually have when reading a generated cluster name is "what
+                // is in here?", and expanding the row to find out loses your place
+                // in a list of 150.
+                <Tooltip
+                  className="min-w-0 flex-1"
+                  width={300}
+                  content={
+                    <TitleListTooltip
+                      heading={`${c.size} ${itemNoun}`}
+                      subheading={TOOLTIP_SUBHEADING[data.tier]}
+                      titles={c.titles ?? []}
+                      total={c.title_count ?? 0}
+                      omitted={c.titles_omitted ?? 0}
+                    />
+                  }
                 >
-                  {c.name}
-                </button>
+                  <button
+                    onClick={() => {
+                      setEditing(c.id);
+                      setDraft(c.name);
+                    }}
+                    title="Click to rename"
+                    className="block w-full truncate text-left text-[12.5px] font-semibold text-text hover:text-accent"
+                  >
+                    {c.name}
+                  </button>
+                </Tooltip>
               )}
               <span className="shrink-0 text-[11px] tabular-nums text-text-muted">{c.size}</span>
             </div>

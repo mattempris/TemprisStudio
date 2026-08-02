@@ -45,6 +45,28 @@ class LLMTransientError(RuntimeError):
     """Retryable failure that exhausted the retry budget (429/5xx/network)."""
 
 
+class LLMTruncatedError(LLMTransientError):
+    """The response filled `max_tokens` and stopped mid-output.
+
+    A subclass because callers legitimately treat it as "try again", but retrying
+    the *identical* request cannot work: given the same prompt and the same budget
+    the model truncates again. It used to be a plain LLMTransientError, which meant
+    a naming call over 150 clusters paid for four identical truncated responses,
+    slept 8+16+24s between them, and then failed — looking from the UI like a hang
+    followed by an unexplained error. `complete_json` now grows the budget instead.
+    """
+
+    def __init__(self, message: str, *, max_tokens: int) -> None:
+        super().__init__(message)
+        self.max_tokens = max_tokens
+
+
+# Ceiling for the automatic budget escalation below. Beyond this the problem is
+# the request (too many items in one call), not the budget, and silently paying
+# for ever-larger responses would hide that.
+MAX_TOKEN_CEILING = 32_000
+
+
 # Split by whether a retry could plausibly succeed. The SDK already retries
 # 429/5xx a couple of times internally; this outer loop adds longer backoff for
 # the sustained-overload case that a pipeline of hundreds of calls will hit.
@@ -180,11 +202,13 @@ def complete(
             with client.messages.stream(**kwargs) as stream:
                 resp = stream.get_final_message()
             if resp.stop_reason == "max_tokens":
-                # Truncated mid-JSON. Surface it as retryable rather than
-                # letting a half-object reach the parser as a mystery failure.
-                raise LLMTransientError(
+                # Truncated mid-JSON. Its own exception type, because it is the one
+                # "transient" failure that is actually deterministic — see
+                # LLMTruncatedError.
+                raise LLMTruncatedError(
                     f"response hit max_tokens ({max_tokens}) and was truncated — "
-                    "raise max_tokens for this call"
+                    "raise max_tokens for this call",
+                    max_tokens=max_tokens,
                 )
             return _response_text(resp)
         except LLMTransientError:
@@ -220,13 +244,14 @@ def complete_json(
     # transient. Previously this passed retries=1 into complete() and only caught
     # parse errors, so a single 529 killed the call outright despite retries=4.
     last_err: Exception | None = None
+    budget = max_tokens
     for attempt in range(retries):
         try:
             text = complete(
                 prompt,
                 system=system,
                 model=model,
-                max_tokens=max_tokens,
+                max_tokens=budget,
                 retries=1,  # transport backoff is handled by this loop
                 json_schema=json_schema,
                 effort=effort,
@@ -235,6 +260,15 @@ def complete_json(
             return parse_json(text)
         except LLMRequestError:
             raise  # malformed request — no amount of retrying fixes it
+        except LLMTruncatedError as e:
+            # Deterministic, so grow the budget rather than re-paying for the same
+            # truncated response. No backoff: there is nothing transient to wait out.
+            last_err = e
+            if budget >= MAX_TOKEN_CEILING:
+                raise
+            budget = min(MAX_TOKEN_CEILING, budget * 2)
+            with _print_lock:
+                print(f"  [llm] output truncated — retrying with max_tokens={budget}")
         except (LLMTransientError, ValueError) as e:
             last_err = e
             kind = "JSON parse" if isinstance(e, ValueError) else "transport"
@@ -320,8 +354,21 @@ async def acomplete_json(
             async with client.messages.stream(**kwargs) as stream:
                 resp = await stream.get_final_message()
             if resp.stop_reason == "max_tokens":
-                raise ValueError(f"response truncated at max_tokens={max_tokens}")
+                # Same escalation as the sync path: a repeat at the same budget
+                # truncates identically, so grow it in place instead of retrying.
+                if kwargs["max_tokens"] < MAX_TOKEN_CEILING:
+                    kwargs["max_tokens"] = min(MAX_TOKEN_CEILING, kwargs["max_tokens"] * 2)
+                    raise ValueError(
+                        f"response truncated — retrying at max_tokens={kwargs['max_tokens']}"
+                    )
+                raise LLMTruncatedError(
+                    f"response truncated at max_tokens={kwargs['max_tokens']} (ceiling) — "
+                    "the request is too large for one call",
+                    max_tokens=int(kwargs["max_tokens"]),
+                )
             return parse_json(_response_text(resp))
+        except LLMTruncatedError:
+            raise  # at the ceiling — retrying cannot help
         except _NON_RETRYABLE as e:
             raise LLMRequestError(f"{type(e).__name__}: {e}") from e
         except (*_RETRYABLE, ValueError) as e:

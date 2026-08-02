@@ -182,7 +182,11 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
       const t = `${base}/cluster/tier/${tier}`;
       return {
         status: () => request<TierStatus>(`${t}/status`),
-        build: () => request<JobHandle>(`${t}/build`, { method: "POST" }),
+        build: (opts?: { device?: string | null; embedding_model?: string | null }) =>
+          request<JobHandle>(
+            `${t}/build${qs({ device: opts?.device, embedding_model: opts?.embedding_model })}`,
+            { method: "POST" },
+          ),
         preview: (k: number) => request<TierPreview>(`${t}/preview?k=${k}`),
         analyse: (k: number) =>
           request<JobHandle>(`${t}/analyse`, { method: "POST", body: JSON.stringify({ k }) }),

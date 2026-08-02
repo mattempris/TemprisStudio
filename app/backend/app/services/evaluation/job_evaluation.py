@@ -480,11 +480,19 @@ def evaluate_many(
     *,
     workers: int = 6,
     progress=None,
-) -> list[JEResult]:
+) -> list[JEResult | None]:
+    """One entry per input, in order; None where that profile could not be evaluated.
+
+    Failures are tolerated rather than fatal. Each evaluation is an independent,
+    expensive call, and a single profile that will not produce a valid response
+    (or hits a server-side grammar timeout) used to abort the whole stage and
+    discard every evaluation already paid for.
+    """
     return llm.pmap(
         lambda p: evaluate_one(p[0], p[1], p[2], framework),
         profiles,
         workers=workers,
         label="job-evaluation",
         progress=progress,
+        tolerate_errors=True,
     )

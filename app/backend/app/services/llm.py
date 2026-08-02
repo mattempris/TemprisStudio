@@ -61,6 +61,31 @@ class LLMTruncatedError(LLMTransientError):
         self.max_tokens = max_tokens
 
 
+class LLMGrammarError(LLMTransientError):
+    """The API could not compile the structured-output grammar.
+
+    Arrives as a 400, which normally means the request is wrong and retrying is
+    pointless. This is the exception: "Grammar compilation timed out" is a
+    server-side timeout, and a schema that fails to compile under load compiles
+    fine minutes later — it killed a job-evaluation stage mid-run on a schema that
+    had already worked. So it retries, and then falls back to stating the schema in
+    the prompt instead of enforcing it as a grammar. Every caller of complete_json
+    validates the parsed result anyway, so the fallback loses a guarantee the code
+    was not relying on.
+    """
+
+
+# Substrings that identify a 400 as a grammar problem rather than a malformed
+# request. Matched on the message because the API does not distinguish them by code.
+_GRAMMAR_MARKERS = ("grammar compilation", "compiled grammar", "grammar is too large")
+
+
+def _is_grammar_failure(e: Exception) -> bool:
+    return isinstance(e, anthropic.BadRequestError) and any(
+        m in str(e).lower() for m in _GRAMMAR_MARKERS
+    )
+
+
 # Ceiling for the automatic budget escalation below. Beyond this the problem is
 # the request (too many items in one call), not the budget, and silently paying
 # for ever-larger responses would hide that.
@@ -217,6 +242,8 @@ def complete(
             # 400/401/403/404 — the request itself is wrong, so retrying just
             # burns backoff. Fail immediately with the message intact so the
             # caller sees what to fix (e.g. an invalid output schema).
+            if _is_grammar_failure(e):
+                raise LLMGrammarError(f"{type(e).__name__}: {e}") from e
             raise LLMRequestError(f"{type(e).__name__}: {e}") from e
         except _RETRYABLE as e:
             last_err = e
@@ -227,6 +254,22 @@ def complete(
             if will_retry:
                 time.sleep(8 * (attempt + 1))
     raise LLMTransientError(f"LLM call failed after {retries} attempts: {last_err}") from last_err
+
+
+def _schema_in_prompt(prompt: str, json_schema: dict | None) -> str:
+    """Restate a schema as an instruction, for when it cannot be compiled.
+
+    Deliberately verbatim JSON Schema rather than a prose description: the model
+    reads it accurately, and it stays correct as callers change their schemas.
+    """
+    if json_schema is None:
+        return prompt
+    return (
+        prompt
+        + "\n\nReturn ONLY a JSON object — no prose, no code fences — conforming "
+        "exactly to this JSON Schema:\n"
+        + json.dumps(json_schema)
+    )
 
 
 def complete_json(
@@ -245,21 +288,43 @@ def complete_json(
     # parse errors, so a single 529 killed the call outright despite retries=4.
     last_err: Exception | None = None
     budget = max_tokens
+    schema = json_schema        # dropped to None if the grammar will not compile
+    prompt_now = prompt
+    grammar_failures = 0
     for attempt in range(retries):
         try:
             text = complete(
-                prompt,
+                prompt_now,
                 system=system,
                 model=model,
                 max_tokens=budget,
                 retries=1,  # transport backoff is handled by this loop
-                json_schema=json_schema,
+                json_schema=schema,
                 effort=effort,
                 thinking=thinking,
             )
             return parse_json(text)
         except LLMRequestError:
             raise  # malformed request — no amount of retrying fixes it
+        except LLMGrammarError as e:
+            last_err = e
+            grammar_failures += 1
+            # Once for luck — the timeout is load-dependent, and a straight retry
+            # keeps the grammar guarantee when it works. After that the grammar is
+            # the problem, so state the schema in the prompt and drop it from the
+            # request rather than failing the whole stage.
+            if grammar_failures == 1 and schema is not None:
+                with _print_lock:
+                    print(f"  [llm] grammar compilation failed — retrying: {str(e)[:120]}")
+                time.sleep(4)
+            elif schema is not None:
+                schema = None
+                prompt_now = _schema_in_prompt(prompt, json_schema)
+                with _print_lock:
+                    print("  [llm] grammar still failing — retrying with the schema stated "
+                          "in the prompt instead of enforced as a grammar")
+            else:
+                raise
         except LLMTruncatedError as e:
             # Deterministic, so grow the budget rather than re-paying for the same
             # truncated response. No backoff: there is nothing transient to wait out.
@@ -300,17 +365,32 @@ def pmap(
     workers: int = 6,
     label: str = "",
     progress: ProgressCallback | None = None,
+    tolerate_errors: bool = False,
 ) -> list[R]:
-    """Parallel map preserving input order, thread-pool based (mirrors llm.py's pmap)."""
+    """Parallel map preserving input order, thread-pool based (mirrors llm.py's pmap).
+
+    `tolerate_errors` leaves a failed item as None instead of failing the whole map.
+    Off by default — most stages want a hard failure — but for the long, expensive
+    per-item stages it is the difference between losing one profile and losing the
+    150 that already succeeded.
+    """
     results: list[R | None] = [None] * len(items)
     done = 0
+    failures = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(fn, item): i for i, item in enumerate(items)}
         for future in as_completed(futures):
             i = futures[future]
-            results[i] = future.result()
+            try:
+                results[i] = future.result()
+            except Exception as e:
+                if not tolerate_errors:
+                    raise
+                failures += 1
+                with _print_lock:
+                    print(f"  [{label}] item {i} failed, continuing: {type(e).__name__}: {str(e)[:200]}")
             done += 1
-            msg = f"{label} {done}/{len(items)}"
+            msg = f"{label} {done}/{len(items)}" + (f" ({failures} failed)" if failures else "")
             with _print_lock:
                 print(f"  {msg}")
             if progress:
@@ -370,6 +450,21 @@ async def acomplete_json(
         except LLMTruncatedError:
             raise  # at the ceiling — retrying cannot help
         except _NON_RETRYABLE as e:
+            if _is_grammar_failure(e):
+                # Server-side compile timeout, not a bad request — retry, then drop
+                # the grammar and state the schema in the prompt. See LLMGrammarError.
+                last_err = e
+                if attempt >= retries - 1:
+                    raise LLMGrammarError(f"{type(e).__name__}: {e}") from e
+                if attempt >= 1 and "output_config" in kwargs and json_schema is not None:
+                    kwargs["output_config"] = {"effort": effort}
+                    kwargs["messages"] = [
+                        {"role": "user", "content": _schema_in_prompt(prompt, json_schema)}
+                    ]
+                    with _print_lock:
+                        print("  [llm] grammar still failing — stating the schema in the prompt instead")
+                await asyncio.sleep(4)
+                continue
             raise LLMRequestError(f"{type(e).__name__}: {e}") from e
         except (*_RETRYABLE, ValueError) as e:
             last_err = e

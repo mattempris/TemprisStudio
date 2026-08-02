@@ -13,6 +13,7 @@ import { Button } from "../ui/Button";
 import { Collapsible } from "../ui/Collapsible";
 import { Tooltip, TitleListTooltip } from "../ui/Tooltip";
 import { cn } from "../../lib/cn";
+import { HEAT_GRADIENT, heatColor } from "../../lib/heat";
 
 /** Every tier resolves down to real job titles, so say which relationship it is. */
 const TOOLTIP_SUBHEADING: Record<TierName, string> = {
@@ -186,27 +187,45 @@ export function TierClusterStage({
               className="w-full accent-[var(--color-accent)]"
             />
             {result && result.k === k && (
-              <div className="mt-1.5 flex flex-wrap gap-1">
-                {result.sizes.map((size, i) => (
-                  <Tooltip
-                    key={i}
-                    width={330}
-                    content={
-                      <TitleListTooltip
-                        heading={`Group ${i + 1} · ${size} ${status.item_noun}`}
-                        subheading={TOOLTIP_SUBHEADING[status.tier]}
-                        titles={result.titles?.[i] ?? []}
-                        total={result.title_counts?.[i] ?? 0}
-                        omitted={result.titles_omitted?.[i] ?? 0}
-                      />
-                    }
-                  >
-                    <span className="cursor-default rounded-sm bg-accent-bg px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-accent">
-                      {size}
-                    </span>
-                  </Tooltip>
-                ))}
-              </div>
+              <>
+                {/* Heat-mapped so the big clusters are findable at a glance — at 150
+                    tiles a uniform grid of numbers has to be read one by one. */}
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {result.sizes.map((size, i) => (
+                    <Tooltip
+                      key={i}
+                      width={330}
+                      content={
+                        <TitleListTooltip
+                          heading={`Group ${i + 1} · ${size} ${status.item_noun}`}
+                          subheading={TOOLTIP_SUBHEADING[status.tier]}
+                          titles={result.titles?.[i] ?? []}
+                          total={result.title_counts?.[i] ?? 0}
+                          omitted={result.titles_omitted?.[i] ?? 0}
+                        />
+                      }
+                    >
+                      <span
+                        style={{
+                          backgroundColor: heatColor(
+                            size,
+                            result.smallest ?? 1,
+                            result.largest,
+                          ),
+                        }}
+                        className="cursor-default rounded-sm px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-white"
+                      >
+                        {size}
+                      </span>
+                    </Tooltip>
+                  ))}
+                </div>
+                <HeatLegend
+                  min={result.smallest ?? 1}
+                  max={result.largest}
+                  noun={status.item_noun}
+                />
+              </>
             )}
           </div>
 
@@ -341,6 +360,23 @@ export function TierClusterStage({
           )}
         </>
       )}
+    </div>
+  );
+}
+
+/** Legend for the size heat map. Without it the colours are decoration; with it
+ *  they are readable, and the log scale is stated rather than inferred. */
+function HeatLegend({ min, max, noun }: { min: number; max: number; noun: string }) {
+  return (
+    <div className="mt-1.5 flex items-center gap-2">
+      <span className="text-[9.5px] tabular-nums text-text-muted">{min}</span>
+      <span
+        style={{ background: HEAT_GRADIENT }}
+        className="h-1.5 w-24 rounded-full"
+        aria-hidden
+      />
+      <span className="text-[9.5px] tabular-nums text-text-muted">{max}</span>
+      <span className="text-[9.5px] text-text-muted">{noun} per group (log scale)</span>
     </div>
   );
 }
@@ -553,7 +589,14 @@ function ClusterList({
                   </button>
                 </Tooltip>
               )}
-              <span className="shrink-0 text-[11px] tabular-nums text-text-muted">{c.size}</span>
+              <span
+                style={{
+                  backgroundColor: heatColor(c.size, data.smallest ?? 1, data.largest ?? c.size),
+                }}
+                className="shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-white"
+              >
+                {c.size}
+              </span>
             </div>
             {open[c.id] && (
               <ul className="border-t border-border bg-panel/40 px-3 py-2 pl-9">

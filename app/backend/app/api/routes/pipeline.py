@@ -1316,6 +1316,11 @@ async def start_profile_generation(
             je_inputs = [(d.profile_key, d.title, d.content) for d in docs]
             results = je.evaluate_many(je_inputs, framework, workers=_workers, progress=reporter.pmap_callback())
 
+            # None entries are profiles whose evaluation could not be produced —
+            # the rest are kept rather than the whole stage being discarded.
+            evaluated = [r for r in results if r is not None]
+            failed = [d.profile_key for d, r in zip(docs, results) if r is None]
+
             fresh2 = svc.load_state(client_slug, project_slug)
             fresh2.je_results = [
                 JEEvaluationResult(
@@ -1327,7 +1332,7 @@ async def start_profile_generation(
                     level_name=r.level_name,
                     computed_at=datetime.now(timezone.utc),
                 )
-                for r in results
+                for r in evaluated
             ]
             # re-render each profile HTML now that its evaluated level is known
             for doc, res in zip(fresh2.job_profiles, results):
@@ -1337,16 +1342,25 @@ async def start_profile_generation(
                     company_name=company,
                     about_company=about_company,
                     diversity_statement=diversity,
-                    job_level=res.level_name,
+                    job_level=res.level_name if res else None,
                     headings=section_headings,
                     sections=sections,
                 )
                 svc.save_profile_html(client_slug, project_slug, doc.profile_key, doc.html)
-            svc.save_state(fresh2, action="run-je-evaluation", lineage_payload={"evaluated": len(results)})
+            svc.save_state(
+                fresh2,
+                action="run-je-evaluation",
+                lineage_payload={"evaluated": len(evaluated), "failed": failed},
+            )
 
-            summary["je_evaluated"] = len(results)
-            summary["levels"] = sorted({r.level_name for r in results})
-            summary["mean_score"] = round(sum(r.aggregate_score for r in results) / max(1, len(results)), 2)
+            summary["je_evaluated"] = len(evaluated)
+            summary["levels"] = sorted({r.level_name for r in evaluated})
+            summary["mean_score"] = round(
+                sum(r.aggregate_score for r in evaluated) / max(1, len(evaluated)), 2
+            )
+            if failed:
+                summary["je_failed"] = len(failed)
+                summary["je_failed_profiles"] = failed[:10]
 
         reporter.stage_complete(summary)
         return summary

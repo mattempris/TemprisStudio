@@ -30,9 +30,9 @@ NAME_SCHEMA = {
 
 _ENTITY_VOCAB = {
     "job": {
-        "profile": "job profiles (specific role titles, e.g. 'DevOps Engineer', 'Procurement Analyst')",
-        "category": "job categories — broader functional groupings above job profiles (e.g. 'Application Engineering', 'Procurement')",
-        "family": "job families — the broadest, division-style groupings (e.g. 'Digital & Technology', 'Finance')",
+        "profile": "job profiles (broad job titles, e.g. 'Software Engineer', 'Procurement Analyst')",
+        "category": "job categories — the kind of work a group of profiles does (e.g. 'Software Engineering', 'Advisory', 'Design')",
+        "family": "job families — the broadest domain groupings (e.g. 'Technology', 'Finance', 'Risk & Compliance')",
     },
     "skill": {
         "profile": "individual skills (1-3 word attribute names, e.g. 'Data Modelling', 'Stakeholder Influence')",
@@ -44,6 +44,49 @@ _ENTITY_VOCAB = {
         "category": "task categories — related groups of tasks",
         "family": "task domains — the broadest task groupings",
     },
+}
+
+# What a name at each tier has to BE, not merely what it is about. Separate from
+# _ENTITY_VOCAB because the three job tiers want three different kinds of noun, and
+# saying "short, specific label" at all three produced the wrong thing at two of
+# them: abstract function nouns where a job title belonged ("Design" rather than
+# "Designer"), and title-shaped category names duplicating their own children.
+_JOB_LEVEL_RULES = {
+    "profile": (
+        "Name each cluster as a JOB TITLE — what you would put on the profile "
+        "document and in an org chart. A person could hold this title.\n"
+        "- Use the role noun, never the abstract function: 'Designer' not 'Design', "
+        "'Tester' not 'Testing', 'Underwriter' not 'Underwriting'.\n"
+        "- Seniority and shape words are wanted where the cluster shares them: "
+        "Head of ..., Director, Manager, Lead, Analyst, Adviser, Engineer, Officer, "
+        "Specialist, Administrator. Prefer 'Head of Risk' over 'Risk Leadership' and "
+        "'Compliance Manager' over 'Compliance Oversight'.\n"
+        "- The title must cover EVERY role in the cluster, at the level of generality "
+        "that does. If the members span seniorities, drop the seniority word rather "
+        "than picking one member's ('Pricing Analyst', not 'Senior Pricing Analyst').\n"
+        "- Do NOT compound two roles. No 'and', no '&', no slashes joining different "
+        "jobs — 'Design and Test Engineer' or 'Underwriter / Claims Handler' are "
+        "wrong. Choose the single closest common title instead.\n"
+        "- Two to four words. No department names, no location, no grade codes."
+    ),
+    "category": (
+        "Name each cluster as a FIELD OF WORK, not as a job title — this tier groups "
+        "job titles, so a title here would collide with its own children.\n"
+        "- Use the discipline or activity: 'Software Engineering', 'Advisory', "
+        "'Design', 'Underwriting', 'Leadership', 'Credit Risk', 'Customer Service'.\n"
+        "- Never a person noun: 'Engineering' not 'Engineer', 'Advisory' not 'Adviser'.\n"
+        "- Never a seniority: no 'Head of', 'Senior', 'Director' at this tier.\n"
+        "- One to three words, specific enough to distinguish it from its siblings."
+    ),
+    "family": (
+        "Name each cluster as a BROAD DOMAIN — the handful of top-level groupings a "
+        "whole organisation divides into.\n"
+        "- Division-scale: 'Technology', 'Finance', 'Risk & Compliance', "
+        "'Operations', 'Commercial', 'People'.\n"
+        "- General enough to plausibly contain several fields of work beneath it, and "
+        "recognisable to someone outside the function.\n"
+        "- One to three words. Not a job title and not a specific discipline."
+    ),
 }
 
 _LEVEL_ORDER = ["family", "category", "profile"]  # coarsest -> finest
@@ -60,15 +103,26 @@ def _build_system_prompt(entity: str, level: str, *, has_parent_context: bool) -
         "names are clearly MORE SPECIFIC than the parent, and distinct from names "
         "used at the parent level."
         if has_parent_context
-        else " These are the broadest, top-level groupings — keep names general "
-        "enough to plausibly contain several more specific sub-groups."
+        else ""
     )
+    rules = _JOB_LEVEL_RULES.get(level) if entity == "job" else None
+    if rules is None:
+        rules = (
+            "Produce a short, specific label (2-5 words) for each, capturing the "
+            "shared theme."
+            + (
+                ""
+                if has_parent_context
+                else " These are the broadest, top-level groupings — keep names "
+                "general enough to plausibly contain several more specific sub-groups."
+            )
+        )
     return (
         f"You name clusters to form part of a taxonomy of {label}. Each cluster is "
-        "given as representative example items. Produce a short, specific label "
-        "(2-5 words) for each, capturing the shared theme. Every name MUST be "
-        "clearly distinct from the others in this set; sharpen close ones by "
-        "function, specialism, or domain rather than using near-duplicate wording."
+        f"given as representative example items.\n\n{rules}\n\n"
+        "Every name MUST be clearly distinct from the others in this set; sharpen "
+        "close ones by function, specialism, or domain rather than using "
+        "near-duplicate wording."
         f"{parent_note} Use plain business English, title case, no numbering, no "
         "quotes. Return a name for every cluster id."
     )

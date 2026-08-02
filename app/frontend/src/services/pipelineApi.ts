@@ -2,6 +2,7 @@ import type {
   Boilerplate,
   ClusterPreview,
   DedupePreview,
+  EmbeddingModelsInfo,
   EntityClusterPreview,
   HierarchyNode,
   HrisConfirmResult,
@@ -125,7 +126,14 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
     startStrip: (workers?: number) =>
       request<JobHandle>(`${base}/strip${qs({ workers })}`, { method: "POST" }),
 
-    startDedupeBuild: () => request<JobHandle>(`${base}/dedupe/build`, { method: "POST" }),
+    /** Which embedding models exist per entity, and what is installed/loaded. */
+    embeddingModels: () => request<EmbeddingModelsInfo>(`${base}/embedding-models`),
+
+    startDedupeBuild: (opts?: { embedding_model?: string | null; device?: string | null }) =>
+      request<JobHandle>(
+        `${base}/dedupe/build${qs({ embedding_model: opts?.embedding_model, device: opts?.device })}`,
+        { method: "POST" },
+      ),
     dedupePreview: (threshold: number) =>
       request<DedupePreview>(`${base}/dedupe/preview?threshold=${threshold}`),
     confirmDedupe: (threshold: number) =>
@@ -137,7 +145,11 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
     startNormalize: (workers?: number) =>
       request<JobHandle>(`${base}/normalize${qs({ workers })}`, { method: "POST" }),
 
-    startClusterBuild: () => request<JobHandle>(`${base}/cluster/build`, { method: "POST" }),
+    startClusterBuild: (opts?: { embedding_model?: string | null; device?: string | null }) =>
+      request<JobHandle>(
+        `${base}/cluster/build${qs({ embedding_model: opts?.embedding_model, device: opts?.device })}`,
+        { method: "POST" },
+      ),
     clusterPreview: (k: { families: number; categories: number; profiles: number }) =>
       request<ClusterPreview>(
         `${base}/cluster/preview-cut?k_families=${k.families}&k_categories=${k.categories}&k_profiles=${k.profiles}`,

@@ -52,6 +52,23 @@ export interface HrisConfirmResult {
   limited: boolean;
 }
 
+export interface EmbeddingModelInfo {
+  name: string;
+  dim: number;
+  note: string;
+  installed: boolean;
+  loaded: boolean;
+}
+
+export interface EmbeddingSlot {
+  current: string;
+  selectable: boolean;
+  models: EmbeddingModelInfo[];
+}
+
+/** Keyed by entity: job / skill / task. Only the job slot is selectable today. */
+export type EmbeddingModelsInfo = Partial<Record<"job" | "skill" | "task", EmbeddingSlot>>;
+
 export interface JobHandle {
   job_id: string;
   stage: string;

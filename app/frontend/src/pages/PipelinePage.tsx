@@ -7,6 +7,7 @@ import type {
   JEFramework,
   ProficiencyTemplate,
   Boilerplate,
+  EmbeddingModelsInfo,
   ProfileSection,
   ProfileTemplate,
   MatchingSummary,
@@ -22,6 +23,7 @@ import { ClusterKPanel } from "../components/pipeline/ClusterKPanel";
 import { DedupePanel } from "../components/pipeline/DedupePanel";
 import { JEResultsBrowser } from "../components/pipeline/JEResultsBrowser";
 import { EntityTaxonomyStage } from "../components/pipeline/EntityTaxonomyStage";
+import { EmbeddingOptions } from "../components/pipeline/EmbeddingOptions";
 import { MatchingPanel } from "../components/pipeline/MatchingPanel";
 import { OverviewBrowser } from "../components/pipeline/OverviewBrowser";
 import { ExportBar } from "../components/pipeline/ExportBar";
@@ -83,6 +85,10 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
   // Distinguishes "the API is not up yet" from a real error, so a slow backend
   // start reads as waiting rather than as a broken app.
   const [backendDown, setBackendDown] = useState(false);
+  const [embedModels, setEmbedModels] = useState<EmbeddingModelsInfo | null>(null);
+  // Per-run embedding choices. null model means "use the server default".
+  const [jobModel, setJobModel] = useState<string | null>(null);
+  const [forceCpu, setForceCpu] = useState(false);
   // Fan-out width for the per-item LLM stages. One control rather than per stage:
   // it is a property of the API account's rate limits, not of a stage.
   const [workers, setWorkers] = useState<number>(() => {
@@ -115,6 +121,8 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
         if (mt.status === "fulfilled") setMatching(mt.value);
         if (ov.status === "fulfilled") setOverview(ov.value);
       }
+      // Keeps the "loaded" badges honest after a run put a model in memory.
+      void api.embeddingModels().then(setEmbedModels).catch(() => {});
       setBackendDown(false);
       return s;
     } catch (e) {
@@ -139,6 +147,7 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
     // The industry list is static catalogue metadata; a 503 here just means the
     // 3rd-party taxonomy isn't present, which the matching stage handles.
     void taxonomyApi.industries().then((r) => setAllIndustries(r.industries)).catch(() => {});
+    void api.embeddingModels().then(setEmbedModels).catch(() => {});
   }, [refresh, api]);
 
   // Poll until the backend answers. Only while it is down, so a healthy session
@@ -448,15 +457,36 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
       case "dedupe":
         return (
           <div className="space-y-4">
-            {summary!.stripped_records > 0 && summary!.dedupe_groups === 0 && (
+            {summary!.stripped_records > 0 && (
               <div className="space-y-3">
+            {embedModels && (
+              <EmbeddingOptions
+                info={embedModels}
+                entity="job"
+                model={jobModel}
+                onModel={setJobModel}
+                forceCpu={forceCpu}
+                onForceCpu={setForceCpu}
+                hasExistingTree={summary!.dedupe_groups > 0}
+                disabled={busy || job.running}
+              />
+            )}
                 <Button
                   variant="primary"
-                  onClick={() => runJob(api.startDedupeBuild)}
+                  onClick={() =>
+                    runJob(() =>
+                      api.startDedupeBuild({
+                        embedding_model: jobModel,
+                        device: forceCpu ? "cpu" : null,
+                      }),
+                    )
+                  }
                   disabled={busy || job.running}
                 >
                   <span className="flex items-center gap-1.5">
-                    <Play size={12} /> Embed and find candidate duplicates
+                    <Play size={12} />
+                    {summary!.dedupe_groups > 0 ? "Re-embed" : "Embed and find candidate duplicates"}
+                    {jobModel ? ` with ${jobModel}` : ""}
                   </span>
                 </Button>
                 {showProgress && <ProgressBar job={job} />}
@@ -488,9 +518,28 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
           <div className="space-y-4">
             {!summary!.clustered && (
               <div className="space-y-3">
+            {embedModels && (
+              <EmbeddingOptions
+                info={embedModels}
+                entity="job"
+                model={jobModel}
+                onModel={setJobModel}
+                forceCpu={forceCpu}
+                onForceCpu={setForceCpu}
+                hasExistingTree={false}
+                disabled={busy || job.running}
+              />
+            )}
                 <Button
                   variant="primary"
-                  onClick={() => runJob(api.startClusterBuild)}
+                  onClick={() =>
+                    runJob(() =>
+                      api.startClusterBuild({
+                        embedding_model: jobModel,
+                        device: forceCpu ? "cpu" : null,
+                      }),
+                    )
+                  }
                   disabled={busy || job.running}
                 >
                   <span className="flex items-center gap-1.5">

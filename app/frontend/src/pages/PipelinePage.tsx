@@ -22,6 +22,7 @@ import type {
 } from "../types/pipeline";
 import { StageSection, type StageState } from "../components/wizard/StageSection";
 import { ProgressBar } from "../components/wizard/ProgressBar";
+import { JobPulse } from "../components/wizard/JobPulse";
 import { DedupePanel } from "../components/pipeline/DedupePanel";
 import { JEResultsBrowser } from "../components/pipeline/JEResultsBrowser";
 import { EntityTaxonomyStage } from "../components/pipeline/EntityTaxonomyStage";
@@ -50,7 +51,7 @@ const STAGES = [
   { id: "families", title: "Job families", description: "Group the categories into job families — the top of the hierarchy." },
   { id: "profiles", title: "Job profile documents", description: "Write a job profile document for each confirmed profile, from the template and boilerplate you define here." },
   { id: "evaluation", title: "Job evaluation", description: "Score each profile document against your job evaluation framework and map it to a level." },
-  { id: "skills", title: "Skills taxonomy", description: "Infer the attributes each profile needs, cluster them into a taxonomy, and set proficiency levels." },
+  { id: "skills", title: "Skills taxonomy", description: "Infer the attributes each profile needs and cluster them into a taxonomy. Proficiency levels are optional." },
   { id: "tasks", title: "Task taxonomy", description: "Infer what each profile spends time on, cluster it, and analyse where the workforce's time goes." },
   { id: "matching", title: "3rd-party taxonomy match", description: "Place each job profile in the external market taxonomy and assign a career level." },
 ] as const;
@@ -642,10 +643,13 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
               onAnalyse={api_t.analyse}
               onConfirm={(k, gate) => api_t.confirm(k, gate, workers)}
               loadClusters={api_t.clusters}
+              loadClusterMembers={api_t.clusterMembers}
               onRename={api_t.rename}
+              onReassign={api_t.reassign}
               runJob={runJob}
               busy={busy || job.running}
               progress={showProgress ? <ProgressBar job={job} /> : null}
+              activity={showProgress ? <JobPulse job={job} /> : null}
             />
           </div>
         );
@@ -741,6 +745,7 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
             runJob={runJob}
             busy={busy || job.running}
             progress={showProgress ? <ProgressBar job={job} /> : null}
+            activity={showProgress ? <JobPulse job={job} /> : null}
             proficiency={{
               done: (skills?.proficiency_definitions ?? 0) > 0,
               mappedClusters: skills?.proficiency_definitions ?? 0,
@@ -784,6 +789,7 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
             runJob={runJob}
             busy={busy || job.running}
             progress={showProgress ? <ProgressBar job={job} /> : null}
+            activity={showProgress ? <JobPulse job={job} /> : null}
           />
         );
 

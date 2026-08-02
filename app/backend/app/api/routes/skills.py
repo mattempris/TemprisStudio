@@ -265,7 +265,15 @@ def skills_taxonomy(client_slug: str, project_slug: str) -> dict:
             cat_skills, cat_jobs = 0, set()
             for cl in cat["clusters"].values():
                 reqs = reqs_by_cluster.get(cl["id"], [])
-                jobs_requiring = sorted({r.profile_key for r in reqs})
+                # Which jobs need this cluster is knowable as soon as the skills are
+                # clustered — every inferred skill records the profile it came from.
+                # Reading it only from `profile_requirements` meant the whole
+                # taxonomy showed "0 jobs" until the optional proficiency step had
+                # run, which made the browser look broken rather than incomplete.
+                jobs_requiring = sorted(
+                    {s["source_profile_key"] for s in cl["skills"] if s.get("source_profile_key")}
+                    | {r.profile_key for r in reqs}
+                )
                 clusters.append(
                     {
                         **cl,

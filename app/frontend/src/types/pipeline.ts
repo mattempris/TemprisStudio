@@ -186,6 +186,19 @@ export interface TierPreview extends SizeStats {
   distribution?: StabilityBucket[];
 }
 
+/** Everything inside one cluster of an unconfirmed cut, for the detail modal.
+ *  Repeats are grouped with a count rather than listed one per row. */
+export interface ClusterMembers {
+  entity: ClusterEntity;
+  tier: TierName;
+  k: number;
+  cluster: number;
+  size: number;
+  label_noun: string;
+  members: { label: string; count: number }[];
+  total: number;
+}
+
 export interface TierClusterMember {
   item_id: string;
   label: string;
@@ -194,6 +207,8 @@ export interface TierClusterMember {
   route_confidence: number | null;
   moved: boolean;
   moved_from: string | null;
+  /** Overridden by hand after the run, rather than by the model. */
+  moved_by_user?: boolean;
 }
 
 export interface TierClusters extends SizeStats {
@@ -204,6 +219,8 @@ export interface TierClusters extends SizeStats {
   n_moved: number;
   singletons?: number;
   largest?: number;
+  /** Every cluster at this tier, for the "move to" control. */
+  cluster_options?: { id: number; name: string }[];
   clusters: {
     id: number;
     name: string;

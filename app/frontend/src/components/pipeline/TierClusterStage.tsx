@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Check, ChevronRight, Play, Sparkles } from "lucide-react";
 import type {
+  ClusterMembers,
   JobHandle,
   SizeStats,
   TierClusters,
@@ -11,6 +12,7 @@ import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
 import { Collapsible } from "../ui/Collapsible";
 import { Tooltip, TitleListTooltip } from "../ui/Tooltip";
+import { Modal } from "../ui/Modal";
 import { cn } from "../../lib/cn";
 import { HEAT_GRADIENT, heatColor } from "../../lib/heat";
 
@@ -53,10 +55,14 @@ interface Props {
   onAnalyse: (k: number) => Promise<JobHandle>;
   onConfirm: (k: number, gate: number) => Promise<JobHandle>;
   loadClusters: () => Promise<TierClusters>;
+  loadClusterMembers: (k: number, cluster: number) => Promise<ClusterMembers>;
   onRename: (clusterId: number, name: string) => Promise<unknown>;
+  onReassign: (itemId: string, clusterId: number) => Promise<unknown>;
   runJob: (start: () => Promise<JobHandle>) => void;
   busy: boolean;
   progress: React.ReactNode;
+  /** Inline spinner + heartbeat, shown beside whichever button is running. */
+  activity?: React.ReactNode;
 }
 
 export function TierClusterStage({
@@ -68,10 +74,13 @@ export function TierClusterStage({
   onAnalyse,
   onConfirm,
   loadClusters,
+  loadClusterMembers,
   onRename,
+  onReassign,
   runJob,
   busy,
   progress,
+  activity,
 }: Props) {
   const title = titleOverride ?? status.title;
   const [k, setK] = useState<number>(status.k ?? 0);
@@ -79,7 +88,19 @@ export function TierClusterStage({
   const [result, setResult] = useState<TierPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [clusters, setClusters] = useState<TierClusters | null>(null);
+  // Which button started the job, so its progress renders next to that button
+  // rather than at the bottom of a step that can be several screens tall.
+  const [ran, setRan] = useState<"build" | "analyse" | "confirm" | null>(null);
+  const [opened, setOpened] = useState<number | null>(null);
   const requestId = useRef(0);
+
+  const start = useCallback(
+    (which: "build" | "analyse" | "confirm", go: () => Promise<JobHandle>) => {
+      setRan(which);
+      runJob(go);
+    },
+    [runJob],
+  );
 
   const maxK = status.max_k ?? 2;
   const suggested = Math.max(2, Math.min(maxK, Math.round((status.item_count ?? 12) / 6)));
@@ -163,12 +184,15 @@ export function TierClusterStage({
           <p className="text-[12.5px] text-text-secondary">
             {status.item_count ?? "?"} {status.item_noun} to group into {title.toLowerCase()}.
           </p>
-          <Button variant="primary" onClick={() => runJob(onBuild)} disabled={busy}>
-            <span className="flex items-center gap-1.5">
-              <Play size={12} /> Prepare {title.toLowerCase()}
-            </span>
-          </Button>
-          {progress}
+          <div className="flex flex-wrap items-center gap-3">
+            <Button variant="primary" onClick={() => start("build", onBuild)} disabled={busy}>
+              <span className="flex items-center gap-1.5">
+                <Play size={12} /> Prepare {title.toLowerCase()}
+              </span>
+            </Button>
+            {activity}
+          </div>
+          {ran !== "analyse" && ran !== "confirm" && progress}
         </div>
       ) : (
         <>
@@ -210,7 +234,9 @@ export function TierClusterStage({
                         />
                       }
                     >
-                      <span
+                      <button
+                        onClick={() => setOpened(i)}
+                        title="Open the full list"
                         style={{
                           backgroundColor: heatColor(
                             size,
@@ -218,10 +244,10 @@ export function TierClusterStage({
                             result.largest,
                           ),
                         }}
-                        className="cursor-default rounded-sm px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-white"
+                        className="cursor-pointer rounded-sm px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-white transition-transform hover:scale-110"
                       >
                         {size}
-                      </span>
+                      </button>
                     </Tooltip>
                   ))}
                 </div>
@@ -251,11 +277,21 @@ export function TierClusterStage({
                 seconds rather than being instant, so it is a separate step here. It
                 costs no model calls — only the routing afterwards does.
               </p>
-              <Button variant="primary" onClick={() => runJob(() => onAnalyse(k))} disabled={busy}>
-                <span className="flex items-center gap-1.5">
-                  <Sparkles size={12} /> Assess stability at {k} {title.toLowerCase()}
-                </span>
-              </Button>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  variant="primary"
+                  onClick={() => start("analyse", () => onAnalyse(k))}
+                  disabled={busy}
+                >
+                  <span className="flex items-center gap-1.5">
+                    <Sparkles size={12} /> Assess stability at {k} {title.toLowerCase()}
+                  </span>
+                </Button>
+                {activity}
+              </div>
+              {/* Kept with the button that started it: the bar used to render at
+                  the foot of the step, out of view on a tier with 900 tiles. */}
+              {ran === "analyse" && <div className="mt-3">{progress}</div>}
             </div>
           )}
 
@@ -331,7 +367,7 @@ export function TierClusterStage({
           <div className="flex flex-wrap items-center gap-3">
             <Button
               variant="primary"
-              onClick={() => runJob(() => onConfirm(k, gate))}
+              onClick={() => start("confirm", () => onConfirm(k, gate))}
               disabled={busy || !!error || !k}
             >
               <span className="flex items-center gap-1.5">
@@ -339,13 +375,15 @@ export function TierClusterStage({
                 {status.confirmed ? "Re-cluster and rename" : `Confirm and name ${title.toLowerCase()}`}
               </span>
             </Button>
-            {status.confirmed && (
+            {activity}
+            {status.confirmed && !busy && (
               <span className="text-[11.5px] text-text-muted">
                 Currently {status.k} {title.toLowerCase()}, gate {status.gate?.toFixed(2)},{" "}
                 {status.n_moved} moved by the model.
               </span>
             )}
           </div>
+          {ran === "confirm" && progress}
 
           {error && (
             <p className="flex items-start gap-1.5 text-[12px] text-brand">
@@ -353,7 +391,9 @@ export function TierClusterStage({
             </p>
           )}
 
-          {progress}
+          {/* A job picked up after a reload has no known owner, so it falls back
+              to the foot of the step rather than disappearing. */}
+          {ran === null && progress}
 
           {clusters && (
             <ClusterList
@@ -361,12 +401,98 @@ export function TierClusterStage({
               itemNoun={status.item_noun}
               subheading={tooltipSubheading(status)}
               onRename={onRename}
-              onRenamed={refreshClusters}
+              onReassign={onReassign}
+              onChanged={refreshClusters}
+            />
+          )}
+
+          {opened !== null && result && (
+            <ClusterDetail
+              k={result.k}
+              cluster={opened}
+              size={result.sizes[opened] ?? 0}
+              itemNoun={status.item_noun}
+              load={loadClusterMembers}
+              onClose={() => setOpened(null)}
             />
           )}
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * The full contents of one tile, as a dialog.
+ *
+ * Hovering a tile gives a capped sample; clicking one freezes that into something
+ * you can actually read through. It fetches on open rather than shipping every
+ * cluster's full membership with the preview, which at 900 tiles would be the whole
+ * dataset on every slider move.
+ */
+function ClusterDetail({
+  k,
+  cluster,
+  size,
+  itemNoun,
+  load,
+  onClose,
+}: {
+  k: number;
+  cluster: number;
+  size: number;
+  itemNoun: string;
+  load: (k: number, cluster: number) => Promise<ClusterMembers>;
+  onClose: () => void;
+}) {
+  const [data, setData] = useState<ClusterMembers | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    setData(null);
+    setError(null);
+    load(k, cluster)
+      .then((d) => live && setData(d))
+      .catch((e) => live && setError(e instanceof Error ? e.message : String(e)));
+    return () => {
+      live = false;
+    };
+  }, [k, cluster, load]);
+
+  return (
+    <Modal
+      title={`Group ${cluster + 1}`}
+      subtitle={
+        data
+          ? `${size} ${itemNoun} · ${data.total} ${data.label_noun}, ${data.members.length} distinct`
+          : `${size} ${itemNoun}`
+      }
+      onClose={onClose}
+    >
+      {error && <p className="text-[12px] text-brand">{error}</p>}
+      {!data && !error && <p className="text-[12px] text-text-muted">Loading…</p>}
+      {data && (
+        <ul className="space-y-0.5">
+          {data.members.map((m, i) => (
+            <li
+              key={`${m.label}-${i}`}
+              className="flex items-baseline gap-2 border-b border-border/50 py-1 text-[12px] last:border-0"
+            >
+              <span className="w-6 shrink-0 text-right text-[10px] tabular-nums text-text-muted">
+                {i + 1}
+              </span>
+              <span className="min-w-0 flex-1 text-text">{m.label}</span>
+              {m.count > 1 && (
+                <span className="shrink-0 rounded-sm bg-accent-bg px-1.5 text-[10px] font-bold tabular-nums text-accent">
+                  ×{m.count}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Modal>
   );
 }
 
@@ -514,17 +640,21 @@ function ClusterList({
   itemNoun,
   subheading,
   onRename,
-  onRenamed,
+  onReassign,
+  onChanged,
 }: {
   data: TierClusters;
   itemNoun: string;
   subheading: string;
   onRename: (id: number, name: string) => Promise<unknown>;
-  onRenamed: () => void;
+  onReassign: (itemId: string, clusterId: number) => Promise<unknown>;
+  onChanged: () => void;
 }) {
   const [open, setOpen] = useState<Record<number, boolean>>({});
   const [editing, setEditing] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
+  const [moving, setMoving] = useState<string | null>(null);
+  const options = data.cluster_options ?? data.clusters.map((c) => ({ id: c.id, name: c.name }));
 
   return (
     <div className="space-y-1.5">
@@ -560,7 +690,7 @@ function ClusterList({
                     if (e.key === "Enter" && draft.trim()) {
                       void onRename(c.id, draft.trim()).then(() => {
                         setEditing(null);
-                        onRenamed();
+                        onChanged();
                       });
                     }
                   }}
@@ -611,12 +741,41 @@ function ClusterList({
                 {c.members.map((m) => (
                   <li key={m.item_id} className="flex items-center gap-2 py-0.5 text-[11.5px]">
                     <span className="min-w-0 flex-1 truncate text-text-secondary">{m.label}</span>
-                    {m.moved && (
+                    {m.moved_by_user ? (
+                      <Badge color="purple" title={`Moved by hand from ${m.moved_from ?? "another cluster"}`}>
+                        moved by you
+                      </Badge>
+                    ) : m.moved ? (
                       <Badge color="warning" title={`Moved from ${m.moved_from ?? "another cluster"}`}>
                         moved
                       </Badge>
+                    ) : (
+                      m.routed_by_llm && <Badge color="teal">checked</Badge>
                     )}
-                    {!m.moved && m.routed_by_llm && <Badge color="teal">checked</Badge>}
+                    {/* The last word on placement is manual. Geometry and the model
+                        both get one wrong sometimes in ways only a person reading the
+                        group can see, and re-clustering to fix a single member would
+                        discard every other decision at this tier. */}
+                    <select
+                      value={c.id}
+                      disabled={moving === m.item_id}
+                      title="Move to another group"
+                      onChange={(e) => {
+                        const to = Number(e.target.value);
+                        if (to === c.id) return;
+                        setMoving(m.item_id);
+                        void onReassign(m.item_id, to)
+                          .then(onChanged)
+                          .finally(() => setMoving(null));
+                      }}
+                      className="max-w-[9rem] shrink-0 rounded-[6px] border border-border bg-card px-1 py-0.5 text-[10.5px] text-text-secondary outline-none hover:border-accent focus:border-accent disabled:opacity-50"
+                    >
+                      {options.map((o) => (
+                        <option key={o.id} value={o.id}>
+                          {o.name}
+                        </option>
+                      ))}
+                    </select>
                     <span className="w-8 shrink-0 text-right tabular-nums text-text-muted">
                       {m.stability_score?.toFixed(2) ?? "—"}
                     </span>

@@ -1,6 +1,7 @@
 import type {
   Boilerplate,
   ClusterEntity,
+  ClusterMembers,
   ClusterPreview,
   DedupePreview,
   EmbeddingModelsInfo,
@@ -182,6 +183,16 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
             body: JSON.stringify({ k, gate }),
           }),
         clusters: () => request<TierClusters>(`${t}/clusters`),
+        /** Full membership of one cluster of an unconfirmed cut — the preview's
+         *  per-cluster sample is capped, so opening one needs its own call. */
+        clusterMembers: (k: number, cluster: number) =>
+          request<ClusterMembers>(`${t}/cluster-members?k=${k}&cluster=${cluster}`),
+        /** Move one member to a different cluster in this tier. */
+        reassign: (itemId: string, clusterId: number) =>
+          request<{ moved: boolean; emptied: string | null }>(`${t}/reassign`, {
+            method: "POST",
+            body: JSON.stringify({ item_id: itemId, cluster_id: clusterId }),
+          }),
         rename: (clusterId: number, name: string) =>
           request<unknown>(`${t}/rename`, {
             method: "POST",

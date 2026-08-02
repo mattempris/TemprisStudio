@@ -4,6 +4,7 @@ import type { JobHandle, TaxonomyNode, TierName, TierStatus } from "../../types/
 import { TaxonomyBrowser, normalizeTaxonomy, type TaxonomyKind } from "./TaxonomyBrowser";
 import { TierClusterStage } from "./TierClusterStage";
 import type { TierApi } from "../../services/pipelineApi";
+import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
 
 /**
@@ -42,6 +43,8 @@ interface Props {
   runJob: (start: () => Promise<JobHandle>) => void;
   busy: boolean;
   progress: React.ReactNode;
+  /** Inline spinner + heartbeat for whichever tier button is running. */
+  activity?: React.ReactNode;
   /** Skills only: proficiency criteria generation plus the auto-map onto jobs.
    *  `editor` is the template editor, shown above the generate button since it
    *  defines the rubric that generation is written against. */
@@ -73,6 +76,7 @@ export function EntityTaxonomyStage({
   runJob,
   busy,
   progress,
+  activity,
   proficiency,
 }: Props) {
   const [tree, setTree] = useState<{ roots: TaxonomyNode[]; hasHeadcount: boolean } | null>(null);
@@ -137,9 +141,12 @@ export function EntityTaxonomyStage({
                 onAnalyse={api.analyse}
                 onConfirm={(k, gate) => api.confirm(k, gate)}
                 loadClusters={api.clusters}
+                loadClusterMembers={api.clusterMembers}
                 onRename={api.rename}
+                onReassign={api.reassign}
                 runJob={runJob}
                 busy={busy}
+                activity={activity}
                 // One progress bar for the step, rendered above, rather than one
                 // per tier: only one tier can be running at a time anyway.
                 progress={null}
@@ -152,10 +159,14 @@ export function EntityTaxonomyStage({
       {named && proficiency && (
         <div className="space-y-2.5 rounded-[10px] border border-border bg-panel px-4 py-3">
           <div>
-            <p className="text-[12.5px] font-semibold text-text">Proficiency levels</p>
+            <div className="flex items-center gap-2">
+              <p className="text-[12.5px] font-semibold text-text">Proficiency levels</p>
+              <Badge color="teal">optional</Badge>
+            </div>
             <p className="mt-0.5 text-[11.5px] leading-snug text-text-secondary">
               Generates level criteria per skill cluster, then deterministically maps each job
-              profile onto them.
+              profile onto them. The taxonomy is complete without this — run it when you want
+              levels against each job's skills, and skip it if you do not.
             </p>
           </div>
           {proficiency.editor}

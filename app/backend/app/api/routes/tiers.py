@@ -610,6 +610,8 @@ async def tier_confirm(
             "low_confidence": result.low_confidence, "multi_home": result.multi_home,
             "tiers_invalidated": len(dropped),
         }
+        if len(result.names) < req.k:
+            summary["emptied_by_routing"] = req.k - len(result.names)
         reporter.stage_complete(summary)
         return summary
 
@@ -642,8 +644,9 @@ def tier_clusters(client_slug: str, project_slug: str, entity: str, tier: str) -
                 "route_confidence": m.route_confidence,
                 "moved": m.routed_by_llm and m.backbone_cluster_id != m.final_cluster_id,
                 "moved_from": rec.names.get(m.backbone_cluster_id)
-                if m.routed_by_llm and m.backbone_cluster_id != m.final_cluster_id
+                if m.backbone_cluster_id != m.final_cluster_id
                 else None,
+                "moved_by_user": m.moved_by_user,
             }
         )
     clusters = [
@@ -663,6 +666,9 @@ def tier_clusters(client_slug: str, project_slug: str, entity: str, tier: str) -
     sizes = [c["size"] for c in clusters]
     return {
         "entity": entity, "tier": tier, "k": rec.k, "gate": rec.gate,
+        # Every cluster id and name at this tier, so the UI can offer somewhere to
+        # move a member to without refetching or reconstructing the list.
+        "cluster_options": [{"id": cid, "name": rec.names[cid]} for cid in sorted(rec.names)],
         "n_routed": rec.n_routed, "n_moved": rec.n_moved,
         "clusters": clusters,
         **_size_stats(sizes),
@@ -701,6 +707,113 @@ def _member_labeller(state: ProjectState, entity: str, tier: str):
             return item_id
 
     return label
+
+
+@router.get("/cluster-members")
+def tier_cluster_members(
+    client_slug: str, project_slug: str, entity: str, tier: str, k: int, cluster: int
+) -> dict:
+    """Everything inside one cluster of an unconfirmed cut, in full.
+
+    The preview caps each cluster's sample at TOOLTIP_TITLES so a slider drag stays
+    cheap. That is right for a hover, and wrong for the moment the user stops to
+    actually read a group — hence a separate call, made only when one is opened.
+    """
+    _check(entity, tier)
+    svc, state = _load(client_slug, project_slug)
+    items, tree = _items_and_tree(svc, state, entity, tier)
+    if not (2 <= k < len(items)):
+        raise HTTPException(422, f"k must be between 2 and {len(items) - 1}")
+
+    labels = bb.cut_tree(tree, k)
+    if not (0 <= cluster <= int(labels.max())):
+        raise HTTPException(404, f"no cluster {cluster} at k={k}")
+
+    resolved = _title_map(state, entity)
+    member_ids = [items.ids[i] for i in range(len(items)) if int(labels[i]) == cluster]
+    names: list[str] = []
+    for item_id in member_ids:
+        names.extend(resolved.get(item_id, [item_id]))
+
+    counts: dict[str, int] = {}
+    for n in names:
+        counts[n] = counts.get(n, 0) + 1
+    return {
+        "entity": entity,
+        "tier": tier,
+        "k": k,
+        "cluster": cluster,
+        "size": len(member_ids),
+        "label_noun": _LABEL_NOUN[entity],
+        # Grouped rather than repeated: a dedupe group of 18 identically-titled
+        # branch roles is one row with a count, not 18 rows.
+        "members": [
+            {"label": label, "count": n}
+            for label, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        ],
+        "total": len(names),
+    }
+
+
+class ReassignRequest(BaseModel):
+    item_id: str
+    cluster_id: int
+
+
+@router.post("/reassign")
+def tier_reassign(
+    client_slug: str, project_slug: str, entity: str, tier: str, req: ReassignRequest
+) -> dict:
+    """Move one member to a different cluster in this tier.
+
+    The geometry and the model both get a say in placement, and both are sometimes
+    wrong in ways only a person reading the group can see — so the last word has to
+    be manual. This is a label change, not a re-clustering: nothing is re-embedded,
+    no tier above is invalidated, and the audit trail keeps what the backbone and
+    the router each said so the override stays visible rather than silently
+    rewriting history.
+    """
+    _check(entity, tier)
+    svc, state = _load(client_slug, project_slug)
+    rec = tier_state.tiers_of(state, entity).get(tier)
+    if rec is None or not rec.names:
+        raise HTTPException(409, f"the {tier} tier has not been confirmed yet")
+    if req.cluster_id not in rec.names:
+        raise HTTPException(404, f"no cluster {req.cluster_id} in the {tier} tier")
+
+    member = next((m for m in rec.members if m.item_id == req.item_id), None)
+    if member is None:
+        raise HTTPException(404, f"no member {req.item_id!r} in the {tier} tier")
+
+    was = member.final_cluster_id
+    if was == req.cluster_id:
+        return {"moved": False, "cluster_id": was, "emptied": None}
+    member.final_cluster_id = req.cluster_id
+    member.moved_by_user = True
+
+    # Moving the last member out of a cluster leaves a name describing nothing, the
+    # same end state routing can produce — so it is dropped the same way.
+    emptied = None
+    if not any(m.final_cluster_id == was for m in rec.members):
+        emptied = rec.names.pop(was, None)
+        rec.k = len(rec.names)
+
+    tier_state.rebuild_denormalised(state, entity)
+    svc.save_state(
+        state,
+        action=f"reassign-{entity}-{tier}-member",
+        lineage_payload={
+            "entity": entity, "tier": tier, "item_id": req.item_id,
+            "from_cluster": was, "to_cluster": req.cluster_id,
+            "emptied_cluster": emptied,
+        },
+    )
+    return {
+        "moved": True,
+        "from_cluster": was,
+        "cluster_id": req.cluster_id,
+        "emptied": emptied,
+    }
 
 
 class RenameRequest(BaseModel):

@@ -189,10 +189,13 @@ function Row({
         {kind === "task" && hasHeadcount && node.fte_equivalent != null && (
           <Metric value={node.fte_equivalent.toFixed(1)} label="FTE" />
         )}
-        {kind === "skill" && node.jobs_requiring_count != null && (
+        {/* Zero is not a fact worth a column here: it means the analytic has not
+            been produced yet, not that no job needs the skill. Showing "0 JOBS"
+            against every branch read as broken data rather than absent data. */}
+        {kind === "skill" && !!node.jobs_requiring_count && (
           <Metric value={node.jobs_requiring_count} label="jobs" />
         )}
-        {kind === "skill" && hasHeadcount && node.headcount_requiring != null && (
+        {kind === "skill" && hasHeadcount && !!node.headcount_requiring && (
           <Metric value={node.headcount_requiring} label="people" />
         )}
         <Metric value={count} label={kind === "skill" ? "skills" : "tasks"} />

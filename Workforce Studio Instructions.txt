@@ -1,0 +1,52 @@
+once JAStudio process is completed - and if all assets have been created inc. skills taxonomy and task taxonomy, a "Proceed to Workforce Studio" button should be enabled at the bottom of the screen, and a toggle should be enabled at the top of the nav panel.
+
+Workforce studio has an equivalent panel-based scrolling structure, but features functionality demonstrated in ./HR demo and ./Insurance demo (except levelling and other components covered in JAStudio)
+
+Step 1: Workforce Architecture. 
+
+This shows a graph visualisation of the job profiles, task clusters and skill clusters (nodes) with the relationships between them (edges) rendered. Use tooltips to show names/desciptions of profiles, tasks and skills. When any of these are clicked, bring up a modal to show the full detail. As the subsequent steps are triggered, the work architecture updates with new nodes, and the modals update with new details. 
+
+Step 2: Process Upload
+
+There are 2 processes - payroll and offer-to-hire, defined in the ./HR and ./Insurance demos. extract these into process documents.
+
+The UI in this step enables the user to upload process documents (html, SVG, PDF, XSLX, DOCX). These are extracted and mapped to the task structure within the work architecture.
+
+Processes are mapped to existing work architecture tasks. Any automated tasks or tasks otherwise not included in the job based inference are mapped as a new node type. Processes are added as new integrated nodes into the work architecture.
+
+It  is not essential to upload any proceses to unlock subsequent steps.
+
+Step 3: AI Opportunity Assessment
+
+This step infers between 3-5 actions for every task cluster - effectively subtask name/definition/proportion(=100% per task). The tasks are then interrogated for AI opportunity against the subtask.
+
+A report is created embedded as per step 6 of the insurance demo.
+
+Step 4: Process Opportunity Assessment.
+
+This unlocks if processes are added. It creates an output as per step 7 in the insurance demo
+
+Step 5: Personal Productivity
+
+Unlocked with AI Opportunity Assessment. The user can naviate to a role via job family/category/profile filtering, and the UI brings up the Tasks in order of AI opportunity * Proportion of Role. Each task has a button which generates the Claude Skills / Prompting guidance as per Step 13 in the Insurance demo.
+
+Skill info is added to the corresponding Job in the work architecture job modal.
+
+Step 6: Agent definitions
+
+The user can navigate to a Task Cluster via task family/category filtering, and the UI brings up the Tasks in order of AI opportunity * total proportion across all roles (FTE equivalent - mix in headcount where available). When the user clicks a button, an agent definition is created (with reference to Build Options in Insurance demo, including full agent requirements)
+
+Optional upload of software catalogue / tech infrastructure context (xlsx, docx, pdf, html, txt) to improve agent definitions.
+
+There is a "Generate All Agents" button which creates a big Agent creation batchh API job and then returns an embedded report prioritised by Total TIme Saving. 
+
+Each created agent is aadded to the work architecture graph.
+
+Step 7: Future Role Design
+
+User can navigate to a role using the filtering UI referenced previously, to generate a view like step 12 in the insurance demo
+
+Optional upload of strategic context around how the organisaton wants to be using freed up time
+
+
+All data can be exported.

@@ -151,6 +151,10 @@ class TierMemberRecord(BaseModel):
     secondary_cluster_id: int | None = None
     secondary_confidence: float | None = None
     self_consistency: dict | None = None
+    # A person moved this to a different cluster after the run. Recorded alongside
+    # the backbone and routing decisions rather than replacing them, so a placement
+    # that was overridden by hand can still be told apart from one the model chose.
+    moved_by_user: bool = False
 
 
 class TierState(BaseModel):

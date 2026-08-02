@@ -205,6 +205,20 @@ async def finalise(
                     f"{result.primary_cluster_id} — keeping backbone assignment"
                 )
 
+    # Routing can empty a cluster: if the model moves out every item Ward put in
+    # one, its name survives with nothing behind it and the taxonomy carries a
+    # group that describes no work at all. Dropping the name is the honest
+    # outcome — the cluster no longer exists, and keeping it would put an empty
+    # branch in the browser and an empty column in every export.
+    #
+    # The ids of surviving clusters are left alone rather than renumbered: the
+    # audit trail, the stored centroids and the tier above all reference them.
+    occupied = set(int(c) for c in np.unique(final))
+    emptied = sorted(set(names) - occupied)
+    for cid in emptied:
+        print(f"  [tier:{tier}] dropping '{names[cid]}' — routing moved out every member")
+        del names[cid]
+
     members = [
         TierMemberOutcome(
             item_id=items.ids[i],
@@ -222,11 +236,15 @@ async def finalise(
 
     centroids = _centroids(items.embeddings, final, analysis.k)
     exemplar_texts = {
-        cid: [items.texts[i] for i in idxs[:4]] for cid, idxs in exemplars.by_cluster.items()
+        cid: [items.texts[i] for i in idxs[:4]]
+        for cid, idxs in exemplars.by_cluster.items()
+        if cid in names
     }
 
     return TierResult(
-        k=analysis.k,
+        # The count the user confirmed, minus anything routing emptied. Reporting
+        # the requested k here would claim clusters that no longer exist.
+        k=len(names),
         gate=gate,
         names=names,
         members=members,

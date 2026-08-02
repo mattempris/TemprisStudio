@@ -66,6 +66,17 @@ if not errorlevel 1 (
   echo     Reusing the running frontend.
 )
 
+REM An orphan on a fallback port is invisible otherwise: it serves stale code to
+REM anyone who has that URL open, and until stopApp swept the range it survived
+REM every restart.
+for %%q in (5174 5175 5176) do (
+  netstat -ano | findstr ":%%q" | findstr /i "LISTENING" >nul 2>&1
+  if not errorlevel 1 (
+    echo [!] Something is also listening on %%q -- probably an orphaned dev server
+    echo     from an earlier run, serving stale code. stopApp.bat clears it.
+  )
+)
+
 if not exist "%FRONTEND%\node_modules" (
   echo [*] Installing frontend dependencies ^(first run, this takes a minute^)...
   pushd "%FRONTEND%"
@@ -93,12 +104,13 @@ if not defined SKIP_BACKEND (
   start "JAStudio backend" /d "%BACKEND%" cmd /k ""%JASTUDIO_PYTHON%" -u -m uvicorn app.main:app --host 127.0.0.1 --port %BACKEND_PORT%"
 )
 
-if not defined SKIP_FRONTEND (
-  echo [*] Starting frontend...
-  start "JAStudio frontend" /d "%FRONTEND%" cmd /k "npm run dev"
-)
-
-REM --- Wait for readiness ---------------------------------------------------
+REM --- Wait for the backend BEFORE starting the frontend ---------------------
+REM
+REM Vite is ready in well under a second; the backend takes a few. Starting them
+REM together leaves a window where any already-open browser tab reconnects
+REM through Vite's HMR and fires its API calls at a port nothing is listening on,
+REM filling the frontend log with ECONNREFUSED. Ordering it this way removes the
+REM window rather than papering over it.
 
 echo.
 echo [*] Waiting for the backend to come up...
@@ -116,7 +128,12 @@ if defined BACKEND_OK (
   echo     backend ready.
 ) else (
   echo [!] Backend did not respond within 45s. Check its window for errors --
-  echo     first start is slow if torch/CUDA is initialising.
+  echo     starting the frontend anyway so you can see the page.
+)
+
+if not defined SKIP_FRONTEND (
+  echo [*] Starting frontend...
+  start "JAStudio frontend" /d "%FRONTEND%" cmd /k "npm run dev"
 )
 
 echo [*] Waiting for the frontend...

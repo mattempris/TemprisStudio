@@ -9,7 +9,9 @@ REM would take down unrelated work -- training runs, notebooks -- that has
 REM nothing to do with this app.
 REM ---------------------------------------------------------------------------
 
-set "PORTS=9400 5173"
+REM Vite falls back to 5174, 5175... when 5173 is taken, so stopping only 5173
+REM leaves orphans behind that survive every restart. Sweep the fallback range.
+set "PORTS=9400 5173 5174 5175 5176"
 
 echo ===============================================
 echo   Stopping Tempris JAStudio

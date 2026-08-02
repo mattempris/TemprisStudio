@@ -1,7 +1,7 @@
 """WebSocket message schemas for pipeline progress streaming."""
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel
 
@@ -9,15 +9,28 @@ from pydantic import BaseModel
 # decision steps (dedupe threshold preview, cluster k preview) are plain
 # synchronous REST calls — there's no progress to report on a sub-second
 # recompute, and making them WS-driven would add ceremony for nothing.
+#
+# These MUST match the frontend's wizard step ids, because the client uses the
+# stage on a streamed message to decide which step's progress bar to render, and
+# to re-attach a running job to its step after a reload.
+#
+# Keep STAGE_NAMES in step with the Literal: routes validate their label against
+# it at job creation (see orchestrator.JobRegistry.create). Previously the
+# Literal was the only check and it happened deep inside message construction,
+# so an unlisted label killed the job mid-run *and* killed the error report that
+# should have explained why — the UI just saw the progress bar vanish.
 StageName = Literal[
     "strip",
+    "dedupe",
     "normalize",
     "cluster",
-    "name",
-    "profile_gen",
-    "je_vote",
-    "review",
+    "profiles",
+    "skills",
+    "tasks",
+    "matching",
 ]
+
+STAGE_NAMES: frozenset[str] = frozenset(get_args(StageName))
 
 JobStatus = Literal["pending", "running", "completed", "failed", "cancelled"]
 

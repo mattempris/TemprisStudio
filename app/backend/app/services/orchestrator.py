@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.models.messages import (
+    STAGE_NAMES,
     ErrorMessage,
     HeartbeatMessage,
     JobCompleteMessage,
@@ -77,6 +78,16 @@ class JobRegistry:
         self._active_by_project: dict[tuple[str, str], str] = {}
 
     def create(self, client_slug: str, project_slug: str, stage: str) -> PipelineJob:
+        # Fail here, not later. Every streamed message validates `stage` against
+        # the StageName literal, so an unlisted label does not surface until the
+        # job is already running — and it takes the error report down with it,
+        # leaving the UI with a progress bar that silently vanishes.
+        if stage not in STAGE_NAMES:
+            raise ValueError(
+                f"unknown pipeline stage {stage!r}; expected one of {sorted(STAGE_NAMES)}. "
+                "Stage labels must match the frontend's wizard step ids."
+            )
+
         existing_id = self._active_by_project.get((client_slug, project_slug))
         if existing_id:
             existing = self._by_id.get(existing_id)
@@ -174,6 +185,27 @@ class ProgressReporter:
         return _cb
 
 
+def _error_payload(job: PipelineJob, message: str | None = None) -> dict:
+    """Build the failure message without being able to fail.
+
+    The reporting path must survive anything the job did, including whatever made
+    it fail. Building ErrorMessage directly meant a job with a stage the schema
+    rejected raised *again* inside the handler, so the client was told nothing at
+    all and the real traceback was buried under a validation error about the
+    stage name.
+    """
+    text = message or job.error or "job failed"
+    try:
+        return ErrorMessage(stage=job.stage, message=text, recoverable=False).model_dump()
+    except Exception:  # noqa: BLE001 — never let reporting mask the real failure
+        return {
+            "type": "error",
+            "stage": None,
+            "message": text,
+            "recoverable": False,
+        }
+
+
 async def run_job(
     job: PipelineJob,
     work: Callable[[ProgressReporter], dict],
@@ -198,7 +230,7 @@ async def run_job(
         payload = JobCompleteMessage(job_id=job.job_id, summary=job.summary).model_dump()
     except asyncio.CancelledError:
         job.status = "cancelled"
-        payload = ErrorMessage(stage=job.stage, message="job cancelled", recoverable=False).model_dump()
+        payload = _error_payload(job, "job cancelled")
         job.history.append(payload)
         job._queue.put_nowait(payload)
         raise
@@ -206,7 +238,7 @@ async def run_job(
         job.status = "failed"
         job.error = f"{type(e).__name__}: {e}"
         traceback.print_exc()
-        payload = ErrorMessage(stage=job.stage, message=job.error, recoverable=False).model_dump()
+        payload = _error_payload(job)
     finally:
         job.finished_at = time.time()
         _registry.release(job)

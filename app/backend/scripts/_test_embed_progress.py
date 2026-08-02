@@ -36,7 +36,9 @@ class StubModel:
 
 stub = StubModel()
 embeddings._load_model.cache_clear()
-embeddings._load_model = lambda entity: stub  # type: ignore[assignment]
+# Signature is (model_name, device) — accept anything so this stub does not have
+# to be revisited every time the real loader gains a parameter.
+embeddings._load_model = lambda *a, **k: stub  # type: ignore[assignment]
 svc = embeddings.EmbeddingService()
 
 CHUNK = embeddings._PROGRESS_CHUNK

@@ -41,21 +41,61 @@ ENTITIES = ["jobQWEN", "skillQWEN", "taskQWEN"]
 STAMP_NAME = "installed_from.json"
 
 
-def _find_zip(entity: str) -> Path:
+def _newest_mtime(path: Path) -> int:
+    """Newest mtime in a tree, so a directory source has a stable version marker
+    the same way a zip's own mtime serves as one."""
+    if path.is_file():
+        return int(path.stat().st_mtime)
+    return max((int(f.stat().st_mtime) for f in path.rglob("*") if f.is_file()), default=0)
+
+
+def _find_source(entity: str) -> Path:
+    """The newest candidate under models/<entity>/: a .zip, or an already-unzipped
+    model directory.
+
+    Both shapes turn up in practice — a zip when the model is handed over
+    packaged, a plain directory when it is dropped in as produced. Globbing only
+    for zips meant a directory drop failed with "no .zip", which says nothing
+    useful about what was actually there.
+    """
     src_dir = SOURCE_MODELS_DIR / entity
     if not src_dir.is_dir():
         raise FileNotFoundError(f"[{entity}] source dir not found: {src_dir}")
-    zips = sorted(src_dir.glob("*.zip"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if not zips:
-        raise FileNotFoundError(f"[{entity}] no .zip in {src_dir}")
-    if len(zips) > 1:
-        print(f"[{entity}] {len(zips)} zips present; using the newest: {zips[0].name}")
-    return zips[0]
+
+    candidates = [p for p in src_dir.glob("*.zip")]
+    # A directory counts only if it looks like a model, not just any subfolder.
+    candidates += [
+        d for d in src_dir.iterdir()
+        if d.is_dir() and ((d / "adapter_config.json").exists() or (d / "config.json").exists())
+    ]
+    if not candidates:
+        raise FileNotFoundError(
+            f"[{entity}] nothing installable in {src_dir}. Expected a .zip, or a "
+            f"directory containing adapter_config.json (LoRA) or config.json (merged)."
+        )
+
+    candidates.sort(key=_newest_mtime, reverse=True)
+    if len(candidates) > 1:
+        print(
+            f"[{entity}] {len(candidates)} candidates present; using the newest: "
+            f"{candidates[0].name}"
+        )
+    return candidates[0]
 
 
-def _stamp(src_zip: Path) -> dict:
-    st = src_zip.stat()
-    return {"source_zip": src_zip.name, "size_bytes": st.st_size, "mtime": int(st.st_mtime)}
+def _stamp(src: Path) -> dict:
+    kind = "zip" if src.is_file() else "dir"
+    size = (
+        src.stat().st_size
+        if src.is_file()
+        else sum(f.stat().st_size for f in src.rglob("*") if f.is_file())
+    )
+    return {
+        "source_zip": src.name,  # key name kept for stamp compatibility
+        "source_kind": kind,
+        "size_bytes": size,
+        "mtime": _newest_mtime(src),
+    }
 
 
 def _read_stamp(dest_dir: Path) -> dict | None:
@@ -129,7 +169,7 @@ def _merge_adapter(staged: Path, dest_dir: Path, entity: str) -> None:
 
 
 def prepare_one(entity: str, *, force: bool = False) -> None:
-    src_zip = _find_zip(entity)
+    src_zip = _find_source(entity)
     dest_dir = MODELS_DIR / entity
     installed = _read_stamp(dest_dir)
     wanted = _stamp(src_zip)
@@ -149,7 +189,14 @@ def prepare_one(entity: str, *, force: bool = False) -> None:
         return
 
     with tempfile.TemporaryDirectory(prefix=f"{entity}-") as tmp:
-        staged = _extract(src_zip, Path(tmp) / "staged")
+        staged = Path(tmp) / "staged"
+        if src_zip.is_file():
+            _extract(src_zip, staged)
+        else:
+            # Copy rather than move: the source belongs to whoever put it there
+            # and must be intact whether or not this install succeeds.
+            print(f"[{entity}] staging directory {src_zip.name} ...")
+            shutil.copytree(src_zip, staged)
         is_adapter = (staged / "adapter_config.json").exists()
 
         # Replace rather than overlay: leftovers from a differently-sharded
@@ -176,7 +223,7 @@ def prepare_one(entity: str, *, force: bool = False) -> None:
         if is_adapter:
             _merge_adapter(staged, dest_dir, entity)
         else:
-            print(f"[{entity}] merged model — extracting {src_zip.name} -> {dest_dir}")
+            print(f"[{entity}] merged model — installing {src_zip.name} -> {dest_dir}")
             for item in staged.iterdir():
                 dst = dest_dir / item.name
                 shutil.move(str(item), str(dst))

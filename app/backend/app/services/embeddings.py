@@ -5,30 +5,40 @@ scripts/prepare_embedding_models.py into data/models/<entity>/.
 Each model is an asymmetric query/document embedding model (1024-dim, last-token
 pooling, cosine similarity) — same interface `jobMatching`'s EmbeddingService uses
 for JobBERT-v3, just with a different underlying checkpoint per entity type.
+
+Note on imports: torch and sentence-transformers are imported inside the
+functions that need them, not at module scope. Importing them costs ~7 seconds,
+and this module is reachable from the API routes — so at module scope it delayed
+uvicorn binding its port by that much, during which the frontend (ready in under
+a second) got connection-refused on every request. The models were always loaded
+lazily, so the eager import bought nothing.
 """
 from __future__ import annotations
 
 import json
 from collections.abc import Callable
 from functools import lru_cache
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+import numpy as np
+
+from app.core.config import MODELS_DIR, get_settings
+
+if TYPE_CHECKING:  # torch/sentence-transformers are imported lazily — see below
+    from sentence_transformers import SentenceTransformer
 
 # How many texts to encode between progress reports. A multiple of the usual
 # encode batch_size so GPU batching stays efficient, but small enough that the
 # bar moves every few seconds on a realistic corpus.
 _PROGRESS_CHUNK = 128
 
-import numpy as np
-import torch
-from sentence_transformers import SentenceTransformer
-
-from app.core.config import MODELS_DIR, get_settings
-
 EntityType = Literal["job", "skill", "task"]
 _ENTITY_TO_DIR = {"job": "jobQWEN", "skill": "skillQWEN", "task": "taskQWEN"}
 
 
 def _resolve_device() -> str:
+    import torch
+
     settings = get_settings()
     if settings.embedding_device == "cuda" and torch.cuda.is_available():
         return "cuda"
@@ -48,6 +58,8 @@ def _load_model(entity: EntityType) -> SentenceTransformer:
             f"Embedding model for '{entity}' not found at {model_dir}. "
             f"Run: python -m scripts.prepare_embedding_models {_ENTITY_TO_DIR[entity]}"
         )
+    from sentence_transformers import SentenceTransformer
+
     device = _resolve_device()
     print(f"[embeddings] loading {entity} model from {model_dir} on {device}...")
     model = SentenceTransformer(str(model_dir), device=device)

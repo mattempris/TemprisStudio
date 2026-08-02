@@ -80,6 +80,9 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
   // summary render only there. Without this every stage showed the same job —
   // step 3 displaying step 2's completed bar.
   const [jobOwner, setJobOwner] = useState<string | null>(null);
+  // Distinguishes "the API is not up yet" from a real error, so a slow backend
+  // start reads as waiting rather than as a broken app.
+  const [backendDown, setBackendDown] = useState(false);
   // Fan-out width for the per-item LLM stages. One control rather than per stage:
   // it is a property of the API account's rate limits, not of a stage.
   const [workers, setWorkers] = useState<number>(() => {
@@ -112,9 +115,18 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
         if (mt.status === "fulfilled") setMatching(mt.value);
         if (ov.status === "fulfilled") setOverview(ov.value);
       }
+      setBackendDown(false);
       return s;
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      // The backend takes a few seconds longer to start than Vite does, so the
+      // first loads of a fresh session can land before it is listening. That is
+      // a wait, not a failure — show it as one and let the retry loop clear it,
+      // rather than pinning a raw connection error the user has to reload past.
+      if (e instanceof TypeError || (e as { status?: number }).status === 502) {
+        setBackendDown(true);
+      } else {
+        setError(e instanceof Error ? e.message : String(e));
+      }
       return null;
     }
   }, [api]);
@@ -128,6 +140,14 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
     // 3rd-party taxonomy isn't present, which the matching stage handles.
     void taxonomyApi.industries().then((r) => setAllIndustries(r.industries)).catch(() => {});
   }, [refresh, api]);
+
+  // Poll until the backend answers. Only while it is down, so a healthy session
+  // does no extra work.
+  useEffect(() => {
+    if (!backendDown) return;
+    const t = setInterval(() => void refresh(), 2000);
+    return () => clearInterval(t);
+  }, [backendDown, refresh]);
 
   // Re-attach to a job already running server-side (e.g. after a page reload) —
   // the backend keeps the job alive and replays its history.
@@ -191,7 +211,20 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
   }
 
   if (!summary) {
-    return <p className="px-6 py-12 text-[13px] text-text-muted">Loading project…</p>;
+    return (
+      <div className="mx-auto max-w-2xl px-6 py-16 text-center">
+        <p className="text-[13px] font-semibold text-text">
+          {backendDown ? "Waiting for the backend…" : "Loading project…"}
+        </p>
+        {backendDown && (
+          <p className="mx-auto mt-2 max-w-md text-[12px] leading-snug text-text-secondary">
+            The API is not answering on port 9400 yet. It takes a few seconds
+            longer to start than this page does, so this usually clears on its
+            own. Retrying every 2 seconds.
+          </p>
+        )}
+      </div>
+    );
   }
 
   return (
@@ -265,6 +298,13 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
         {error && (
           <div className="rounded-[10px] border border-brand-border bg-brand-bg px-4 py-3 text-[12.5px] text-text">
             {error}
+          </div>
+        )}
+
+        {backendDown && (
+          <div className="rounded-[10px] border border-warning-border bg-warning-bg px-4 py-3 text-[12.5px] text-text">
+            Lost contact with the backend on port 9400. Retrying every 2 seconds —
+            anything already on screen may be out of date.
           </div>
         )}
 

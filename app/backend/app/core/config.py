@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     # ~5.9GB of a 6.1GB card at batch_size 32 on multi-KB job descriptions. Below
     # this we run on CPU rather than risk an OOM that can disturb other GPU work.
     embedding_min_free_vram_mb: int = 3000
+    # Which model embeds jobs: "jobQWEN" (default) or "JobBERT-v2". Both output
+    # 1024 dims, so their vectors are shape-compatible but semantically unrelated
+    # — switching invalidates any cached job embeddings, which the fingerprint
+    # check in services/embeddings.py enforces. Per-run override: ?embedding_model=
+    job_embedding_model: str = "jobQWEN"
 
     # Clustering / stability gating defaults (see plan's methodology section)
     stability_n_perturb: int = 50

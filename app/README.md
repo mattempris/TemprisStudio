@@ -72,6 +72,8 @@ but functional — everything else is unaffected.
 | `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` | service principal for blob storage |
 | `AZURE_BLOB_ACCOUNT` | `temprisdev` |
 | `EMBEDDING_DEVICE` | `cuda` or `cpu`; falls back to CPU automatically |
+| `EMBEDDING_MIN_FREE_VRAM_MB` | below this much free VRAM, run on CPU rather than risk an OOM (default 3000) |
+| `JOB_EMBEDDING_MODEL` | `jobQWEN` (default) or `JobBERT-v2` |
 | `APP_PORT`, `CORS_ORIGINS`, `MAX_FILE_SIZE_MB` | server basics |
 | `LLM_WORKERS` | how many LLM calls run concurrently in the per-item stages (default 8) |
 | `LLM_MAX_WORKERS` | ceiling the API will accept for a per-run override (default 64) |
@@ -96,6 +98,32 @@ Two zip shapes are handled: a fully merged sentence-transformers directory
 so inference pays no adapter overhead. Merging needs `peft` and the base model
 named in `adapter_config.json` — currently `Qwen/Qwen3-Embedding-0.6B`, pulled
 from the HuggingFace cache or downloaded once.
+
+### Choosing the job embedding model
+
+The job slot has two options; skills and tasks have one model each.
+
+| Model | Source | Character |
+|---|---|---|
+| `jobQWEN` (default) | local zip, fine-tuned Qwen3-0.6B | Last-token pooling, instruction-prefixed queries. Handles full job descriptions. ~2.4GB in fp32. |
+| `JobBERT-v2` | `TechWolf/JobBERT-v2` on the Hub | mpnet-base bi-encoder for job **title** normalisation, trained on 5.5M title-skill pairs. 512-token limit, so long descriptions truncate. ~425MB, so much faster and it fits alongside other GPU work. |
+
+Fetch JobBERT-v2 once with `python -m scripts.download_jobbert`. Select it with
+`JOB_EMBEDDING_MODEL=JobBERT-v2`, or per run with `?embedding_model=JobBERT-v2` on
+`dedupe/build` and `cluster/build`. `GET /embedding-models` lists what is
+installed, loaded, and currently selected.
+
+Which to use: JobBERT-v2 is built for titles and is the better choice on a
+titles-only extract, or where you want speed and a small GPU footprint. jobQWEN
+sees the whole normalised description, which is what the dedupe and clustering
+stages actually feed it, so it is the safer default for description-rich data.
+
+**Both emit 1024 dimensions**, which is a trap worth stating plainly: their
+vectors are shape-compatible but semantically unrelated, so nothing about the
+array shape reveals a mismatch. Switching models therefore invalidates cached job
+embeddings, and the fingerprint stored beside each cache is the only thing that
+catches it — a switch produces a 409 telling you to rebuild the tree, rather than
+silently clustering a mix.
 
 **Replacing a model**: stop the backend first (`stopApp.bat`). A running server
 holds the model's files open, and Windows will not let the directory be replaced

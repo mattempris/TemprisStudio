@@ -142,6 +142,35 @@ def get_summary(client_slug: str, project_slug: str) -> StageSummary:
     )
 
 
+@router.get("/embedding-models")
+def list_embedding_models(client_slug: str, project_slug: str) -> dict:
+    """Selectable embedding models per entity, with what is installed.
+
+    Only the job slot has a choice today. Both job models emit 1024 dims, so the
+    UI cannot infer incompatibility from shape — `current` is what a run will use
+    unless overridden, and switching invalidates cached job embeddings.
+    """
+    svc_emb = get_embedding_service()
+    out: dict[str, dict] = {}
+    for entity in ("job", "skill", "task"):
+        current = embeddings.resolve_model(entity)  # type: ignore[arg-type]
+        out[entity] = {
+            "current": current.name,
+            "selectable": len(embeddings.models_for(entity)) > 1,  # type: ignore[arg-type]
+            "models": [
+                {
+                    "name": m.name,
+                    "dim": m.dim,
+                    "note": m.note,
+                    "installed": svc_emb.is_ready(entity, m.name),  # type: ignore[arg-type]
+                    "loaded": embeddings.is_loaded(entity, m.name),  # type: ignore[arg-type]
+                }
+                for m in embeddings.models_for(entity)  # type: ignore[arg-type]
+            ],
+        }
+    return out
+
+
 # ===========================================================================
 # Step 0 — ingestion
 # ===========================================================================
@@ -578,24 +607,32 @@ def _get_dedupe_graph(
 
 @router.post("/dedupe/build")
 async def start_dedupe_build(
-    client_slug: str, project_slug: str, device: str | None = None
+    client_slug: str,
+    project_slug: str,
+    device: str | None = None,
+    embedding_model: str | None = None,
 ) -> dict:
     """Embed stripped records once; the threshold slider then works off the cache."""
     svc, state = _load(client_slug, project_slug)
     if not state.stripped_records:
         raise HTTPException(400, "no stripped records — run the strip stage first")
 
+    try:
+        spec = embeddings.resolve_model("job", embedding_model)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
     texts = [r.stripped_text for r in state.stripped_records]
     ids = [r.id for r in state.stripped_records]
 
     def work(reporter: ProgressReporter) -> dict:
         svc_emb = get_embedding_service()
-        if not embeddings.is_loaded("job"):
-            reporter.message("Loading the jobQWEN model (first use this session)")
-            svc_emb.warm("job", device)
-        reporter.stage_start(len(texts), f"Embedding {len(texts)} records with jobQWEN")
+        if not embeddings.is_loaded("job", embedding_model):
+            reporter.message(f"Loading the {spec.name} model (first use this session)")
+            svc_emb.warm("job", device, embedding_model)
+        reporter.stage_start(len(texts), f"Embedding {len(texts)} records with {spec.name}")
         emb = svc_emb.embed_documents(
-            "job", texts, device=device,
+            "job", texts, device=device, model=embedding_model,
             progress=lambda done, total: reporter.progress(done, total, "embedded")
         )
         reporter.message("Computing the similarity graph")
@@ -781,7 +818,10 @@ _TREE_CACHE: dict[tuple[str, str], tuple[np.ndarray, np.ndarray, list[str]]] = {
 
 @router.post("/cluster/build")
 async def start_cluster_build(
-    client_slug: str, project_slug: str, device: str | None = None
+    client_slug: str,
+    project_slug: str,
+    device: str | None = None,
+    embedding_model: str | None = None,
 ) -> dict:
     """Embed normalised profiles and build ONE Ward tree.
 
@@ -805,13 +845,18 @@ async def start_cluster_build(
     ]
     ids = [p.id for p in profiles]
 
+    try:
+        spec2 = embeddings.resolve_model("job", embedding_model)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
     def work(reporter: ProgressReporter) -> dict:
-        if not embeddings.is_loaded("job"):
-            reporter.message("Loading the jobQWEN model (first use this session)")
-            get_embedding_service().warm("job", device)
-        reporter.stage_start(len(texts), f"Embedding {len(texts)} profiles with jobQWEN")
+        if not embeddings.is_loaded("job", embedding_model):
+            reporter.message(f"Loading the {spec2.name} model (first use this session)")
+            get_embedding_service().warm("job", device, embedding_model)
+        reporter.stage_start(len(texts), f"Embedding {len(texts)} profiles with {spec2.name}")
         emb = get_embedding_service().embed_documents(
-            "job", texts, device=device,
+            "job", texts, device=device, model=embedding_model,
             progress=lambda done, total: reporter.progress(done, total, "embedded")
         )
         reporter.message("Building the Ward tree")
@@ -821,7 +866,7 @@ async def start_cluster_build(
         svc.save_array(client_slug, project_slug, "cluster_linkage", tree)
         svc.save_index(
             client_slug, project_slug, "cluster_embeddings", ids,
-            model_fingerprint=get_embedding_service().fingerprint("job"),
+            model_fingerprint=get_embedding_service().fingerprint("job", embedding_model),
         )
         _TREE_CACHE[(client_slug, project_slug)] = (tree, emb, ids)
 

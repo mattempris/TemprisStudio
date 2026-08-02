@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING, Literal
 
@@ -33,7 +34,80 @@ if TYPE_CHECKING:  # torch/sentence-transformers are imported lazily — see bel
 _PROGRESS_CHUNK = 128
 
 EntityType = Literal["job", "skill", "task"]
-_ENTITY_TO_DIR = {"job": "jobQWEN", "skill": "skillQWEN", "task": "taskQWEN"}
+
+
+@dataclass(frozen=True)
+class ModelSpec:
+    """A selectable embedding model.
+
+    `has_query_prompt` matters because the two families differ in how they handle
+    asymmetric query/document use: the Qwen models take an instruction prefix via
+    `prompt_name="query"`, while JobBERT-v2 has no prompts at all and passing one
+    raises. `dim` is recorded because both happen to be 1024 — so a dimension
+    check cannot tell their vectors apart, and only the fingerprint can.
+    """
+
+    name: str
+    dir_name: str
+    entity: EntityType
+    dim: int
+    has_query_prompt: bool
+    note: str
+
+
+MODELS: dict[str, ModelSpec] = {
+    "jobQWEN": ModelSpec(
+        "jobQWEN", "jobQWEN", "job", 1024, True,
+        "Fine-tuned Qwen3-0.6B. Last-token pooling, instruction-prefixed queries. "
+        "Trained on job data; handles full job descriptions.",
+    ),
+    "JobBERT-v2": ModelSpec(
+        "JobBERT-v2", "JobBERT-v2", "job", 1024, False,
+        "TechWolf/JobBERT-v2, an mpnet-base bi-encoder for job TITLE normalisation "
+        "(5.5M title-skill pairs). 512-token limit, so long descriptions are "
+        "truncated — strongest on titles and short text, and ~6x smaller/faster "
+        "than jobQWEN.",
+    ),
+    "skillQWEN": ModelSpec("skillQWEN", "skillQWEN", "skill", 1024, True, "Fine-tuned Qwen3-0.6B for skills."),
+    "taskQWEN": ModelSpec("taskQWEN", "taskQWEN", "task", 1024, True, "Fine-tuned Qwen3-0.6B for tasks."),
+}
+
+# Only the job slot is selectable today; skills and tasks have one model each.
+_DEFAULT_BY_ENTITY: dict[str, str] = {"job": "jobQWEN", "skill": "skillQWEN", "task": "taskQWEN"}
+
+
+def models_for(entity: EntityType) -> list[ModelSpec]:
+    return [m for m in MODELS.values() if m.entity == entity]
+
+
+def resolve_model(entity: EntityType, override: str | None = None) -> ModelSpec:
+    """Which model to use for an entity: an explicit choice, else the configured
+    default for the job slot, else the entity's only model."""
+    if override:
+        spec = MODELS.get(override)
+        if spec is None:
+            raise ValueError(
+                f"unknown embedding model {override!r}; available for '{entity}': "
+                f"{[m.name for m in models_for(entity)]}"
+            )
+        if spec.entity != entity:
+            raise ValueError(
+                f"model {override!r} is a '{spec.entity}' model, not '{entity}'"
+            )
+        return spec
+
+    if entity == "job":
+        configured = get_settings().job_embedding_model
+        spec = MODELS.get(configured)
+        if spec is None or spec.entity != "job":
+            print(
+                f"[embeddings] JOB_EMBEDDING_MODEL={configured!r} is not a known job "
+                f"model — using jobQWEN. Valid: {[m.name for m in models_for('job')]}"
+            )
+            return MODELS["jobQWEN"]
+        return spec
+
+    return MODELS[_DEFAULT_BY_ENTITY[entity]]
 
 
 def _resolve_device(override: str | None = None) -> str:
@@ -78,34 +152,35 @@ def _resolve_device(override: str | None = None) -> str:
 _LOADED: set[str] = set()
 
 
-@lru_cache(maxsize=6)
-def _load_model(entity: EntityType, device: str | None = None) -> SentenceTransformer:
-    """Cached per (entity, device). The device is part of the key because a model
+@lru_cache(maxsize=8)
+def _load_model(model_name: str, device: str | None = None) -> SentenceTransformer:
+    """Cached per (model, device). The device is part of the key because a model
     already resident on CUDA is not usable as a CPU model — without it, asking for
     CPU after a GPU load would silently hand back the GPU copy."""
-    model_dir = MODELS_DIR / _ENTITY_TO_DIR[entity]
+    spec = MODELS[model_name]
+    model_dir = MODELS_DIR / spec.dir_name
     if not model_dir.exists():
         raise FileNotFoundError(
-            f"Embedding model for '{entity}' not found at {model_dir}. "
-            f"Run: python -m scripts.prepare_embedding_models {_ENTITY_TO_DIR[entity]}"
+            f"Embedding model {model_name!r} not found at {model_dir}. "
+            f"Run: python -m scripts.prepare_embedding_models {spec.dir_name}"
         )
     from sentence_transformers import SentenceTransformer
 
     resolved = _resolve_device(device)
-    print(f"[embeddings] loading {entity} model from {model_dir} on {resolved}...")
+    print(f"[embeddings] loading {model_name} from {model_dir} on {resolved}...")
     model = SentenceTransformer(str(model_dir), device=resolved)
-    _LOADED.add(entity)
+    _LOADED.add(model_name)
     return model
 
 
-def is_loaded(entity: EntityType) -> bool:
-    """Whether the model is already resident.
+def is_loaded(entity: EntityType, model: str | None = None) -> bool:
+    """Whether the model for this entity is already resident.
 
-    The first call of a session pulls ~1.2GB onto the GPU and can take tens of
-    seconds during which nothing else reports — callers use this to say "loading
-    the model" rather than leaving the user staring at a stalled bar.
+    The first load of a session moves the weights onto the device and can take
+    tens of seconds during which nothing else reports — callers use this to say
+    "loading the model" rather than leaving the user staring at a stalled bar.
     """
-    return entity in _LOADED
+    return resolve_model(entity, model).name in _LOADED
 
 
 class EmbeddingService:
@@ -119,6 +194,7 @@ class EmbeddingService:
         batch_size: int = 32,
         progress: Callable[[int, int], None] | None = None,
         device: str | None = None,
+        model: str | None = None,
     ) -> np.ndarray:
         """Embed texts in 'document' mode (no query instruction prefix) — used for
         dedup/clustering, where we're comparing item-to-item, not query-to-document.
@@ -131,8 +207,9 @@ class EmbeddingService:
         Chunking does not change the result: each text is encoded independently
         and normalisation is per-vector, so the output is identical either way.
         """
-        model = _load_model(entity, device)
-        encode = lambda batch: model.encode(  # noqa: E731
+        spec = resolve_model(entity, model)
+        st = _load_model(spec.name, device)
+        encode = lambda batch: st.encode(  # noqa: E731
             batch, batch_size=batch_size, normalize_embeddings=True, show_progress_bar=False
         )
 
@@ -148,7 +225,7 @@ class EmbeddingService:
             progress(min(start + _PROGRESS_CHUNK, len(texts)), len(texts))
         return np.vstack(chunks)
 
-    def warm(self, entity: EntityType, device: str | None = None) -> None:
+    def warm(self, entity: EntityType, device: str | None = None, model: str | None = None) -> None:
         """Load the model now rather than lazily inside the next encode.
 
         Callers announce "loading the model" first, so the load has to happen
@@ -156,18 +233,36 @@ class EmbeddingService:
         would occur *after* the caller had already switched the message to
         "embedding", which is the silent stretch this exists to explain.
         """
-        _load_model(entity, device)
+        _load_model(resolve_model(entity, model).name, device)
 
-    def embed_query(self, entity: EntityType, text: str) -> np.ndarray:
-        """Embed a single query string using the model's query instruction prompt."""
-        model = _load_model(entity)
-        return model.encode([text], prompt_name="query", normalize_embeddings=True, show_progress_bar=False)[0]
+    def embed_query(
+        self,
+        entity: EntityType,
+        text: str,
+        *,
+        model: str | None = None,
+        device: str | None = None,
+    ) -> np.ndarray:
+        """Embed a single query string, using the model's query instruction prompt
+        where it has one.
 
-    def is_ready(self, entity: EntityType) -> bool:
-        model_dir = MODELS_DIR / _ENTITY_TO_DIR[entity]
-        return (model_dir / "config.json").exists()
+        JobBERT-v2 has no prompts — passing prompt_name to it raises. It is
+        asymmetric in a different way, via Router heads, but its documented usage
+        pins encoding to the `anchor` head, which is what plain-string encoding
+        already selects. So there is nothing to switch for a query.
+        """
+        spec = resolve_model(entity, model)
+        st = _load_model(spec.name, device)
+        kwargs = {"prompt_name": "query"} if spec.has_query_prompt else {}
+        return st.encode(
+            [text], normalize_embeddings=True, show_progress_bar=False, **kwargs
+        )[0]
 
-    def fingerprint(self, entity: EntityType) -> str:
+    def is_ready(self, entity: EntityType, model: str | None = None) -> bool:
+        spec = resolve_model(entity, model)
+        return (MODELS_DIR / spec.dir_name / "config.json").exists()
+
+    def fingerprint(self, entity: EntityType, model: str | None = None) -> str:
         """Identifies WHICH build of a model is installed, e.g.
         'taskQWEN@ft_epoch3.zip:1785570701'.
 
@@ -177,18 +272,29 @@ class EmbeddingService:
         and still returns plausible-looking groups. Stamping caches with this and
         comparing on load turns that into an explicit error.
 
+        The model NAME leads the fingerprint, which is what makes switching the
+        job model safe: jobQWEN and JobBERT-v2 both produce 1024-dim vectors, so
+        no shape or dimension check can tell their output apart. The name is the
+        only thing that can.
+
         Falls back to the bare name when the stamp is absent (a model installed
-        before stamping existed), which compares unequal to any stamped
-        fingerprint and so errs toward rebuilding.
+        before stamping existed, or one downloaded rather than unzipped), which
+        compares unequal to any stamped fingerprint and so errs toward rebuilding.
         """
-        name = _ENTITY_TO_DIR[entity]
+        name = resolve_model(entity, model).dir_name
         stamp = MODELS_DIR / name / "installed_from.json"
         if stamp.exists():
             try:
                 meta = json.loads(stamp.read_text(encoding="utf-8"))
-                return f"{name}@{meta.get('source_zip')}:{meta.get('mtime')}"
             except (json.JSONDecodeError, OSError):
-                pass
+                return name
+            # Two provenance shapes: models unzipped from a local zip carry
+            # source_zip/mtime, models pulled from the Hub carry a repo and a
+            # commit sha. Either uniquely identifies the build.
+            if meta.get("source_zip"):
+                return f"{name}@{meta['source_zip']}:{meta.get('mtime')}"
+            if meta.get("revision"):
+                return f"{name}@{meta.get('source_repo', 'hub')}:{meta['revision'][:12]}"
         return name
 
 

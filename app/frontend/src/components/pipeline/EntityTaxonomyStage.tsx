@@ -80,6 +80,9 @@ export function EntityTaxonomyStage({
   proficiency,
 }: Props) {
   const [tree, setTree] = useState<{ roots: TaxonomyNode[]; hasHeadcount: boolean } | null>(null);
+  // Whether the running job is this step's inference, as opposed to one of the
+  // tiers' own jobs — which report next to their own buttons.
+  const [ranInfer, setRanInfer] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!named) return;
@@ -100,7 +103,14 @@ export function EntityTaxonomyStage({
     <div className="space-y-4">
       {/* 1. Infer */}
       <div className="space-y-2">
-        <Button variant="primary" onClick={() => runJob(onInfer)} disabled={busy || jobProfileCount === 0}>
+        <Button
+          variant="primary"
+          onClick={() => {
+            setRanInfer(true);
+            runJob(onInfer);
+          }}
+          disabled={busy || jobProfileCount === 0}
+        >
           <span className="flex items-center gap-1.5">
             <Play size={12} />
             {inferredCount > 0 ? `Re-infer ${noun}` : `Infer ${noun}`} from {jobProfileCount} job
@@ -115,7 +125,10 @@ export function EntityTaxonomyStage({
         )}
       </div>
 
-      {progress}
+      {/* The step-level bar covers inference only. Each tier renders its own
+          progress next to the button that started it, so a taxonomy view never
+          shows two spinners for one job. */}
+      {ranInfer && progress}
 
       {/* 2. Group into the three tiers, bottom-up. Each is confirmed on its own,
              so a coarser tier only appears once the one below it is settled. */}

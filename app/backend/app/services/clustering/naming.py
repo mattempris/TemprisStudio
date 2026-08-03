@@ -40,11 +40,34 @@ _ENTITY_VOCAB = {
         "family": "skill families — the broadest skill groupings",
     },
     "task": {
-        "profile": "individual tasks (2-4 word action names, e.g. 'Invoice Reconciliation')",
-        "category": "task categories — related groups of tasks",
+        "profile": "task clusters — groups of the same activity done across different jobs",
+        "category": "task categories — related groups of task clusters",
         "family": "task domains — the broadest task groupings",
     },
 }
+
+# Tasks are things people DO, so their names are written as activities. Left to its
+# own devices the model produces marketing-flavoured noun phrases — "Proactive
+# Customer Support", "Strategic Vendor Management" — where the adjective carries no
+# information, cannot be verified from the underlying tasks, and makes two clusters
+# doing the same work look different.
+_TASK_RULES = (
+    "Name each cluster as the ACTIVITY being done, in the active voice:\n"
+    "- Start with the verb where it reads naturally: 'Supporting Customers', not "
+    "'Proactive Customer Support'. 'Reconciling Invoices', not 'Invoice "
+    "Reconciliation Excellence'.\n"
+    "- NO adjectives unless the name is wrong without one. 'Proactive', "
+    "'Strategic', 'Effective', 'Comprehensive', 'End-to-End', 'Robust' and the like "
+    "add nothing and must be dropped. Keep an adjective only where it distinguishes "
+    "this cluster from a sibling that would otherwise share its name.\n"
+    "- Be terse. Drop any word that does not change the meaning: 'Software Feature "
+    "Engineering' is 'Software Engineering'. Two or three words is usually right; "
+    "use a fourth only to disambiguate from a sibling.\n"
+    "- ONE activity per name. No 'and', no '&', no slashes joining two activities.\n"
+    "- Where a cluster contains a single underlying task, adopting that task's own "
+    "name is correct and preferred — do not invent a broader label for a group of "
+    "one."
+)
 
 # Seniority is a property of an individual job, not of a field of work — a category
 # called "Administration & Entry Level Support" describes the grade of the people in
@@ -126,7 +149,14 @@ def _build_system_prompt(entity: str, level: str, *, has_parent_context: bool) -
         if has_parent_context
         else ""
     )
-    rules = _JOB_LEVEL_RULES.get(level) if entity == "job" else None
+    if entity == "job":
+        rules = _JOB_LEVEL_RULES.get(level)
+    elif entity == "task":
+        # The same activity-voice rules apply at all three task levels; only the
+        # breadth differs, and the level label above already carries that.
+        rules = _TASK_RULES
+    else:
+        rules = None
     if rules is None:
         rules = (
             "Produce a short, specific label (2-5 words) for each, capturing the "
@@ -209,6 +239,25 @@ def name_level(
                 f"taxonomy level. Yours must be clearly distinct from all of them:\n{used}\n\n"
                 + prompt
             )
+        wanted = {int(b.split("]")[0][1:]) for b in batch}
+        names.update(_name_batch(prompt, system, batch, wanted))
+        if progress:
+            progress(min(len(names), n_expected), n_expected)
+
+    return _ensure_complete_and_unique(names, blocks, entity, level)
+
+
+def _name_batch(prompt: str, system: str, batch: list[str], wanted: set[int]) -> dict[int, str]:
+    """One naming call, retried once for whatever it failed to name.
+
+    The model occasionally returns fewer rows than it was asked for. That used to be
+    logged and shrugged off, which left a cluster with members and no name — and
+    because the tier above iterates the *names*, its members were then silently
+    orphaned out of the hierarchy with no parent at all. It is a correctness problem,
+    not a cosmetic one, so the ids that came back short are asked for again.
+    """
+    out: dict[int, str] = {}
+    for attempt in range(2):
         result = llm.complete_json(
             prompt,
             system=system,
@@ -216,11 +265,60 @@ def name_level(
             effort="low",
             max_tokens=_token_budget(len(batch)),
         )
-        names.update({c["id"]: c["name"].strip() for c in result["clusters"]})
-        if progress:
-            progress(min(len(names), n_expected), n_expected)
+        for c in result["clusters"]:
+            cid, name = c["id"], c["name"].strip()
+            if cid in wanted and name:
+                out[cid] = name
 
-    missing = set(range(n_expected)) - set(names)
-    if missing:
-        print(f"  [naming] {entity}/{level}: got {len(names)}/{n_expected} clusters — missing ids {sorted(missing)}")
+        missing = wanted - set(out)
+        if not missing:
+            break
+        if attempt == 0:
+            retry = [b for b in batch if int(b.split("]")[0][1:]) in missing]
+            print(f"  [naming] {len(missing)} cluster(s) came back unnamed — asking again for {sorted(missing)}")
+            prompt = "Name each cluster:\n\n" + "\n".join(retry)
+            batch = retry
+    return out
+
+
+def _ensure_complete_and_unique(
+    names: dict[int, str], blocks: list[str], entity: str, level: str
+) -> dict[int, str]:
+    """Every cluster ends up named, and no two names collide.
+
+    Both guarantees are enforced here rather than trusted from the model, because
+    both failures are silent and both corrupt the hierarchy:
+
+      - an unnamed cluster is dropped by the tier above, orphaning its members;
+      - two clusters sharing a name are indistinguishable in every view and every
+        export, and read as the same group listed twice.
+
+    A cluster the model would not name falls back to its own leading exemplar, which
+    is a worse name than the model's but an honest one. A duplicate keeps the first
+    occurrence and suffixes the rest — visible, so it can be corrected by hand,
+    rather than two identical rows nobody can tell apart.
+    """
+    by_id = {int(b.split("]")[0][1:]): b for b in blocks}
+
+    unnamed = sorted(set(by_id) - set(names))
+    for cid in unnamed:
+        # "[12] first exemplar; second exemplar" -> "First exemplar"
+        detail = by_id[cid].split("] ", 1)[-1].split(";")[0].strip().rstrip(".")
+        fallback = (detail[:60] or f"Cluster {cid}")
+        names[cid] = fallback[0].upper() + fallback[1:]
+        print(f"  [naming] {entity}/{level}: cluster {cid} unnamed after retry — using {names[cid]!r}")
+
+    seen: dict[str, int] = {}
+    for cid in sorted(names):
+        key = names[cid].strip().lower()
+        if key in seen:
+            n = 2
+            while f"{key} ({n})" in seen:
+                n += 1
+            names[cid] = f"{names[cid]} ({n})"
+            seen[names[cid].strip().lower()] = cid
+            print(f"  [naming] {entity}/{level}: cluster {cid} duplicated "
+                  f"cluster {seen[key]}'s name — renamed to {names[cid]!r}")
+        else:
+            seen[key] = cid
     return names

@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./palettes.css";
 
 /*
   Tempris JAStudio design tokens — see plan's "Design System" section.

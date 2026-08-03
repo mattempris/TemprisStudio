@@ -41,10 +41,14 @@ class ModelSpec:
     """A selectable embedding model.
 
     `has_query_prompt` matters because the two families differ in how they handle
-    asymmetric query/document use: the Qwen models take an instruction prefix via
-    `prompt_name="query"`, while JobBERT-v2 has no prompts at all and passing one
-    raises. `dim` is recorded because both happen to be 1024 — so a dimension
-    check cannot tell their vectors apart, and only the fingerprint can.
+    asymmetric query/document use: the Juggernaught models take an instruction prefix
+    via `prompt_name="query"`, while Lightning has no prompts at all and passing one
+    raises. `dim` is recorded because both happen to be 1024 — so a dimension check
+    cannot tell their vectors apart, and only the fingerprint can.
+
+    `name` and `dir_name` are internal: the fingerprint leads with `dir_name`, so they
+    are frozen for the life of a project's cached vectors. `label` is what a user
+    sees, and is free to change.
     """
 
     name: str
@@ -53,24 +57,48 @@ class ModelSpec:
     dim: int
     has_query_prompt: bool
     note: str
+    label: str = ""
 
 
 MODELS: dict[str, ModelSpec] = {
     "jobQWEN": ModelSpec(
         "jobQWEN", "jobQWEN", "job", 1024, True,
-        "Fine-tuned Qwen3-0.6B. Last-token pooling, instruction-prefixed queries. "
-        "Trained on job data; handles full job descriptions.",
+        "Fine-tuned for job data, with last-token pooling and instruction-prefixed "
+        "queries. Handles full job descriptions.",
+        label="Juggernaught",
     ),
     "JobBERT-v2": ModelSpec(
         "JobBERT-v2", "JobBERT-v2", "job", 1024, False,
-        "TechWolf/JobBERT-v2, an mpnet-base bi-encoder for job TITLE normalisation "
-        "(5.5M title-skill pairs). 512-token limit, so long descriptions are "
-        "truncated — strongest on titles and short text, and ~6x smaller/faster "
-        "than jobQWEN.",
+        "A bi-encoder specialised for job TITLE normalisation, trained on 5.5M "
+        "title-skill pairs. 512-token limit, so long descriptions are truncated — "
+        "strongest on titles and short text, and ~6x smaller and faster than "
+        "Juggernaught.",
+        label="Lightning",
     ),
-    "skillQWEN": ModelSpec("skillQWEN", "skillQWEN", "skill", 1024, True, "Fine-tuned Qwen3-0.6B for skills."),
-    "taskQWEN": ModelSpec("taskQWEN", "taskQWEN", "task", 1024, True, "Fine-tuned Qwen3-0.6B for tasks."),
+    "skillQWEN": ModelSpec(
+        "skillQWEN", "skillQWEN", "skill", 1024, True,
+        "Fine-tuned for skills.", label="Juggernaught",
+    ),
+    "taskQWEN": ModelSpec(
+        "taskQWEN", "taskQWEN", "task", 1024, True,
+        "Fine-tuned for tasks.", label="Juggernaught",
+    ),
 }
+
+
+def display_name(model_key: str | None) -> str:
+    """What to show a user for a stored model key.
+
+    State written before the rename holds raw keys like "taskQWEN", and exports and
+    summaries render them, so the mapping has to work on any historic value rather
+    than only on the live registry.
+    """
+    if not model_key:
+        return "unknown"
+    spec = MODELS.get(model_key)
+    if spec and spec.label:
+        return spec.label
+    return "Juggernaught" if model_key.upper().endswith("QWEN") else model_key
 
 # Only the job slot is selectable today; skills and tasks have one model each.
 _DEFAULT_BY_ENTITY: dict[str, str] = {"job": "jobQWEN", "skill": "skillQWEN", "task": "taskQWEN"}

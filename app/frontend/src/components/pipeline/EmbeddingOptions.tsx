@@ -75,7 +75,7 @@ export function EmbeddingOptions({
                 />
                 <span className="min-w-0">
                   <span className="flex flex-wrap items-center gap-1.5">
-                    <span className="text-[12.5px] font-semibold text-text">{m.name}</span>
+                    <span className="text-[12.5px] font-semibold text-text">{m.label ?? m.name}</span>
                     {m.name === slot.current && <Badge color="teal">default</Badge>}
                     {m.loaded && <Badge color="success">loaded</Badge>}
                     {!m.installed && <Badge color="brand">not installed</Badge>}
@@ -91,7 +91,8 @@ export function EmbeddingOptions({
         </div>
       ) : (
         <p className="text-[11.5px] text-text-secondary">
-          {slot.current} — the only model for {entity}s.
+          {slot.models.find((m) => m.name === slot.current)?.label ?? slot.current} — the only model for{" "}
+          {entity}s.
         </p>
       )}
 

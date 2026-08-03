@@ -191,6 +191,7 @@ def list_embedding_models(client_slug: str, project_slug: str) -> dict:
             "models": [
                 {
                     "name": m.name,
+                    "label": embeddings.display_name(m.name),
                     "dim": m.dim,
                     "note": m.note,
                     "installed": svc_emb.is_ready(entity, m.name),  # type: ignore[arg-type]

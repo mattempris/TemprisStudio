@@ -468,13 +468,18 @@ async def tier_analyse(
     """
     es = _check(entity, tier)
     svc, state = _load(client_slug, project_slug)
-    items, tree = _items_and_tree(svc, state, entity, tier)
-    if not (2 <= req.k < len(items)):
-        raise HTTPException(422, f"k must be between 2 and {len(items) - 1}")
-
     settings = get_settings()
 
     def work(reporter: ProgressReporter) -> dict:
+        # Inside the job, not before it. Assembling the items and building the Ward
+        # tree on a cold cache reads arrays from blob and is minutes of work at task
+        # scale — and done in the route body it delayed the HTTP response, so the
+        # client had no job id, no WebSocket and therefore no heartbeat for exactly
+        # as long as the slowest part took.
+        reporter.message(f"Preparing the {tier_state.tier_title(entity, tier).lower()}")
+        items, tree = _items_and_tree(svc, state, entity, tier)
+        if not (2 <= req.k < len(items)):
+            raise ValueError(f"k must be between 2 and {len(items) - 1}")
         reporter.stage_start(
             settings.stability_n_perturb,
             f"Assessing stability of {len(items)} items at k={req.k} "
@@ -540,15 +545,17 @@ async def tier_confirm(
     """Name the clusters and route the unstable slice. The step that spends."""
     es = _check(entity, tier)
     svc, state = _load(client_slug, project_slug)
-    items, tree = _items_and_tree(svc, state, entity, tier)
-    if not (2 <= req.k < len(items)):
-        raise HTTPException(422, f"k must be between 2 and {len(items) - 1}")
-
     settings = get_settings()
     _workers = llm.resolve_workers(workers)
     model_name = embeddings.resolve_model(es.embeddings_entity).name
 
     def work(reporter: ProgressReporter) -> dict:
+        # See tier_analyse: this has to happen inside the job so the client gets a
+        # job id immediately and the heartbeat starts ticking straight away.
+        reporter.message(f"Preparing the {tier_state.tier_title(entity, tier).lower()}")
+        items, tree = _items_and_tree(svc, state, entity, tier)
+        if not (2 <= req.k < len(items)):
+            raise ValueError(f"k must be between 2 and {len(items) - 1}")
         key = (client_slug, project_slug, entity, tier)
         analysis = _ANALYSIS_CACHE.get(key)
         if analysis is None or analysis.k != req.k:

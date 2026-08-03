@@ -51,7 +51,7 @@ ENTITIES = ("job", "skill", "task")
 class EntitySpec:
     """What differs between the three hierarchies.
 
-    `embeddings_entity` is the model key (jobQWEN/skillQWEN/taskQWEN);
+    `embeddings_entity` selects the model for this hierarchy (job/skill/task);
     `array_name` is the blob basename its vectors are stored under, which has to
     match what the build step wrote; `nouns` is per-tier UI wording, finest first.
     """

@@ -54,7 +54,10 @@ export interface HrisConfirmResult {
 }
 
 export interface EmbeddingModelInfo {
+  /** Internal registry key — frozen, because the embedding fingerprint depends on it. */
   name: string;
+  /** What to show a user. */
+  label?: string;
   dim: number;
   note: string;
   installed: boolean;

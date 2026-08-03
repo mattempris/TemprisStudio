@@ -38,7 +38,7 @@ export function Modal({
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-[rgba(30,34,51,0.45)] p-6"
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-[var(--color-overlay)] p-6"
       onClick={onClose}
     >
       <div
@@ -47,7 +47,7 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-[20px] border border-border bg-card shadow-[0_12px_32px_rgba(0,0,0,0.18)]"
+        className="flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-[20px] border border-border bg-card shadow-[var(--shadow-modal)]"
       >
         <div className="flex shrink-0 items-start gap-3 border-b border-border px-5 py-3.5">
           <div className="min-w-0 flex-1">

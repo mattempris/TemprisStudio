@@ -1,0 +1,248 @@
+/* ===========================================================================
+   Palettes
+   ---------------------------------------------------------------------------
+   Every token in index.css is referenced through var(--color-*) by the utilities
+   Tailwind generates, so a palette is just a higher-specificity override of the
+   same names: no component changes, no class swapping, no second stylesheet to
+   keep in step. `:root[data-palette=...]` outranks the `:root` that @theme emits.
+
+   Each palette re-picks the semantic colours rather than tinting one hue. On a
+   near-black canvas the default #c00000 brand and #15803d success both fall below
+   usable contrast, so they are replaced rather than reused.
+   =========================================================================== */
+
+:root {
+  /* Tokenised so a palette can darken or lighten the modal scrim. It was a
+     hardcoded slate rgba, which washed out to nothing on the dark palettes. */
+  --color-overlay: rgba(30, 34, 51, 0.45);
+}
+
+/* ---- Dark: the default structure, inverted and de-saturated -------------- */
+:root[data-palette="dark"] {
+  --color-canvas: #12141c;
+  --color-panel: #191c26;
+  --color-card: #1e2230;
+  --color-border: #333849;
+
+  --color-text: #e6e8ef;
+  --color-text-secondary: #b9bdc9;
+  --color-text-muted: #8a90a2;
+
+  --color-brand: #ef4444;
+  --color-brand-hover: #f87171;
+  --color-brand-bg: rgba(239, 68, 68, 0.12);
+  --color-brand-border: rgba(239, 68, 68, 0.32);
+
+  --color-accent: #60a5fa;
+  --color-accent-bg: rgba(96, 165, 250, 0.13);
+  --color-accent-border: rgba(96, 165, 250, 0.32);
+
+  --color-success: #4ade80;
+  --color-success-bg: rgba(74, 222, 128, 0.13);
+  --color-success-border: rgba(74, 222, 128, 0.32);
+
+  --color-warning: #fbbf24;
+  --color-warning-bg: rgba(251, 191, 36, 0.13);
+  --color-warning-border: rgba(251, 191, 36, 0.32);
+
+  --color-teal: #2dd4bf;
+  --color-teal-bg: rgba(45, 212, 191, 0.13);
+  --color-teal-border: rgba(45, 212, 191, 0.32);
+
+  --color-purple: #a78bfa;
+  --color-purple-bg: rgba(167, 139, 250, 0.13);
+  --color-purple-border: rgba(167, 139, 250, 0.32);
+
+  --color-orange: #fb923c;
+  --color-orange-bg: rgba(251, 146, 60, 0.13);
+  --color-orange-border: rgba(251, 146, 60, 0.32);
+
+  --color-overlay: rgba(0, 0, 0, 0.65);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-card-hover: 0 2px 10px rgba(0, 0, 0, 0.6);
+  --shadow-modal: 0 12px 32px rgba(0, 0, 0, 0.7);
+}
+
+/* ---- Vintage: warm paper, ink text, olive and rust accents --------------- */
+:root[data-palette="vintage"] {
+  --color-canvas: #efe7d8;
+  --color-panel: #f5efe3;
+  --color-card: #fbf7ee;
+  --color-border: #d9cdb7;
+
+  --color-text: #3a3226;
+  --color-text-secondary: #5f5443;
+  --color-text-muted: #8a7d68;
+
+  --color-brand: #9c3b2e;
+  --color-brand-hover: #7d2e23;
+  --color-brand-bg: rgba(156, 59, 46, 0.08);
+  --color-brand-border: rgba(156, 59, 46, 0.26);
+
+  --color-accent: #4a6b57;
+  --color-accent-bg: rgba(74, 107, 87, 0.09);
+  --color-accent-border: rgba(74, 107, 87, 0.26);
+
+  --color-success: #4f7a4a;
+  --color-success-bg: rgba(79, 122, 74, 0.1);
+  --color-success-border: rgba(79, 122, 74, 0.28);
+
+  --color-warning: #a06a1b;
+  --color-warning-bg: rgba(160, 106, 27, 0.1);
+  --color-warning-border: rgba(160, 106, 27, 0.28);
+
+  --color-teal: #6b7f52;
+  --color-teal-bg: rgba(107, 127, 82, 0.1);
+  --color-teal-border: rgba(107, 127, 82, 0.26);
+
+  --color-purple: #6b5b7f;
+  --color-purple-bg: rgba(107, 91, 127, 0.1);
+  --color-purple-border: rgba(107, 91, 127, 0.26);
+
+  --color-orange: #b0642a;
+  --color-orange-bg: rgba(176, 100, 42, 0.1);
+  --color-orange-border: rgba(176, 100, 42, 0.26);
+
+  --color-overlay: rgba(58, 50, 38, 0.5);
+  --shadow-card: 0 1px 2px rgba(90, 70, 40, 0.12);
+  --shadow-card-hover: 0 2px 8px rgba(90, 70, 40, 0.16);
+  --shadow-modal: 0 12px 32px rgba(90, 70, 40, 0.3);
+}
+
+/* ---- Cyberpunk: near-black with neon. Deliberately high-chroma ----------- */
+:root[data-palette="cyberpunk"] {
+  --color-canvas: #0a0a14;
+  --color-panel: #101026;
+  --color-card: #16162e;
+  --color-border: #2e2e5c;
+
+  --color-text: #e8e8ff;
+  --color-text-secondary: #a8a8d8;
+  --color-text-muted: #7878a8;
+
+  --color-brand: #ff2a6d;
+  --color-brand-hover: #ff5c8d;
+  --color-brand-bg: rgba(255, 42, 109, 0.14);
+  --color-brand-border: rgba(255, 42, 109, 0.4);
+
+  --color-accent: #05d9e8;
+  --color-accent-bg: rgba(5, 217, 232, 0.13);
+  --color-accent-border: rgba(5, 217, 232, 0.38);
+
+  --color-success: #00ff9f;
+  --color-success-bg: rgba(0, 255, 159, 0.13);
+  --color-success-border: rgba(0, 255, 159, 0.38);
+
+  --color-warning: #ffd166;
+  --color-warning-bg: rgba(255, 209, 102, 0.13);
+  --color-warning-border: rgba(255, 209, 102, 0.38);
+
+  --color-teal: #00e5ff;
+  --color-teal-bg: rgba(0, 229, 255, 0.13);
+  --color-teal-border: rgba(0, 229, 255, 0.38);
+
+  --color-purple: #b16cff;
+  --color-purple-bg: rgba(177, 108, 255, 0.13);
+  --color-purple-border: rgba(177, 108, 255, 0.38);
+
+  --color-orange: #ff9e00;
+  --color-orange-bg: rgba(255, 158, 0, 0.13);
+  --color-orange-border: rgba(255, 158, 0, 0.38);
+
+  --color-overlay: rgba(0, 0, 10, 0.75);
+  --shadow-card: 0 0 0 1px rgba(5, 217, 232, 0.07);
+  --shadow-card-hover: 0 0 12px rgba(5, 217, 232, 0.2);
+  --shadow-modal: 0 0 40px rgba(255, 42, 109, 0.24);
+}
+
+/* ---- Sepia: one hue family throughout, for print-like calm --------------- */
+:root[data-palette="sepia"] {
+  --color-canvas: #ece3d6;
+  --color-panel: #f3ece0;
+  --color-card: #f9f4ea;
+  --color-border: #d5c6b0;
+
+  --color-text: #43372a;
+  --color-text-secondary: #6b5a46;
+  --color-text-muted: #94826a;
+
+  --color-brand: #8a3f2a;
+  --color-brand-hover: #6d3021;
+  --color-brand-bg: rgba(138, 63, 42, 0.08);
+  --color-brand-border: rgba(138, 63, 42, 0.26);
+
+  --color-accent: #7a5c3a;
+  --color-accent-bg: rgba(122, 92, 58, 0.09);
+  --color-accent-border: rgba(122, 92, 58, 0.26);
+
+  --color-success: #5d6b45;
+  --color-success-bg: rgba(93, 107, 69, 0.1);
+  --color-success-border: rgba(93, 107, 69, 0.28);
+
+  --color-warning: #96702a;
+  --color-warning-bg: rgba(150, 112, 42, 0.1);
+  --color-warning-border: rgba(150, 112, 42, 0.28);
+
+  --color-teal: #6e6244;
+  --color-teal-bg: rgba(110, 98, 68, 0.1);
+  --color-teal-border: rgba(110, 98, 68, 0.26);
+
+  --color-purple: #6b5647;
+  --color-purple-bg: rgba(107, 86, 71, 0.1);
+  --color-purple-border: rgba(107, 86, 71, 0.26);
+
+  --color-orange: #99562a;
+  --color-orange-bg: rgba(153, 86, 42, 0.1);
+  --color-orange-border: rgba(153, 86, 42, 0.26);
+
+  --color-overlay: rgba(67, 55, 42, 0.5);
+  --shadow-card: 0 1px 2px rgba(80, 60, 40, 0.12);
+  --shadow-card-hover: 0 2px 8px rgba(80, 60, 40, 0.16);
+  --shadow-modal: 0 12px 32px rgba(80, 60, 40, 0.3);
+}
+
+/* ---- Upbeat: bright, high-chroma, cool-lit ------------------------------- */
+:root[data-palette="upbeat"] {
+  --color-canvas: #f6f8ff;
+  --color-panel: #edf2ff;
+  --color-card: #ffffff;
+  --color-border: #d8e2f8;
+
+  --color-text: #1a1f36;
+  --color-text-secondary: #495375;
+  --color-text-muted: #7a86a8;
+
+  --color-brand: #e5326b;
+  --color-brand-hover: #c72458;
+  --color-brand-bg: rgba(229, 50, 107, 0.08);
+  --color-brand-border: rgba(229, 50, 107, 0.26);
+
+  --color-accent: #4f46e5;
+  --color-accent-bg: rgba(79, 70, 229, 0.09);
+  --color-accent-border: rgba(79, 70, 229, 0.26);
+
+  --color-success: #059669;
+  --color-success-bg: rgba(16, 185, 129, 0.1);
+  --color-success-border: rgba(16, 185, 129, 0.3);
+
+  --color-warning: #d97706;
+  --color-warning-bg: rgba(245, 158, 11, 0.1);
+  --color-warning-border: rgba(245, 158, 11, 0.3);
+
+  --color-teal: #0891b2;
+  --color-teal-bg: rgba(6, 182, 212, 0.1);
+  --color-teal-border: rgba(6, 182, 212, 0.28);
+
+  --color-purple: #7c3aed;
+  --color-purple-bg: rgba(139, 92, 246, 0.1);
+  --color-purple-border: rgba(139, 92, 246, 0.28);
+
+  --color-orange: #ea580c;
+  --color-orange-bg: rgba(249, 115, 22, 0.1);
+  --color-orange-border: rgba(249, 115, 22, 0.28);
+
+  --color-overlay: rgba(26, 31, 54, 0.45);
+  --shadow-card: 0 1px 3px rgba(79, 70, 229, 0.09);
+  --shadow-card-hover: 0 3px 12px rgba(79, 70, 229, 0.14);
+  --shadow-modal: 0 12px 32px rgba(26, 31, 54, 0.22);
+}

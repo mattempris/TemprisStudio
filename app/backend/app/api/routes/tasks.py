@@ -1,6 +1,6 @@
 """Phase 3 routes — instructions.txt step 10 (tasks).
 
-Same shape as the skills routes, with taskQWEN and the time-proportion analytics
+Same shape as the skills routes, with the tasks model and the time-proportion analytics
 the spec asks for: "Browsable Task taxonommy with intelligence re total time
 proportion against task (add headcount analytics where we have headcount".
 """

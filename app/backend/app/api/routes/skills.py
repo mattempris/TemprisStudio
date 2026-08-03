@@ -1,7 +1,7 @@
 """Phase 2 routes — instructions.txt steps 8-9 (skills and proficiency).
 
 Reuses the Phase 1 machinery deliberately: the same clustering engine (with
-skillQWEN instead of jobQWEN), the same orchestrator/WebSocket progress, the same
+the skills model instead of the jobs one), the same orchestrator/WebSocket progress, the same
 blob persistence and lineage. Only the entity type and the naming vocabulary
 differ, which is why `services/clustering/` was written entity-agnostic.
 """

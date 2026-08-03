@@ -126,11 +126,16 @@ export function TierClusterStage({
     [preview],
   );
 
+  // Fires on mount as well as on slider moves. It used to be read as "debounce the
+  // slider", but the first render is exactly when a freshly-clustered tier has a k
+  // and no preview — so the size tiles and heat map only appeared once the user
+  // happened to nudge the slider.
   useEffect(() => {
     if (!status.built || !k) return;
-    const t = setTimeout(() => void fetchPreview(k), 150);
+    const already = result?.k === k;
+    const t = setTimeout(() => void fetchPreview(k), already ? 150 : 0);
     return () => clearTimeout(t);
-  }, [k, status.built, fetchPreview]);
+  }, [k, status.built, fetchPreview, result?.k]);
 
   // Stability is known either because the preview computed it inline (small tiers)
   // or because an analyse pass has run at this exact k. The second half matters:

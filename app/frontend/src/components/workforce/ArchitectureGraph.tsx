@@ -45,6 +45,9 @@ export type ColorMode = "entity" | "opportunity";
 // Deliberately small. The previous 5-24px range meant a few hundred nodes covered most
 // of the canvas and the edges vanished underneath them; at this size the topology is
 // what you see first and size is a secondary read.
+// Roughly half a card's rendered height, used to keep one inside the canvas.
+const CARD_HALF_HEIGHT = 60;
+
 const R_MIN = 2.2;
 const R_MAX = 9;
 
@@ -65,6 +68,66 @@ interface Simulated extends GraphNode {
   fy?: number | null;
 }
 
+/** An edge as the simulation holds it: endpoints start as ids and become nodes. */
+interface GraphEdgeLike {
+  source: string | Simulated;
+  target: string | Simulated;
+  weight: number;
+}
+
+function endpointId(e: string | Simulated): string {
+  return typeof e === "string" ? e : e.id;
+}
+
+/**
+ * Node ids within `degrees` hops of `from`, and the edges along the way.
+ *
+ * Breadth-first over the raw edge list rather than over the simulation's mutated
+ * links, so it gives the same answer before the layout has initialised as after.
+ * Undirected deliberately: "what is this connected to" does not care which way the
+ * fact table happened to store the pair.
+ */
+function neighbourhood(
+  links: GraphEdgeLike[],
+  from: string,
+  degrees: number,
+): { nodes: Set<string>; edges: Set<GraphEdgeLike> } {
+  const ends = links.map((l) => [endpointId(l.source), endpointId(l.target)] as const);
+  const adjacency = new Map<string, string[]>();
+  for (const [s, t] of ends) {
+    (adjacency.get(s) ?? adjacency.set(s, []).get(s)!).push(t);
+    (adjacency.get(t) ?? adjacency.set(t, []).get(t)!).push(s);
+  }
+  const nodes = new Set([from]);
+  let frontier = [from];
+  for (let d = 0; d < degrees; d++) {
+    const next: string[] = [];
+    for (const id of frontier) {
+      for (const other of adjacency.get(id) ?? []) {
+        if (!nodes.has(other)) {
+          nodes.add(other);
+          next.push(other);
+        }
+      }
+    }
+    frontier = next;
+    if (!frontier.length) break;
+  }
+  // Lit edges are the link *objects*, not string keys. Keying by `"source target"`
+  // computed correctly in isolation and then matched nothing once the simulation was
+  // live — the set has to be built from the very array bound to the DOM, or a
+  // difference in when endpoints are resolved from ids to nodes breaks the lookup
+  // silently. Object identity cannot drift.
+  const lit = new Set<GraphEdgeLike>();
+  links.forEach((l, i) => {
+    const [s, t] = ends[i];
+    // Both ends lit, so a 2-hop view shows the structure among the neighbours rather
+    // than a star of spokes.
+    if (nodes.has(s) && nodes.has(t)) lit.add(l);
+  });
+  return { nodes, edges: lit };
+}
+
 interface Hovered {
   node: GraphNode;
   /** Screen position, so the card can be placed without re-reading the DOM. */
@@ -82,6 +145,7 @@ export function ArchitectureGraph({
   paletteKey,
   colorMode = "entity",
   opportunitySpan = [0, OPPORTUNITY_CEILING],
+  degrees = 1,
 }: {
   cut: GraphCut;
   height?: number;
@@ -92,9 +156,19 @@ export function ArchitectureGraph({
   colorMode?: ColorMode;
   /** Range the opportunity ramp covers. The legend must show these endpoints. */
   opportunitySpan?: [number, number];
+  /** How many hops from the selected node stay lit. */
+  degrees?: number;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const [cards, setCards] = useState<Hovered[]>([]);
+  const [selected, setSelected] = useState<string | null>(null);
+  // The d3 selections, kept so highlighting can repaint attributes without rebuilding
+  // the simulation. Re-running the build effect on every click would restart the layout
+  // and throw away the positions the user is looking at.
+  const painted = useRef<{
+    nodes: d3.Selection<SVGCircleElement, Simulated, SVGGElement, unknown>;
+    links: d3.Selection<SVGLineElement, GraphEdgeLike, SVGGElement, unknown>;
+  } | null>(null);
   // Measured, not assumed: the flip threshold for a card near the right edge has to be
   // this canvas's width, and a constant would put cards off-screen at other sizes.
   const [hostWidth, setHostWidth] = useState(900);
@@ -192,6 +266,11 @@ export function ArchitectureGraph({
       .attr("stroke-width", (n) => (n.expanded ? 1.6 : 0.6))
       .attr("cursor", "pointer");
 
+    painted.current = {
+      nodes: node,
+      links: link as unknown as d3.Selection<SVGLineElement, GraphEdgeLike, SVGGElement, unknown>,
+    };
+
     // ---- tooltips -------------------------------------------------------
     // Positions are recomputed from the simulation rather than captured on hover, so a
     // pinned card tracks its node while the layout settles, pans and zooms.
@@ -228,10 +307,11 @@ export function ArchitectureGraph({
         setCards((prev) => prev.filter((c) => c.pinned || c.node.id !== n.id));
       })
       .on("click", (event: MouseEvent, n) => {
-        // Click pins the card so it can be read and compared; the actions that used to
-        // be on click are on the card itself, where they are labelled.
+        // Click both pins the card and selects the node for highlighting; the actions
+        // that used to be on click are on the card itself, where they are labelled.
         event.stopPropagation();
         const p = screenOf(n.id) ?? { x: event.offsetX, y: event.offsetY };
+        setSelected((prev) => (prev === n.id ? null : n.id));
         setCards((prev) => {
           const existing = prev.find((c) => c.node.id === n.id);
           if (existing?.pinned) return prev.filter((c) => c.node.id !== n.id);
@@ -242,7 +322,10 @@ export function ArchitectureGraph({
         });
       });
 
-    svg.on("click", () => setCards([]));
+    svg.on("click", () => {
+      setCards([]);
+      setSelected(null);
+    });
 
     const sim = d3
       .forceSimulation<Simulated>(data.nodes)
@@ -322,17 +405,63 @@ export function ArchitectureGraph({
     opportunitySpan[1],
   ]);
 
+  // A new cut means the selected node may be gone.
+  useEffect(() => setSelected(null), [data]);
+
+  // Highlighting is its own effect, touching only opacity and stroke. It must not depend
+  // on anything that rebuilds the simulation, or selecting a node would restart the
+  // layout and move everything the user was looking at.
+  useEffect(() => {
+    const p = painted.current;
+    if (!p) return;
+    if (!selected) {
+      p.nodes.attr("fill-opacity", 0.9).attr("stroke-opacity", 1);
+      p.links.attr("stroke-opacity", 0.45);
+      return;
+    }
+    const { nodes: lit, edges: litEdges } = neighbourhood(data.links, selected, degrees);
+    // Dimmed rather than hidden: the shape of the whole cut stays as context, so a
+    // neighbourhood reads as part of something rather than as the only thing there is.
+    p.nodes
+      .attr("fill-opacity", (n) => (n.id === selected ? 1 : lit.has(n.id) ? 0.9 : 0.1))
+      .attr("stroke-opacity", (n) => (lit.has(n.id) ? 1 : 0.12));
+    p.links.attr("stroke-opacity", (l) => (litEdges.has(l) ? 0.8 : 0.04));
+  }, [selected, degrees, data]);
+
+  const litCount = useMemo(
+    () => (selected ? neighbourhood(data.links, selected, degrees).nodes.size : 0),
+    [selected, degrees, data],
+  );
+
   return (
     <div className="relative">
       <div
         ref={host}
         className="w-full overflow-hidden rounded-[10px] border border-border bg-panel"
       />
+      {selected && (
+        <div className="pointer-events-auto absolute left-2 top-2 z-10 flex items-center gap-2 rounded-[8px] border border-accent-border bg-card px-2 py-1 shadow-[var(--shadow-card)]">
+          <span className="text-[11px] text-text-secondary">
+            <strong className="text-text">{litCount}</strong> nodes within {degrees}{" "}
+            {degrees === 1 ? "hop" : "hops"}
+          </span>
+          <button
+            onClick={() => {
+              setSelected(null);
+              setCards([]);
+            }}
+            className="text-[10.5px] font-semibold text-accent hover:underline"
+          >
+            clear
+          </button>
+        </div>
+      )}
       {cards.map((c) => (
         <NodeCard
           key={c.node.id}
           card={c}
           hostWidth={hostWidth}
+          canvasHeight={height}
           hasOpportunity={cut.has_opportunity}
           onExpand={() => onExpand(c.node)}
           onOpen={() => onOpen(c.node)}
@@ -352,6 +481,7 @@ export function ArchitectureGraph({
 function NodeCard({
   card,
   hostWidth,
+  canvasHeight,
   hasOpportunity,
   onExpand,
   onOpen,
@@ -359,6 +489,7 @@ function NodeCard({
 }: {
   card: Hovered;
   hostWidth: number;
+  canvasHeight: number;
   hasOpportunity: boolean;
   onExpand: () => void;
   onOpen: () => void;
@@ -367,6 +498,10 @@ function NodeCard({
   const n = card.node;
   // Card is 14rem wide plus a 12px offset; flip when that would overflow the canvas.
   const flipX = card.x + 236 > hostWidth;
+  // Clamped into the canvas. A node near the top edge otherwise put its card above the
+  // graph and over the filter chips, which reads as a layout fault rather than a
+  // tooltip. Half the card's height is the bound because it is centred on the node.
+  const top = Math.min(Math.max(card.y, CARD_HALF_HEIGHT), canvasHeight - CARD_HALF_HEIGHT);
   return (
     <div
       // Class names are written out rather than interpolated: Tailwind generates styles
@@ -376,7 +511,7 @@ function NodeCard({
       }`}
       style={{
         left: card.x,
-        top: card.y,
+        top,
         transform: `translate(${flipX ? "calc(-100% - 12px)" : "12px"}, -50%)`,
       }}
     >

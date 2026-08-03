@@ -227,8 +227,7 @@ export function ProductivityStage({
                     <Button variant="primary" onClick={() => void generate({})} disabled={job.running}>
                       <span className="flex items-center gap-1.5">
                         <Sparkles size={12} />
-                        Write {estimate.skills} skill{estimate.skills === 1 ? "" : "s"} (~$
-                        {estimate.est_usd.toFixed(2)})
+                        Write {estimate.skills} skill{estimate.skills === 1 ? "" : "s"}
                       </span>
                     </Button>
                   )}

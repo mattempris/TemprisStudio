@@ -19,9 +19,9 @@ import type {
  * Step 6 — agent definitions.
  *
  * Task clusters ranked by the time an agent would release, and a full eight-section
- * engineering specification per agent. This is the most expensive thing either studio
- * does, so the threshold control and the price sit next to the button rather than in a
- * tooltip.
+ * engineering specification per agent. Each spec is two model calls at high effort, so
+ * the threshold control sits next to the button — a bulk run over hundreds of clusters
+ * is a real commitment of time.
  *
  * The ranking is automation × how much of the organisation's week the cluster consumes.
  * That deliberately puts a common, moderately automatable task above a rare, highly
@@ -68,11 +68,6 @@ export function AgentsStage({ api, onError }: { api: Api; onError: (m: string) =
   }, [report, threshold, domain, query]);
 
   const pending = shown.filter((c) => !c.agent).length;
-  // Priced client-side from the server's own per-agent basis, so the number next to the
-  // button always matches the filter actually applied.
-  const perAgent = report && report.estimate_all.agents > 0
-    ? report.estimate_all.est_usd / report.estimate_all.agents
-    : 0;
 
   const generate = async (body: { cluster_ids?: number[]; threshold?: number; redo?: boolean }) => {
     try {
@@ -119,8 +114,8 @@ export function AgentsStage({ api, onError }: { api: Api; onError: (m: string) =
         <p className="mt-2 text-[11.5px] leading-snug text-text-secondary">
           Ranked by <strong className="text-text">automation × time consumed</strong>, in{" "}
           {report.unit} — so a common, moderately automatable task outranks a rare, highly
-          automatable one. Each spec is two model calls at high effort, which makes this
-          the most expensive step in either studio.
+          automatable one. Each specification is two model calls at high
+          effort, so a bulk run over many clusters takes a while.
         </p>
       </div>
 
@@ -227,8 +222,7 @@ export function AgentsStage({ api, onError }: { api: Api; onError: (m: string) =
           >
             <span className="flex items-center gap-1.5">
               <Bot size={12} />
-              Specify {pending} agent{pending === 1 ? "" : "s"} (~$
-              {(pending * perAgent).toFixed(2)})
+              Specify {pending} agent{pending === 1 ? "" : "s"}
             </span>
           </Button>
         )}
@@ -351,7 +345,14 @@ function CandidateRow({
                 <UserCheck size={11} />
               </span>
             )}
-            <Badge color="success">{c.agent.n_capabilities} caps</Badge>
+            <Badge
+              color="success"
+              // Abbreviated to keep the row tight; the full word lives in the title so
+              // the pill stays small without being a private code.
+              title={`${c.agent.n_capabilities} capabilities specified for this agent`}
+            >
+              {c.agent.n_capabilities} caps
+            </Badge>
             <button
               onClick={onView}
               className="rounded-[6px] border border-border bg-card px-1.5 py-0.5 text-[10.5px] font-semibold text-text transition-colors hover:bg-panel"

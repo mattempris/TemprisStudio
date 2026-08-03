@@ -96,6 +96,9 @@ export function WorkforcePage({
   const [filters, setFilters] = useState<GraphFilters | null>(null);
   const [jobFilter, setJobFilter] = useState<number[]>([]);
   const [otherFilter, setOtherFilter] = useState<number[]>([]);
+  // How far a selection lights up. 1 is "what does this touch"; 3 starts to answer
+  // "what is in this neighbourhood", which on a dense cut is most of it.
+  const [degrees, setDegrees] = useState(1);
   // Bumped when step 3 finishes, which rebuilds the fact table server-side. Without
   // it the graph keeps showing the pre-assessment cut until the page is reloaded.
   const [graphEpoch, setGraphEpoch] = useState(0);
@@ -426,6 +429,25 @@ export function WorkforcePage({
                         <span className="text-[11.5px] text-text-secondary">
                           {cut.totals.nodes} nodes · {cut.totals.edges} links
                         </span>
+                        <span className="text-[11px] font-extrabold uppercase tracking-wider text-text-muted">
+                          Hops
+                        </span>
+                        <span className="flex gap-1">
+                          {[1, 2, 3].map((d) => (
+                            <button
+                              key={d}
+                              onClick={() => setDegrees(d)}
+                              title={`Light up nodes within ${d} link${d === 1 ? "" : "s"} of the one you click`}
+                              className={`rounded-[6px] border px-2 py-0.5 text-[11.5px] font-semibold transition-colors ${
+                                degrees === d
+                                  ? "border-accent bg-accent-bg text-accent"
+                                  : "border-border bg-card text-text-secondary hover:border-accent"
+                              }`}
+                            >
+                              {d}
+                            </button>
+                          ))}
+                        </span>
                         {expanded.length > 0 && (
                           <button
                             onClick={() => setExpanded([])}
@@ -502,11 +524,13 @@ export function WorkforcePage({
                         paletteKey={paletteKey}
                         colorMode={colorMode}
                         opportunitySpan={span}
+                        degrees={degrees}
                       />
                       <p className="text-[11px] text-text-muted">
-                        Click a group to open it, shift-click for detail. Drag to rearrange, scroll
-                        to zoom. Node size is the metric named in its tooltip; link thickness is the
-                        strength of the relationship.
+                        Hover a node for its detail; click to pin the card and light up
+                        everything within the chosen number of hops. Drag to rearrange, scroll to
+                        zoom, click the background to clear. Node size is the metric named in its
+                        card; link thickness is the strength of the relationship.
                         {cut.has_opportunity &&
                           " Opening a task cluster at the finest resolution shows the actions inside it."}
                       </p>

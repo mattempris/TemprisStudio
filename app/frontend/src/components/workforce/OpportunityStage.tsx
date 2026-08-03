@@ -102,10 +102,9 @@ export function OpportunityStage({
           <p className="mt-2 text-[11.5px] leading-snug text-text-secondary">
             Assessing the remaining {remaining.toLocaleString()} is{" "}
             <strong className="text-text">
-              {remaining.toLocaleString()} model calls, roughly $
-              {status.estimate_remaining.est_usd.toFixed(2)}
+              {remaining.toLocaleString()} model calls
             </strong>
-            . {status.estimate_remaining.basis}. An estimate, not a quote.
+            , one per task cluster, fanned out concurrently.
           </p>
         )}
       </div>
@@ -128,8 +127,7 @@ export function OpportunityStage({
           >
             <span className="flex items-center gap-1.5">
               <Play size={12} />
-              Assess all {remaining.toLocaleString()} remaining (~$
-              {status.estimate_remaining.est_usd.toFixed(2)})
+              Assess all {remaining.toLocaleString()} remaining
             </span>
           </Button>
         )}
@@ -137,7 +135,7 @@ export function OpportunityStage({
           <Button onClick={() => void run({ redo: true })} disabled={job.running}>
             <span className="flex items-center gap-1.5">
               <Play size={12} />
-              Re-assess all {assessed.toLocaleString()} (~${status.estimate_all.est_usd.toFixed(2)})
+              Re-assess all {assessed.toLocaleString()}
             </span>
           </Button>
         )}

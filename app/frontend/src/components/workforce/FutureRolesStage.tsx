@@ -68,8 +68,6 @@ export function FutureRolesStage({ api, onError }: { api: Api; onError: (m: stri
 
   if (!report) return <p className="text-[12px] text-text-muted">Loading…</p>;
   const pending = shown.filter((r) => !r.design).length;
-  const perRole =
-    report.estimate_all.roles > 0 ? report.estimate_all.est_usd / report.estimate_all.roles : 0;
 
   return (
     <div className="space-y-3">
@@ -139,7 +137,7 @@ export function FutureRolesStage({ api, onError }: { api: Api; onError: (m: stri
             disabled={job.running}
           >
             <span className="flex items-center gap-1.5">
-              <Sparkles size={12} /> Design {pending} (~${(pending * perRole).toFixed(2)})
+              <Sparkles size={12} /> Design {pending}
             </span>
           </Button>
         )}

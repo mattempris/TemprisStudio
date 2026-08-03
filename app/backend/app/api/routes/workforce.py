@@ -16,22 +16,35 @@ The endpoint split follows cost, as elsewhere in the app:
 from __future__ import annotations
 
 import asyncio
+import io
+import json
+import re
 import uuid
+import zipfile
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 
+from fastapi import UploadFile
+
 from app.models.project_state import (
+    AgentDefinitionRecord,
+    ContextDocRecord,
     ProjectState,
     TaskActionRecord,
     TaskOpportunityRecord,
+    TaskSkillRecord,
 )
 from app.services import llm
+from app.services.ingestion import parsers
 from app.services.orchestrator import JobAlreadyRunning, ProgressReporter, get_registry, run_job
 from app.services.project_service import ProjectService
+from app.services.workforce import agents as ag
 from app.services.workforce import graph as wf
 from app.services.workforce import opportunity as opp
+from app.services.workforce import productivity as prod
 
 router = APIRouter(prefix="/api/projects/{client_slug}/{project_slug}/workforce", tags=["workforce"])
 
@@ -89,6 +102,10 @@ def workforce_status(client_slug: str, project_slug: str) -> dict:
         "levels": list(wf.LEVELS),
         "entities": list(wf.ENTITIES),
         "level_titles": wf.LEVEL_TITLES,
+        # What later steps are gated on, from the same state read the gate already
+        # does — so the page does not need a call per step to know what is unlocked.
+        "clusters_assessed": len(state.workforce.opportunity),
+        "skills_written": len(state.workforce.skills_guidance),
     }
 
 
@@ -495,5 +512,707 @@ def opportunity_roles(client_slug: str, project_slug: str) -> dict:
             "mean_coverage": round(sum(r["coverage"] for r in rows) / len(rows), 1) if rows else 0.0,
             "fte_released": round(total_fte, 1) if headcount else None,
             "hours_per_week": round(total_fte * hours, 0) if headcount else None,
+        },
+    }
+
+
+# ===========================================================================
+# Step 5 — Personal productivity
+# ===========================================================================
+# The skill files live in blob, not in state: bodies run to several KB and a full
+# project could produce thousands of them.
+SKILLS_PREFIX = "workforce/skills"
+
+
+def _job_ancestry(state: ProjectState) -> dict[str, tuple[str, str]]:
+    """profile_key -> (job family name, job category name), for the role picker.
+
+    The instructions ask for the filter to run family › category › profile, so the
+    names travel with each role rather than needing a lookup per click.
+    """
+    c = state.clustering
+    if c is None:
+        return {}
+    by_cluster = {a.final_profile_id: (a.final_category_id, a.final_family_id) for a in c.assignments}
+    out: dict[str, tuple[str, str]] = {}
+    for d in state.job_profiles:
+        cat, fam = by_cluster.get(d.profile_cluster_id, (-1, -1))
+        out[d.profile_key] = (c.family_names.get(fam, "—"), c.category_names.get(cat, "—"))
+    return out
+
+
+def _skill_inputs(
+    state: ProjectState, *, profile_keys: set[str] | None = None
+) -> list[prod.SkillInput]:
+    """Every (role, task cluster) pair that could have a skill, best first.
+
+    Only assessed clusters are eligible. Without the augmentation score there is
+    nothing to rank by and nothing to aim the skill at, and one written against an
+    unscored cluster would be guesswork with a filename.
+
+    Grouped per (role, cluster) rather than per task: a role with three tasks in the
+    same cluster wants one skill, not three near-identical ones.
+    """
+    c = state.tasks.clustering
+    if c is None:
+        return []
+    scores = {
+        o.task_cluster_id: (o.automation_pct, o.augmentation_pct)
+        for o in state.workforce.opportunity
+    }
+    if not scores:
+        return []
+
+    actions: dict[int, list[tuple[str, str, float, float]]] = {}
+    for a in state.workforce.actions:
+        actions.setdefault(a.task_cluster_id, []).append(
+            (a.name, a.definition, a.automation_pct, a.augmentation_pct)
+        )
+
+    profile = {d.profile_key: d for d in state.job_profiles}
+    parents = {a.final_profile_id: (a.final_category_id, a.final_family_id) for a in c.assignments}
+    cluster_of = {a.item_id: a.final_profile_id for a in c.assignments}
+
+    grouped: dict[tuple[str, int], list] = {}
+    for t in state.tasks.inferred:
+        cid = cluster_of.get(t.id)
+        if cid is None or cid not in scores:
+            continue
+        if profile_keys and t.source_profile_key not in profile_keys:
+            continue
+        grouped.setdefault((t.source_profile_key, cid), []).append(t)
+
+    out: list[prod.SkillInput] = []
+    for (key, cid), tasks in grouped.items():
+        doc = profile.get(key)
+        cat, fam = parents.get(cid, (-1, -1))
+        out.append(
+            prod.SkillInput(
+                profile_key=key,
+                role_title=doc.title if doc else key,
+                task_cluster_id=cid,
+                cluster_name=c.profile_names.get(cid, str(cid)),
+                domain=c.family_names.get(fam, "—"),
+                category=c.category_names.get(cat, "—"),
+                task_names=[t.name for t in tasks],
+                task_descriptions=[t.description for t in tasks],
+                actions=actions.get(cid, []),
+                proportion=round(sum(t.proportion for t in tasks), 2),
+                augmentation_pct=scores[cid][1],
+                role_purpose=str((doc.content or {}).get("about_role", ""))[:600] if doc else "",
+            )
+        )
+    out.sort(key=lambda i: -i.rank_score)
+    return out
+
+
+@router.get("/productivity/roles")
+def productivity_roles(client_slug: str, project_slug: str) -> dict:
+    """Every role with an assessed task, its tasks ranked by where a prompt helps most.
+
+    Ranked by augmentation × share of the week — a different order from step 6's, which
+    is the whole reason step 3 scores two axes.
+    """
+    _, state = _load(client_slug, project_slug)
+    if not state.workforce.opportunity:
+        raise HTTPException(409, "run the AI opportunity assessment first")
+
+    ancestry = _job_ancestry(state)
+    existing = {
+        (s.profile_key, s.task_cluster_id): {
+            "id": s.id,
+            "name": s.name,
+            "description": s.description,
+            "hook": s.hook,
+        }
+        for s in state.workforce.skills_guidance
+    }
+
+    by_role: dict[str, dict] = {}
+    for inp in _skill_inputs(state):
+        fam, cat = ancestry.get(inp.profile_key, ("—", "—"))
+        r = by_role.setdefault(
+            inp.profile_key,
+            {
+                "profile_key": inp.profile_key,
+                "title": inp.role_title,
+                "family": fam,
+                "category": cat,
+                "tasks": [],
+            },
+        )
+        r["tasks"].append(
+            {
+                "cluster_id": inp.task_cluster_id,
+                "cluster": inp.cluster_name,
+                "domain": inp.domain,
+                "task_names": inp.task_names,
+                "proportion": inp.proportion,
+                "augmentation": inp.augmentation_pct,
+                "rank_score": inp.rank_score,
+                "skill": existing.get((inp.profile_key, inp.task_cluster_id)),
+            }
+        )
+
+    roles = sorted(by_role.values(), key=lambda r: (r["family"], r["category"], r["title"]))
+    for r in roles:
+        r["tasks"].sort(key=lambda t: -t["rank_score"])
+        r["skills"] = sum(1 for t in r["tasks"] if t["skill"])
+        r["assessed_share"] = round(sum(t["proportion"] for t in r["tasks"]), 1)
+    return {
+        "roles": roles,
+        "families": sorted({r["family"] for r in roles}),
+        "total_skills": len(state.workforce.skills_guidance),
+        "eligible_pairs": sum(len(r["tasks"]) for r in roles),
+    }
+
+
+class GenerateSkillsRequest(BaseModel):
+    """Empty `cluster_ids` means every ranked task for the role. `limit` takes the top
+    N by rank, which is the usual shape — the tail is where a prompt helps least."""
+
+    profile_key: str
+    cluster_ids: list[int] | None = None
+    limit: int | None = None
+    redo: bool = False
+
+
+@router.get("/productivity/estimate")
+def productivity_estimate(
+    client_slug: str, project_slug: str, profile_key: str, limit: int | None = None
+) -> dict:
+    """What generating this role's skills would cost, before the button is pressed."""
+    _, state = _load(client_slug, project_slug)
+    inputs = _skill_inputs(state, profile_keys={profile_key})
+    done = {(s.profile_key, s.task_cluster_id) for s in state.workforce.skills_guidance}
+    pending = [i for i in inputs if (i.profile_key, i.task_cluster_id) not in done]
+    if limit:
+        pending = pending[:limit]
+    return {"eligible": len(inputs), **prod.cost_estimate(len(pending))}
+
+
+@router.post("/productivity/generate")
+async def generate_skills(
+    client_slug: str, project_slug: str, req: GenerateSkillsRequest, workers: int | None = None
+) -> dict:
+    svc, state = _load(client_slug, project_slug)
+    _workers = llm.resolve_workers(workers)
+
+    inputs = _skill_inputs(state, profile_keys={req.profile_key})
+    if not inputs:
+        raise HTTPException(
+            400, "no assessed tasks for that role — run the AI opportunity assessment first"
+        )
+    if req.cluster_ids:
+        wanted = set(req.cluster_ids)
+        inputs = [i for i in inputs if i.task_cluster_id in wanted]
+    if not req.redo:
+        done = {(s.profile_key, s.task_cluster_id) for s in state.workforce.skills_guidance}
+        inputs = [i for i in inputs if (i.profile_key, i.task_cluster_id) not in done]
+    if req.limit:
+        inputs = inputs[: req.limit]
+    if not inputs:
+        raise HTTPException(400, "nothing to generate — every requested task already has a skill")
+
+    role_title = inputs[0].role_title
+
+    def work(reporter: ProgressReporter) -> dict:
+        reporter.stage_start(len(inputs), f"Writing {len(inputs)} skills for {role_title}")
+        results = prod.generate_many(inputs, workers=_workers, progress=reporter.pmap_callback())
+        made = [r for r in results if r is not None]
+
+        reporter.message("Saving the skill files")
+        fresh = svc.load_state(client_slug, project_slug)
+        replacing = {(r.profile_key, r.task_cluster_id) for r in made}
+        fresh.workforce.skills_guidance = [
+            s
+            for s in fresh.workforce.skills_guidance
+            if (s.profile_key, s.task_cluster_id) not in replacing
+        ]
+        # Unique within the role, because the name *is* the filename — two tasks can
+        # legitimately produce the same skill name and the second would overwrite it.
+        taken = {s.name for s in fresh.workforce.skills_guidance if s.profile_key == req.profile_key}
+        prod.dedupe_names(made, taken)
+
+        now = datetime.now(timezone.utc)
+        by_cluster = {i.task_cluster_id: i for i in inputs}
+        for r in made:
+            path = f"{project_slug}/{SKILLS_PREFIX}/{r.profile_key}/{r.filename}"
+            svc.store.write_bytes(
+                client_slug,
+                path,
+                prod.to_markdown(r).encode("utf-8"),
+                content_type="text/markdown; charset=utf-8",
+            )
+            src = by_cluster.get(r.task_cluster_id)
+            fresh.workforce.skills_guidance.append(
+                TaskSkillRecord(
+                    id=f"skill-{uuid.uuid4().hex[:8]}",
+                    profile_key=r.profile_key,
+                    role_title=src.role_title if src else "",
+                    task_cluster_id=r.task_cluster_id,
+                    cluster_name=src.cluster_name if src else "",
+                    name=r.name,
+                    description=r.description,
+                    hook=r.hook,
+                    blob_path=path,
+                    rank_score=src.rank_score if src else 0.0,
+                    generated_at=now,
+                )
+            )
+        svc.save_state(
+            fresh,
+            action="generate-productivity-skills",
+            lineage_payload={
+                "profile_key": req.profile_key,
+                "requested": len(inputs),
+                "generated": len(made),
+            },
+        )
+        summary = {
+            "role": role_title,
+            "requested": len(inputs),
+            "generated": len(made),
+            "failed": len(inputs) - len(made),
+        }
+        reporter.stage_complete(summary)
+        return summary
+
+    return _start_job(client_slug, project_slug, "productivity", work)
+
+
+def _skill_record(state: ProjectState, skill_id: str) -> TaskSkillRecord:
+    rec = next((s for s in state.workforce.skills_guidance if s.id == skill_id), None)
+    if rec is None:
+        raise HTTPException(404, f"no skill {skill_id}")
+    return rec
+
+
+@router.get("/productivity/skill/{skill_id}")
+def get_skill(client_slug: str, project_slug: str, skill_id: str) -> dict:
+    """The skill's markdown, for the in-app viewer."""
+    svc, state = _load(client_slug, project_slug)
+    rec = _skill_record(state, skill_id)
+    data = svc.store.read_bytes(client_slug, rec.blob_path)
+    if data is None:
+        raise HTTPException(404, f"the file for {skill_id} is missing from storage")
+    return {**rec.model_dump(mode="json"), "markdown": data.decode("utf-8")}
+
+
+@router.get("/productivity/skill/{skill_id}/download")
+def download_skill(client_slug: str, project_slug: str, skill_id: str) -> Response:
+    svc, state = _load(client_slug, project_slug)
+    rec = _skill_record(state, skill_id)
+    data = svc.store.read_bytes(client_slug, rec.blob_path)
+    if data is None:
+        raise HTTPException(404, f"the file for {skill_id} is missing from storage")
+    return Response(
+        content=data,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{rec.name}.md"'},
+    )
+
+
+@router.get("/productivity/role/{profile_key}/zip")
+def download_role_skills(client_slug: str, project_slug: str, profile_key: str) -> Response:
+    """Every skill for one role, as a zip — the shape you hand to a person."""
+    svc, state = _load(client_slug, project_slug)
+    recs = [s for s in state.workforce.skills_guidance if s.profile_key == profile_key]
+    if not recs:
+        raise HTTPException(404, f"no skills generated for {profile_key}")
+    buf = io.BytesIO()
+    missing: list[str] = []
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for r in recs:
+            data = svc.store.read_bytes(client_slug, r.blob_path)
+            if data is None:
+                # Named in the zip rather than dropped, so a partial download cannot be
+                # mistaken for a complete one.
+                missing.append(r.name)
+                continue
+            z.writestr(f"{r.name}.md", data)
+        if missing:
+            z.writestr(
+                "MISSING.txt",
+                "These skills are recorded in the project but their files could not be "
+                "read from storage, so they are not in this zip:\n\n"
+                + "\n".join(f"- {m}.md" for m in missing)
+                + "\n",
+            )
+    stem = re.sub(r"[^a-z0-9]+", "-", (recs[0].role_title or profile_key).lower()).strip("-")
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{stem or profile_key}-skills.zip"'},
+    )
+
+
+# ===========================================================================
+# Step 6 — Agent definitions
+# ===========================================================================
+AGENTS_PREFIX = "workforce/agents"
+# A catalogue larger than this is not refused, only truncated: it rides on every call
+# of the fan-out as a cache prefix, and a 400KB inventory would dominate the prompt
+# without telling the model anything the first few pages did not.
+MAX_CATALOGUE_CHARS = 60_000
+
+
+def _agent_inputs(state: ProjectState) -> list[ag.AgentInput]:
+    """Every assessed task cluster as a candidate agent, best first.
+
+    Ordered by time released — automation weighted by how much of the organisation's
+    week the cluster consumes — rather than by automation alone. A rare, highly
+    automatable task ranks below a common, moderately automatable one, which is the
+    honest order for something that has to be built and then maintained.
+    """
+    c = state.tasks.clustering
+    if c is None:
+        return []
+    scores = {
+        o.task_cluster_id: (o.automation_pct, o.augmentation_pct)
+        for o in state.workforce.opportunity
+    }
+    if not scores:
+        return []
+
+    actions: dict[int, list[tuple[str, str, float, float]]] = {}
+    for a in state.workforce.actions:
+        actions.setdefault(a.task_cluster_id, []).append(
+            (a.name, a.definition, a.automation_pct, a.augmentation_pct)
+        )
+
+    headcount = _profile_headcount(state)
+    title_of = {p.profile_key: p.title for p in state.job_profiles}
+    parents = {a.final_profile_id: (a.final_category_id, a.final_family_id) for a in c.assignments}
+    cluster_of = {a.item_id: a.final_profile_id for a in c.assignments}
+
+    names: dict[int, set[str]] = {}
+    roles: dict[int, dict[str, float]] = {}
+    proportion: dict[int, float] = {}
+    fte: dict[int, float] = {}
+    for t in state.tasks.inferred:
+        cid = cluster_of.get(t.id)
+        if cid is None or cid not in scores:
+            continue
+        names.setdefault(cid, set()).add(t.name)
+        title = title_of.get(t.source_profile_key, t.source_profile_key)
+        r = roles.setdefault(cid, {})
+        r[title] = r.get(title, 0.0) + t.proportion
+        proportion[cid] = proportion.get(cid, 0.0) + t.proportion
+        heads = headcount.get(t.source_profile_key, 0)
+        if heads:
+            fte[cid] = fte.get(cid, 0.0) + t.proportion / 100.0 * heads
+
+    unit = "FTE" if headcount else "role-weeks"
+    out: list[ag.AgentInput] = []
+    for cid, (auto, aug) in scores.items():
+        cat, fam = parents.get(cid, (-1, -1))
+        base = fte.get(cid) if headcount else proportion.get(cid, 0.0) / 100.0
+        out.append(
+            ag.AgentInput(
+                task_cluster_id=cid,
+                cluster_name=c.profile_names.get(cid, str(cid)),
+                category=c.category_names.get(cat, "—"),
+                domain=c.family_names.get(fam, "—"),
+                automation_pct=auto,
+                augmentation_pct=aug,
+                actions=actions.get(cid, []),
+                roles=sorted(roles.get(cid, {}).items(), key=lambda kv: -kv[1]),
+                task_names=sorted(names.get(cid, set())),
+                absorbable=round((base or 0.0) * auto / 100.0, 2),
+                unit=unit,
+                # The *client*, prettified from its slug — `display_name` is the
+                # project's name, and specs generated with it read "for architects at
+                # Full JA", naming the piece of work rather than the organisation.
+                client_name=state.meta.client_slug.replace("-", " ").title(),
+            )
+        )
+    out.sort(key=lambda i: -i.absorbable)
+    return out
+
+
+def _catalogue(state: ProjectState) -> str | None:
+    """The software catalogue as a prompt prefix, if one has been uploaded."""
+    docs = [d for d in state.workforce.context_uploads if d.kind == "software_catalogue"]
+    if not docs:
+        return None
+    joined = "\n\n".join(f"### {d.filename}\n{d.text}" for d in docs)
+    return (
+        "SOFTWARE AND INFRASTRUCTURE THIS ORGANISATION ACTUALLY RUNS.\n"
+        "Name these systems where a tool or knowledge source would otherwise be "
+        "described generically. Do not invent systems that are not listed here.\n\n"
+        + joined
+    )
+
+
+@router.post("/agents/catalogue")
+async def upload_catalogue(
+    client_slug: str, project_slug: str, file: UploadFile, kind: str = "software_catalogue"
+) -> dict:
+    """Upload a software catalogue or strategic-context document.
+
+    Folded into every generation prompt in a run as a cache prefix, so a catalogue of
+    any size is paid for once and read back cheaply for the rest of the fan-out.
+    """
+    if kind not in ("software_catalogue", "strategic_context"):
+        raise HTTPException(422, f"unknown context kind {kind!r}")
+    svc, _ = _load(client_slug, project_slug)
+    data = await file.read()
+    try:
+        text = parsers.extract_text(file.filename or "upload.txt", data)
+    except (parsers.UnsupportedFileType, parsers.ParseFailed) as e:
+        raise HTTPException(422, str(e)) from e
+    text = text.strip()
+    if not text:
+        raise HTTPException(422, "no text could be extracted from that file")
+    truncated = len(text) > MAX_CATALOGUE_CHARS
+
+    fresh = svc.load_state(client_slug, project_slug)
+    fresh.workforce.context_uploads = [
+        d for d in fresh.workforce.context_uploads if not (d.kind == kind and d.filename == file.filename)
+    ]
+    fresh.workforce.context_uploads.append(
+        ContextDocRecord(
+            id=f"ctx-{uuid.uuid4().hex[:8]}",
+            kind=kind,
+            filename=file.filename or "upload.txt",
+            text=text[:MAX_CATALOGUE_CHARS],
+            chars=len(text),
+            uploaded_at=datetime.now(timezone.utc),
+        )
+    )
+    svc.save_state(
+        fresh,
+        action="upload-workforce-context",
+        lineage_payload={"kind": kind, "filename": file.filename, "chars": len(text)},
+    )
+    return {
+        "filename": file.filename,
+        "kind": kind,
+        "chars": len(text),
+        "truncated": truncated,
+        "cacheable": llm.is_cacheable(text[:MAX_CATALOGUE_CHARS]),
+        "documents": len(fresh.workforce.context_uploads),
+    }
+
+
+@router.delete("/agents/catalogue/{doc_id}")
+def delete_catalogue(client_slug: str, project_slug: str, doc_id: str) -> dict:
+    svc, state = _load(client_slug, project_slug)
+    if not any(d.id == doc_id for d in state.workforce.context_uploads):
+        raise HTTPException(404, f"no context document {doc_id}")
+    state.workforce.context_uploads = [d for d in state.workforce.context_uploads if d.id != doc_id]
+    svc.save_state(state, action="remove-workforce-context", lineage_payload={"id": doc_id})
+    return {"documents": len(state.workforce.context_uploads)}
+
+
+@router.get("/agents")
+def list_agents(client_slug: str, project_slug: str, threshold: float = 0.0) -> dict:
+    """Candidate clusters ranked by time released, with any spec already written.
+
+    `threshold` filters to clusters releasing at least that much time — the control
+    that keeps a bulk run from specifying an agent for work worth two hours a year.
+    """
+    _, state = _load(client_slug, project_slug)
+    if not state.workforce.opportunity:
+        raise HTTPException(409, "run the AI opportunity assessment first")
+
+    existing = {a.task_cluster_id: a for a in state.workforce.agents}
+    rows = []
+    for inp in _agent_inputs(state):
+        if inp.absorbable < threshold:
+            continue
+        a = existing.get(inp.task_cluster_id)
+        rows.append(
+            {
+                "cluster_id": inp.task_cluster_id,
+                "cluster": inp.cluster_name,
+                "category": inp.category,
+                "domain": inp.domain,
+                "automation": inp.automation_pct,
+                "augmentation": inp.augmentation_pct,
+                "time_released": inp.absorbable,
+                "roles": len(inp.roles),
+                "top_roles": [r[0] for r in inp.roles[:3]],
+                "n_actions": len(inp.actions),
+                "agent": (
+                    {
+                        "id": a.id,
+                        "name": a.name,
+                        "purpose": a.purpose,
+                        "n_capabilities": a.n_capabilities,
+                        "human_in_the_loop": a.human_in_the_loop,
+                    }
+                    if a
+                    else None
+                ),
+            }
+        )
+    docs = [
+        {"id": d.id, "kind": d.kind, "filename": d.filename, "chars": d.chars}
+        for d in state.workforce.context_uploads
+    ]
+    return {
+        "clusters": rows,
+        "unit": rows[0]["time_released"] and ("FTE" if _profile_headcount(state) else "role-weeks") or "role-weeks",
+        "total_agents": len(state.workforce.agents),
+        "domains": sorted({r["domain"] for r in rows}),
+        "context_documents": docs,
+        "estimate_all": ag.cost_estimate(sum(1 for r in rows if not r["agent"])),
+    }
+
+
+class GenerateAgentsRequest(BaseModel):
+    """`cluster_ids` names specific clusters; `threshold` and `limit` drive the bulk
+    run. Both are here because "generate all" on a 750-cluster taxonomy at ~6,000
+    output tokens each is the most expensive thing either studio can do."""
+
+    cluster_ids: list[int] | None = None
+    threshold: float = 0.0
+    limit: int | None = None
+    redo: bool = False
+
+
+@router.post("/agents/generate")
+async def generate_agents(
+    client_slug: str, project_slug: str, req: GenerateAgentsRequest, workers: int | None = None
+) -> dict:
+    svc, state = _load(client_slug, project_slug)
+    _workers = llm.resolve_workers(workers)
+
+    inputs = _agent_inputs(state)
+    if req.cluster_ids:
+        wanted = set(req.cluster_ids)
+        inputs = [i for i in inputs if i.task_cluster_id in wanted]
+    else:
+        inputs = [i for i in inputs if i.absorbable >= req.threshold]
+    if not req.redo:
+        done = {a.task_cluster_id for a in state.workforce.agents}
+        inputs = [i for i in inputs if i.task_cluster_id not in done]
+    if req.limit:
+        inputs = inputs[: req.limit]
+    if not inputs:
+        raise HTTPException(400, "nothing to generate — every matching cluster already has a spec")
+
+    catalogue = _catalogue(state)
+
+    def work(reporter: ProgressReporter) -> dict:
+        reporter.stage_start(len(inputs), f"Specifying {len(inputs)} agents")
+        llm.reset_cache_stats()
+        results = ag.generate_many(
+            inputs,
+            client_slug=client_slug,
+            catalogue=catalogue,
+            workers=_workers,
+            progress=reporter.pmap_callback(),
+        )
+        made = [r for r in results if r is not None]
+        cache = llm.cache_stats()
+
+        reporter.message("Saving the specifications")
+        fresh = svc.load_state(client_slug, project_slug)
+        replacing = {r.task_cluster_id for r in made}
+        fresh.workforce.agents = [
+            a for a in fresh.workforce.agents if a.task_cluster_id not in replacing
+        ]
+        now = datetime.now(timezone.utc)
+        by_cluster = {i.task_cluster_id: i for i in inputs}
+        for r in made:
+            agent_id = f"agent-{uuid.uuid4().hex[:8]}"
+            path = svc.save_json(client_slug, project_slug, f"{AGENTS_PREFIX}/{agent_id}", r.spec)
+            src = by_cluster.get(r.task_cluster_id)
+            fresh.workforce.agents.append(
+                AgentDefinitionRecord(
+                    id=agent_id,
+                    task_cluster_id=r.task_cluster_id,
+                    cluster_name=src.cluster_name if src else "",
+                    name=r.name,
+                    slug=r.slug,
+                    purpose=r.purpose,
+                    blob_path=path,
+                    time_released=src.absorbable if src else 0.0,
+                    time_released_unit=src.unit if src else "role-weeks",
+                    automation_pct=src.automation_pct if src else 0.0,
+                    n_capabilities=r.n_capabilities,
+                    human_in_the_loop=r.human_in_the_loop,
+                    generated_at=now,
+                )
+            )
+        svc.save_state(
+            fresh,
+            action="generate-agent-definitions",
+            lineage_payload={"requested": len(inputs), "generated": len(made)},
+        )
+        summary = {
+            "requested": len(inputs),
+            "generated": len(made),
+            "failed": len(inputs) - len(made),
+            "prompt_cache": cache.summary(),
+        }
+        reporter.stage_complete(summary)
+        return summary
+
+    return _start_job(client_slug, project_slug, "agents", work)
+
+
+@router.get("/agents/{agent_id}")
+def get_agent(client_slug: str, project_slug: str, agent_id: str) -> dict:
+    """One agent's full eight-section specification."""
+    svc, state = _load(client_slug, project_slug)
+    rec = next((a for a in state.workforce.agents if a.id == agent_id), None)
+    if rec is None:
+        raise HTTPException(404, f"no agent {agent_id}")
+    spec = svc.load_json(client_slug, rec.blob_path)
+    if spec is None:
+        raise HTTPException(404, f"the specification for {agent_id} is missing from storage")
+    return {**rec.model_dump(mode="json"), "spec": spec, "sections": list(ag.SECTIONS)}
+
+
+@router.get("/agents/{agent_id}/download")
+def download_agent(client_slug: str, project_slug: str, agent_id: str) -> Response:
+    svc, state = _load(client_slug, project_slug)
+    rec = next((a for a in state.workforce.agents if a.id == agent_id), None)
+    if rec is None:
+        raise HTTPException(404, f"no agent {agent_id}")
+    spec = svc.load_json(client_slug, rec.blob_path)
+    if spec is None:
+        raise HTTPException(404, f"the specification for {agent_id} is missing from storage")
+    return Response(
+        content=json.dumps(spec, indent=2, ensure_ascii=False).encode("utf-8"),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{rec.slug}-agent-spec.json"'},
+    )
+
+
+@router.get("/agents/report/impact")
+def agent_impact(client_slug: str, project_slug: str) -> dict:
+    """The impact summary: every specified agent, prioritised by time released."""
+    _, state = _load(client_slug, project_slug)
+    rows = sorted(state.workforce.agents, key=lambda a: -a.time_released)
+    unit = rows[0].time_released_unit if rows else "role-weeks"
+    supervised = sum(1 for a in rows if a.human_in_the_loop)
+    return {
+        "agents": [
+            {
+                "id": a.id,
+                "name": a.name,
+                "cluster": a.cluster_name,
+                "purpose": a.purpose,
+                "automation": a.automation_pct,
+                "time_released": a.time_released,
+                "n_capabilities": a.n_capabilities,
+                "human_in_the_loop": a.human_in_the_loop,
+            }
+            for a in rows
+        ],
+        "unit": unit,
+        "totals": {
+            "agents": len(rows),
+            "time_released": round(sum(a.time_released for a in rows), 2),
+            "supervised": supervised,
+            "unsupervised": len(rows) - supervised,
+            "mean_automation": round(sum(a.automation_pct for a in rows) / len(rows), 1)
+            if rows
+            else 0.0,
         },
     }

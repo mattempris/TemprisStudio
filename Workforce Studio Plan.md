@@ -364,9 +364,40 @@ against matching transaction records at 65%. Both reports, both graph colour mod
 and the action modal checked in the browser. The remaining 740 clusters (~$14) are left for the user
 to run.
 
-**Phase C — The two generators.** Step 5 (filter, ranked tasks, skill generation, `.md` download,
-modal attachment) and Step 6 (filter, FTE ranking, single and bulk agent generation, impact report,
-agent nodes). The largest phase and the largest spend.
+**Phase C — The two generators. BUILT.** Step 5 (filter, ranked tasks, skill generation, `.md`
+download) and Step 6 (filter, FTE ranking, single and bulk agent generation, impact report,
+software-catalogue context). The largest phase and the largest spend.
+
+Deviations from this plan:
+
+- **Agent generation is two calls, not one.** §1 settled on one API call per agent. It is not
+  available: the domain schema exceeds the API's grammar compile limit, and the whole schema is
+  rejected while each half compiles — established by probe (`scripts/_probe_agent_grammar.py`), which
+  also found that `additionalProperties: false` is mandatory, so trimming it to buy budget is out.
+  The fallback in `llm.py` does recover by restating the schema in the prompt, but that trades a hard
+  guarantee for a soft one on the most expensive artefact either studio produces. Two
+  grammar-constrained halves — business content and operational content — run concurrently per agent
+  instead. Output tokens dominate the bill and each half produces about half the content, so only the
+  prompt is paid twice, and with a catalogue supplied that copy is a cache read. The intent behind the
+  original decision — individual on-demand requests rather than the Batch API — is unchanged.
+- **The regulatory frame is asked of the model, not assumed.** The reference hardcodes FCA and ICOBS.
+  Against the banking project the model returned UK GDPR and PCI DSS, which is right and which a
+  hardcoded insurance frame would have got wrong. An empty list is accepted in preference to a
+  confident wrong one, falling back only to data protection.
+- **Every host in a spec is under the reserved `.example` TLD**, asserted in the offline test.
+  Inventing plausible internal hostnames is the dangerous kind of helpful.
+- **Skills are one per (role, task cluster), not per task.** A role with three tasks in one cluster
+  wants one skill, not three near-identical ones.
+- **Skill bodies get their headings demoted** so the model's own `##` sections sit below the file's.
+  Fixed in code rather than in the prompt: heading level is the first instruction a model drops.
+- **`when_not_to_use` is the field that earns its keep.** It is where the accountability and
+  regulated boundaries get written down, and the prompt says so — on the trading-UI role it produced
+  "not for signing off that a screen meets accessibility standards — that needs a formal audit".
+
+Verified on `banking-demo/full-ja`: 3 skills for one role (valid frontmatter, unique kebab-case
+filenames, working zip) and 4 agent specs (all eight sections, 27KB each, retained-vs-absorbed split
+matching the action scores, human-in-the-loop on all four). 63 offline assertions across the two
+steps. Both stages, the skill viewer, the spec accordion and the downloads checked in the browser.
 
 **Phase D — Processes.** Fixture extraction from `./HR`, SVG and XLSX parsing, Step 2 upload and
 mapping, automated-task nodes, Step 4 assessment.

@@ -61,7 +61,11 @@ export interface WorkforceStatus {
   graph_built: boolean;
   levels: GraphLevel[];
   entities: GraphEntity[];
-  level_titles: Record<GraphEntity, Record<GraphLevel, string>>;
+  level_titles: Record<string, Record<GraphLevel, string>>;
+  /** What the later steps are gated on, so the page needs one call rather than one
+   *  per step to know what is unlocked. */
+  clusters_assessed: number;
+  skills_written: number;
 }
 
 export interface NodeDetail {
@@ -188,6 +192,141 @@ export interface RoleOpportunity {
   fte_released: number | null;
   hours_per_week: number | null;
   tasks: RoleTask[];
+}
+
+// ---------------------------------------------------------------------------
+// Step 5 — personal productivity
+// ---------------------------------------------------------------------------
+export interface SkillSummary {
+  id: string;
+  name: string;
+  description: string;
+  hook: string;
+}
+
+export interface ProductivityTask {
+  cluster_id: number;
+  cluster: string;
+  domain: string;
+  task_names: string[];
+  proportion: number;
+  augmentation: number;
+  /** augmentation × share of the week — where a prompt helps this person most. */
+  rank_score: number;
+  skill: SkillSummary | null;
+}
+
+export interface ProductivityRole {
+  profile_key: string;
+  title: string;
+  family: string;
+  category: string;
+  tasks: ProductivityTask[];
+  skills: number;
+  assessed_share: number;
+}
+
+export interface ProductivityReport {
+  roles: ProductivityRole[];
+  families: string[];
+  total_skills: number;
+  eligible_pairs: number;
+}
+
+export interface SkillEstimate {
+  eligible: number;
+  skills: number;
+  calls: number;
+  est_usd: number;
+  basis: string;
+}
+
+export interface SkillDetail extends SkillSummary {
+  profile_key: string;
+  role_title: string;
+  task_cluster_id: number;
+  cluster_name: string;
+  blob_path: string;
+  rank_score: number;
+  generated_at: string | null;
+  markdown: string;
+}
+
+// ---------------------------------------------------------------------------
+// Step 6 — agent definitions
+// ---------------------------------------------------------------------------
+export interface AgentSummary {
+  id: string;
+  name: string;
+  purpose: string;
+  n_capabilities: number;
+  human_in_the_loop: boolean;
+}
+
+export interface AgentCandidate {
+  cluster_id: number;
+  cluster: string;
+  category: string;
+  domain: string;
+  automation: number;
+  augmentation: number;
+  /** Automation weighted by how much time the cluster consumes — the build-first order. */
+  time_released: number;
+  roles: number;
+  top_roles: string[];
+  n_actions: number;
+  agent: AgentSummary | null;
+}
+
+export interface ContextDoc {
+  id: string;
+  kind: string;
+  filename: string;
+  chars: number;
+}
+
+export interface AgentCandidateReport {
+  clusters: AgentCandidate[];
+  unit: string;
+  total_agents: number;
+  domains: string[];
+  context_documents: ContextDoc[];
+  estimate_all: { agents: number; calls: number; est_usd: number; basis: string };
+}
+
+export interface AgentDetail extends AgentSummary {
+  task_cluster_id: number;
+  cluster_name: string;
+  slug: string;
+  blob_path: string;
+  time_released: number;
+  time_released_unit: string;
+  automation_pct: number;
+  generated_at: string | null;
+  /** The eight-section specification. Shape varies by section, so it stays loose. */
+  spec: Record<string, unknown>;
+  sections: string[];
+}
+
+export interface AgentImpactReport {
+  agents: {
+    id: string;
+    name: string;
+    cluster: string;
+    purpose: string;
+    automation: number;
+    time_released: number;
+    n_capabilities: number;
+    human_in_the_loop: boolean;
+  }[];
+  unit: string;
+  totals: {
+    agents: number;
+    time_released: number;
+    supervised: number;
+    unsupervised: number;
+    mean_automation: number;
+  };
 }
 
 export interface RoleOpportunityReport {

@@ -361,12 +361,79 @@ class TaskOpportunityRecord(BaseModel):
     computed_at: datetime | None = None
 
 
+class TaskSkillRecord(BaseModel):
+    """A generated Claude Skill for one (role, task cluster) — step 5.
+
+    Metadata only. The skill itself is a markdown file in blob at `blob_path`: bodies
+    run to several KB and a full project could produce thousands, which has no business
+    in a state blob that is read on nearly every request. The short fields are kept
+    here so listing them costs one state read rather than N blob reads.
+    """
+
+    id: str
+    profile_key: str
+    role_title: str
+    task_cluster_id: int
+    cluster_name: str
+    # kebab-case; also the filename stem and the skill's identity in Claude.
+    name: str
+    description: str
+    hook: str
+    blob_path: str
+    # What ranked this task for this role: augmentation x share of the week.
+    rank_score: float = 0.0
+    generated_at: datetime | None = None
+
+
+class AgentDefinitionRecord(BaseModel):
+    """A generated agent specification — step 6.
+
+    Metadata only, for the same reason as TaskSkillRecord: the eight-section spec runs
+    to ~50KB of JSON and lives at `blob_path`.
+    """
+
+    id: str
+    task_cluster_id: int
+    cluster_name: str
+    name: str
+    slug: str
+    purpose: str
+    blob_path: str
+    # What ranked this cluster: automation weighted by how much time it consumes.
+    time_released: float = 0.0
+    time_released_unit: str = "role-weeks"
+    automation_pct: float = 0.0
+    n_capabilities: int = 0
+    human_in_the_loop: bool = True
+    generated_at: datetime | None = None
+
+
+class ContextDocRecord(BaseModel):
+    """An uploaded document folded into generation prompts as shared context —
+    a software catalogue for step 6, strategic context for step 7.
+
+    `text` is kept in state despite the general rule, because it is passed as a prompt
+    cache prefix on every call of a fan-out and a blob read per call would defeat the
+    point. Capped at upload for the same reason.
+    """
+
+    id: str
+    kind: str  # "software_catalogue" | "strategic_context"
+    filename: str
+    text: str
+    chars: int
+    uploaded_at: datetime
+
+
 class WorkforceState(BaseModel):
-    """Workforce Studio's own state. Phase B populates actions and opportunity;
-    processes, agents, skills guidance and future roles arrive with their phases."""
+    """Workforce Studio's own state. Phase B populates actions and opportunity, phase C
+    skills guidance and agents; processes and future roles arrive with their phases."""
 
     actions: list[TaskActionRecord] = Field(default_factory=list)
     opportunity: list[TaskOpportunityRecord] = Field(default_factory=list)
+    skills_guidance: list[TaskSkillRecord] = Field(default_factory=list)
+    agents: list[AgentDefinitionRecord] = Field(default_factory=list)
+    context_uploads: list[ContextDocRecord] = Field(default_factory=list)
     # Hours in a full-time week, used only to express released capacity in hours.
     # Configurable because a 35-hour and a 40-hour week give materially different
     # numbers and neither is a safe silent default.

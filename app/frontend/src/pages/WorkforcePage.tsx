@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Play } from "lucide-react";
 import { ArchitectureGraph, type ColorMode } from "../components/workforce/ArchitectureGraph";
 import { OpportunityStage } from "../components/workforce/OpportunityStage";
+import { ProductivityStage } from "../components/workforce/ProductivityStage";
+import { AgentsStage } from "../components/workforce/AgentsStage";
 import { ProgressBar } from "../components/wizard/ProgressBar";
 import { JobPulse } from "../components/wizard/JobPulse";
 import { StageSection } from "../components/wizard/StageSection";
@@ -174,7 +176,13 @@ export function WorkforcePage({
         {STEPS.map((s, i) => {
           const isArchitecture = s.id === "architecture";
           const isOpportunity = s.id === "opportunity";
-          const locked = !isArchitecture && !isOpportunity;
+          const isProductivity = s.id === "productivity";
+          const isAgents = s.id === "agents";
+          const locked = !isArchitecture && !isOpportunity && !isProductivity && !isAgents;
+          // Steps 5 and 6 read step 3's scores, so they unlock on the first assessed
+          // cluster rather than on the whole taxonomy being done — the ranking is
+          // useful, and honest about its coverage, long before it is complete.
+          const assessed = (status?.clusters_assessed ?? 0) > 0;
           return (
             <StageSection
               key={s.id}
@@ -189,21 +197,31 @@ export function WorkforcePage({
                     ? status?.ready
                       ? "active"
                       : "locked"
-                    : status?.graph_built
-                      ? "complete"
-                      : "active"
+                    : isProductivity || isAgents
+                      ? assessed
+                        ? "active"
+                        : "locked"
+                      : status?.graph_built
+                        ? "complete"
+                        : "active"
               }
               lockedReason={
                 locked
                   ? "Built in a later phase."
                   : isOpportunity && !status?.ready
                     ? "Needs the completed job architecture."
-                    : undefined
+                    : isProductivity && !assessed
+                      ? "Needs the AI opportunity assessment — it ranks tasks by augmentation."
+                      : isAgents && !assessed
+                        ? "Needs the AI opportunity assessment — it ranks clusters by automation."
+                        : undefined
               }
               summary={
                 isArchitecture && cut
                   ? `${cut.totals.leaves.job} job profiles · ${cut.totals.leaves.skill} skill clusters · ${cut.totals.leaves.task} task clusters`
-                  : undefined
+                  : isProductivity && status?.skills_written
+                    ? `${status.skills_written} skills written`
+                    : undefined
               }
               expanded={open === s.id}
               onToggle={() => setOpen(open === s.id ? "" : s.id)}
@@ -221,6 +239,12 @@ export function WorkforcePage({
                   }}
                 />
               )}
+
+              {isProductivity && assessed && (
+                <ProductivityStage api={api} onError={setError} />
+              )}
+
+              {isAgents && assessed && <AgentsStage api={api} onError={setError} />}
               {isArchitecture && (
                 <div className="space-y-3">
                   {!status?.ready && status && (

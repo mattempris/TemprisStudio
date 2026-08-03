@@ -387,10 +387,14 @@ function CandidateRow({
 /**
  * The eight sections, one collapsible each.
  *
- * Rendered as formatted JSON rather than as prose. The spec's audience is an engineer
- * who is going to build from it, the shape varies section to section, and a bespoke
- * renderer per section would be a lot of code that hides fields when the model returns
- * something unexpected. The download is the same content.
+ * Rendered structurally rather than as a JSON dump. The renderer is generic — objects
+ * become labelled fields, arrays of objects become cards, arrays of strings become
+ * bullets — rather than one bespoke component per section. That is a deliberate
+ * trade: a bespoke renderer reads marginally better and silently drops anything the
+ * model returned that it was not written to expect, which on a spec someone is going
+ * to build from is the worse failure. Anything present is shown.
+ *
+ * The JSON download is unchanged; this is only how it reads on screen.
  */
 function SpecModal({
   detail,
@@ -432,9 +436,9 @@ function SpecModal({
               <span className="text-text-muted">{open === s ? "−" : "+"}</span>
             </button>
             {open === s && (
-              <pre className="overflow-x-auto bg-card px-2.5 py-2 font-mono text-[10px] leading-relaxed text-text">
-                {JSON.stringify(detail.spec[s], null, 2)}
-              </pre>
+              <div className="bg-card px-2.5 py-2">
+                <SpecValue value={detail.spec[s]} depth={0} />
+              </div>
             )}
           </div>
         ))}
@@ -453,5 +457,135 @@ function Stat({ label, value }: { label: string; value: number | string }) {
         {label}
       </span>
     </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Structured rendering of an agent specification
+// ---------------------------------------------------------------------------
+/** `acceptance_criteria` -> `Acceptance criteria`. */
+function humanise(key: string): string {
+  const words = key.replace(/_/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+// Keys that read better as a card's heading than as one of its fields, best first.
+// `description` is a fallback only — a card with a `name` keeps its description as a
+// field, because dropping it loses the substance of a capability or a risk.
+const TITLE_KEYS = ["name", "agent_name", "event_name", "description"];
+const TAG_KEYS = ["capability_id", "step_id", "risk_id", "tool_id", "source_id", "id"];
+
+/** The key promoted to the heading, so the caller can exclude exactly that one. */
+function pick(obj: Record<string, unknown>, keys: string[]): string | null {
+  for (const k of keys) {
+    const v = obj[k];
+    if (typeof v === "string" && v.trim()) return k;
+  }
+  return null;
+}
+
+function isEmpty(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  if (typeof value === "string") return !value.trim();
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === "object") return Object.keys(value as object).length === 0;
+  return false;
+}
+
+export function SpecValue({ value, depth }: { value: unknown; depth: number }) {
+  if (isEmpty(value)) return null;
+
+  if (typeof value === "boolean") {
+    return (
+      <Badge color={value ? "success" : "warning"}>{value ? "yes" : "no"}</Badge>
+    );
+  }
+  if (typeof value === "number") {
+    return <span className="text-[11.5px] font-semibold tabular-nums text-text">{value}</span>;
+  }
+  if (typeof value === "string") {
+    return <span className="text-[11.5px] leading-snug text-text">{value}</span>;
+  }
+
+  if (Array.isArray(value)) {
+    const objects = value.filter((v) => v && typeof v === "object" && !Array.isArray(v));
+    if (objects.length === value.length) {
+      return (
+        <div className="space-y-1.5">
+          {(value as Record<string, unknown>[]).map((item, i) => {
+            const titleKey = pick(item, TITLE_KEYS);
+            const tagKey = pick(item, TAG_KEYS);
+            const title = titleKey ? (item[titleKey] as string) : null;
+            const tag = tagKey && tagKey !== titleKey ? (item[tagKey] as string) : null;
+            // Only the two keys actually promoted are removed; everything else stays a
+            // field, so nothing the model returned goes missing from the page.
+            const promoted = new Set([titleKey, tag ? tagKey : null].filter(Boolean));
+            const rest = Object.fromEntries(
+              Object.entries(item).filter(([k, v]) => !isEmpty(v) && !promoted.has(k)),
+            );
+            return (
+              <div key={i} className="rounded-[6px] border border-border bg-panel px-2.5 py-1.5">
+                {(title || tag) && (
+                  <p className="flex items-baseline gap-1.5">
+                    {tag && (
+                      <span className="shrink-0 font-mono text-[9.5px] font-bold text-text-muted">
+                        {tag}
+                      </span>
+                    )}
+                    {title && (
+                      <span className="text-[11.5px] font-bold leading-snug text-text">{title}</span>
+                    )}
+                  </p>
+                )}
+                {Object.keys(rest).length > 0 && (
+                  <div className={title || tag ? "mt-1" : ""}>
+                    <SpecFields obj={rest} depth={depth + 1} />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+    // Strings, numbers, or a mix — a plain list.
+    return (
+      <ul className="space-y-0.5">
+        {value.map((v, i) => (
+          <li key={i} className="text-[11.5px] leading-snug text-text">
+            · {typeof v === "object" ? JSON.stringify(v) : String(v)}
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
+  return <SpecFields obj={value as Record<string, unknown>} depth={depth + 1} />;
+}
+
+function SpecFields({ obj, depth }: { obj: Record<string, unknown>; depth: number }) {
+  const entries = Object.entries(obj).filter(([, v]) => !isEmpty(v));
+  if (entries.length === 0) return null;
+  return (
+    <div className={depth === 0 ? "space-y-2.5" : "space-y-1.5"}>
+      {entries.map(([key, value]) => {
+        // A scalar sits on one line with its label; anything structured gets the label
+        // above it, or the indentation stops being readable a couple of levels down.
+        const inline =
+          typeof value === "string" ? value.length < 90 : typeof value !== "object";
+        return (
+          <div key={key} className={inline ? "flex flex-wrap items-baseline gap-1.5" : ""}>
+            <span
+              className={`text-[10px] font-extrabold uppercase tracking-wider text-text-muted ${
+                inline ? "" : "mb-1 block"
+              }`}
+            >
+              {humanise(key)}
+            </span>
+            <SpecValue value={value} depth={depth} />
+          </div>
+        );
+      })}
+    </div>
   );
 }

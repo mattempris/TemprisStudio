@@ -32,18 +32,26 @@ from fastapi import UploadFile
 from app.models.project_state import (
     AgentDefinitionRecord,
     ContextDocRecord,
+    FutureRoleRecord,
+    ProcessAssessmentRecord,
+    ProcessRecord,
+    ProcessStepRecord,
     ProjectState,
     TaskActionRecord,
     TaskOpportunityRecord,
     TaskSkillRecord,
 )
+from app.services import embeddings as emb
 from app.services import llm
+from app.services.clustering import tier_state
 from app.services.ingestion import parsers
 from app.services.orchestrator import JobAlreadyRunning, ProgressReporter, get_registry, run_job
 from app.services.project_service import ProjectService
 from app.services.workforce import agents as ag
+from app.services.workforce import future_roles as fr
 from app.services.workforce import graph as wf
 from app.services.workforce import opportunity as opp
+from app.services.workforce import processes as proc
 from app.services.workforce import productivity as prod
 
 router = APIRouter(prefix="/api/projects/{client_slug}/{project_slug}/workforce", tags=["workforce"])
@@ -149,21 +157,67 @@ def get_graph(
     skills: str = "family",
     tasks: str = "family",
     expand: str = "",
+    show: str = "job,skill,task",
+    job_filter: str = "",
+    skill_filter: str = "",
+    task_filter: str = "",
+    filter_level: str = "family",
 ) -> dict:
     """One view of the graph: the fact table rolled up to the requested resolution.
 
     `expand` is a comma-separated list of node ids whose children should be shown, so
     one branch can be opened without dropping the whole view to a finer level.
+
+    `show` picks which hierarchies to draw — skills and tasks answer different questions
+    and drawing both at once is unreadable. The `*_filter` params are comma-separated
+    cluster ids at `filter_level`, narrowing each hierarchy to a chosen branch.
     """
     # Deliberately no state read: a cut needs only the fact table, and the state blob
     # is ~9MB on a real project. Reading it here put ~2.8s on every zoom and every
     # expand, which is the whole latency budget for a control meant to feel live.
     facts = _facts(ProjectService(), client_slug, project_slug)
     expanded = {x for x in (e.strip() for e in expand.split(",")) if x}
+
+    def ids(raw: str) -> set[int]:
+        out = set()
+        for part in raw.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                out.add(int(part))
+            except ValueError as e:
+                raise HTTPException(422, f"filter ids must be integers, got {part!r}") from e
+        return out
+
+    if filter_level not in wf.LEVELS:
+        raise HTTPException(422, f"unknown filter level {filter_level!r}")
+    filters = {
+        entity: (filter_level, chosen)
+        for entity, chosen in (
+            ("job", ids(job_filter)),
+            ("skill", ids(skill_filter)),
+            ("task", ids(task_filter)),
+        )
+        if chosen
+    }
+    shown = tuple(s.strip() for s in show.split(",") if s.strip())
     try:
-        return wf.cut(facts, levels={"job": jobs, "skill": skills, "task": tasks}, expanded=expanded)
+        return wf.cut(
+            facts,
+            levels={"job": jobs, "skill": skills, "task": tasks},
+            expanded=expanded,
+            show=shown,
+            filters=filters,
+        )
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
+
+
+@router.get("/graph/filters")
+def graph_filters(client_slug: str, project_slug: str) -> dict:
+    """Families and categories per hierarchy, for the filter controls."""
+    return wf.filter_options(_facts(ProjectService(), client_slug, project_slug))
 
 
 @router.get("/node/{node_id}")
@@ -1216,3 +1270,486 @@ def agent_impact(client_slug: str, project_slug: str) -> dict:
             else 0.0,
         },
     }
+
+
+# ===========================================================================
+# Step 2 — Process upload and mapping
+# ===========================================================================
+PROCESS_PREFIX = "workforce/processes"
+
+
+def _task_candidates(
+    svc: ProjectService, client_slug: str, project_slug: str, state: ProjectState
+) -> list[proc.ClusterCandidate]:
+    """Task cluster centroids, from the cached embedding matrix.
+
+    Recomputed from cache rather than persisted: the vectors and the assignments are
+    both already stored, the mean is microseconds, and a fourth cached derivative is a
+    fourth thing that can go stale against a re-clustering.
+    """
+    c = state.tasks.clustering
+    if c is None:
+        return []
+    spec = tier_state.spec("task")
+    matrix = svc.load_array(client_slug, f"{project_slug}/artifacts/{spec.array_name}.npy")
+    ids = svc.load_index(client_slug, f"{project_slug}/artifacts/{spec.array_name}_index.json")
+    if matrix is None or ids is None:
+        raise HTTPException(
+            409,
+            "the task embeddings are not cached for this project, so process steps "
+            "cannot be matched — re-run the task taxonomy to rebuild them",
+        )
+    return proc.cluster_centroids(
+        matrix,
+        ids,
+        {a.item_id: a.final_profile_id for a in c.assignments},
+        dict(c.profile_names),
+    )
+
+
+@router.get("/processes")
+def list_processes(client_slug: str, project_slug: str) -> dict:
+    """Uploaded processes, their steps, and any assessment."""
+    _, state = _load(client_slug, project_slug)
+    assessments = {a.process_id: a for a in state.workforce.process_assessments}
+    return {
+        "processes": [
+            {
+                **p.model_dump(mode="json"),
+                "unmatched_steps": p.unmatched_steps,
+                "manual_steps": sum(1 for s in p.steps if not s.automated),
+                "handoffs": sum(1 for s in p.steps if s.handoff),
+                "sign_offs": sum(1 for s in p.steps if s.sign_off),
+                "assessment": (
+                    assessments[p.id].model_dump(mode="json") if p.id in assessments else None
+                ),
+            }
+            for p in state.workforce.processes
+        ],
+        "supported_extensions": sorted(parsers.SUPPORTED_EXTENSIONS),
+        "assessed": len(state.workforce.process_assessments),
+        "has_opportunity": bool(state.workforce.opportunity),
+    }
+
+
+@router.post("/processes/upload")
+async def upload_process(client_slug: str, project_slug: str, file: UploadFile) -> dict:
+    """Store a process document and infer its steps. Mapping is a separate call.
+
+    Split that way because parsing plus one model call is seconds, and mapping needs the
+    embedding model loaded — which on a cold GPU is a different order of wait and
+    deserves its own progress bar.
+    """
+    svc, state = _load(client_slug, project_slug)
+    data = await file.read()
+    name = file.filename or "process.txt"
+    try:
+        text = parsers.extract_text(name, data)
+    except parsers.UnsupportedFileType as e:
+        raise HTTPException(422, str(e)) from e
+    except parsers.ParseFailed as e:
+        raise HTTPException(422, f"{name} could not be read: {e}") from e
+
+    blob_path = f"{project_slug}/{PROCESS_PREFIX}/raw/{name}"
+    svc.store.write_bytes(client_slug, blob_path, data)
+
+    def work(reporter: ProgressReporter) -> dict:
+        reporter.message(f"Reading the process in {name}")
+        inferred = proc.infer_process(text, filename=name)
+
+        fresh = svc.load_state(client_slug, project_slug)
+        fresh.workforce.processes = [p for p in fresh.workforce.processes if p.filename != name]
+        process_id = f"proc-{uuid.uuid4().hex[:8]}"
+        fresh.workforce.processes.append(
+            ProcessRecord(
+                id=process_id,
+                filename=name,
+                blob_path=blob_path,
+                process_name=inferred.process_name,
+                summary=inferred.summary,
+                ordering_confidence=inferred.ordering_confidence,
+                steps=[
+                    ProcessStepRecord(
+                        sequence=s.sequence,
+                        name=s.name,
+                        description=s.description,
+                        actor=s.actor,
+                        system=s.system,
+                        automated=s.automated,
+                        handoff=s.handoff,
+                        sign_off=s.sign_off,
+                    )
+                    for s in inferred.steps
+                ],
+                uploaded_at=datetime.now(timezone.utc),
+            )
+        )
+        svc.save_state(
+            fresh,
+            action="upload-process",
+            lineage_payload={"filename": name, "steps": len(inferred.steps)},
+        )
+        summary = {
+            "process": inferred.process_name,
+            "steps": len(inferred.steps),
+            "manual_steps": inferred.manual_steps,
+            "actors": len(inferred.actors),
+            "ordering_confidence": inferred.ordering_confidence,
+        }
+        reporter.stage_complete(summary)
+        return summary
+
+    return _start_job(client_slug, project_slug, "processes", work)
+
+
+@router.post("/processes/{process_id}/map")
+async def map_process(client_slug: str, project_slug: str, process_id: str) -> dict:
+    """Match each step onto the task taxonomy: geometry first, model on the tail."""
+    svc, state = _load(client_slug, project_slug)
+    record = next((p for p in state.workforce.processes if p.id == process_id), None)
+    if record is None:
+        raise HTTPException(404, f"no process {process_id}")
+    if state.tasks.clustering is None:
+        raise HTTPException(409, "the task taxonomy has not been built yet")
+
+    def work(reporter: ProgressReporter) -> dict:
+        reporter.message("Building task cluster centroids")
+        candidates = _task_candidates(svc, client_slug, project_slug, state)
+        steps = [
+            proc.InferredStep(
+                name=s.name, description=s.description, actor=s.actor, system=s.system,
+                automated=s.automated, handoff=s.handoff, sign_off=s.sign_off, sequence=s.sequence,
+            )
+            for s in record.steps
+        ]
+        reporter.message(f"Embedding {len(steps)} process steps")
+        service = emb.get_embedding_service()
+        vectors = service.embed_documents("task", [s.embedding_text() for s in steps])
+
+        reporter.stage_start(len(steps), "Matching steps to the task taxonomy")
+        done = {"n": 0}
+
+        def confirm(step, shortlist):
+            out = proc.confirm_match(step, shortlist)
+            done["n"] += 1
+            reporter.progress(done["n"], len(steps), "confirming uncertain matches")
+            return out
+
+        matches = proc.match_steps(steps, vectors, candidates, confirm=confirm)
+
+        fresh = svc.load_state(client_slug, project_slug)
+        target = next((p for p in fresh.workforce.processes if p.id == process_id), None)
+        if target is None:
+            raise RuntimeError(f"process {process_id} disappeared while mapping")
+        by_seq = {m.sequence: m for m in matches}
+        for s in target.steps:
+            m = by_seq.get(s.sequence)
+            if m is None:
+                continue
+            s.task_cluster_id = m.cluster_id
+            s.task_cluster_name = m.cluster_name
+            s.match_cosine = m.cosine
+            s.routed_by_llm = m.routed_by_llm
+            s.match_confidence = m.confidence
+            s.match_reasoning = m.reasoning
+        target.mapped_at = datetime.now(timezone.utc)
+        svc.save_state(
+            fresh,
+            action="map-process-steps",
+            lineage_payload={
+                "process_id": process_id,
+                "steps": len(matches),
+                "unmatched": sum(1 for m in matches if not m.matched),
+            },
+        )
+        summary = {
+            "process": target.process_name,
+            "steps": len(matches),
+            "matched": sum(1 for m in matches if m.matched),
+            "unmatched": sum(1 for m in matches if not m.matched),
+            "confirmed_by_model": sum(1 for m in matches if m.routed_by_llm),
+        }
+        reporter.stage_complete(summary)
+        return summary
+
+    return _start_job(client_slug, project_slug, "processes", work)
+
+
+@router.delete("/processes/{process_id}")
+def delete_process(client_slug: str, project_slug: str, process_id: str) -> dict:
+    svc, state = _load(client_slug, project_slug)
+    if not any(p.id == process_id for p in state.workforce.processes):
+        raise HTTPException(404, f"no process {process_id}")
+    state.workforce.processes = [p for p in state.workforce.processes if p.id != process_id]
+    state.workforce.process_assessments = [
+        a for a in state.workforce.process_assessments if a.process_id != process_id
+    ]
+    svc.save_state(state, action="delete-process", lineage_payload={"process_id": process_id})
+    return {"processes": len(state.workforce.processes)}
+
+
+# ===========================================================================
+# Step 4 — Process opportunity assessment
+# ===========================================================================
+@router.post("/processes/{process_id}/assess")
+async def assess_process_route(client_slug: str, project_slug: str, process_id: str) -> dict:
+    svc, state = _load(client_slug, project_slug)
+    record = next((p for p in state.workforce.processes if p.id == process_id), None)
+    if record is None:
+        raise HTTPException(404, f"no process {process_id}")
+    if not record.mapped_at:
+        raise HTTPException(409, "map the process onto the task taxonomy first")
+
+    scores = {
+        o.task_cluster_id: (o.automation_pct, o.augmentation_pct)
+        for o in state.workforce.opportunity
+    }
+
+    def work(reporter: ProgressReporter) -> dict:
+        reporter.message(f"Assessing {record.process_name} as-is and to-be")
+        inferred = proc.InferredProcess(
+            process_name=record.process_name,
+            summary=record.summary,
+            ordering_confidence=record.ordering_confidence,
+            steps=[
+                proc.InferredStep(
+                    name=s.name, description=s.description, actor=s.actor, system=s.system,
+                    automated=s.automated, handoff=s.handoff, sign_off=s.sign_off,
+                    sequence=s.sequence,
+                )
+                for s in record.steps
+            ],
+        )
+        matches = [
+            proc.StepMatch(s.sequence, s.task_cluster_id, s.task_cluster_name, s.match_cosine)
+            for s in record.steps
+        ]
+        a = proc.assess_process(inferred, matches, scores)
+
+        fresh = svc.load_state(client_slug, project_slug)
+        fresh.workforce.process_assessments = [
+            x for x in fresh.workforce.process_assessments if x.process_id != process_id
+        ]
+        fresh.workforce.process_assessments.append(
+            ProcessAssessmentRecord(
+                process_id=process_id,
+                # Measured from the steps, not asked of the model.
+                as_is_steps=len(inferred.steps),
+                as_is_manual_touchpoints=inferred.manual_steps,
+                as_is_actors=len(inferred.actors),
+                as_is_sign_offs=sum(1 for s in inferred.steps if s.sign_off),
+                as_is_handoffs=sum(1 for s in inferred.steps if s.handoff),
+                to_be_steps=a.to_be_steps,
+                to_be_manual_touchpoints=a.to_be_manual_touchpoints,
+                to_be_actors=a.to_be_actors,
+                to_be_sign_offs=a.to_be_sign_offs,
+                effort_reduction_pct=a.effort_reduction_pct,
+                elapsed_reduction_pct=a.elapsed_reduction_pct,
+                as_is_narrative=a.as_is_narrative,
+                to_be_narrative=a.to_be_narrative,
+                what_changes=a.what_changes,
+                risks=a.risks,
+                prerequisites=a.prerequisites,
+                computed_at=datetime.now(timezone.utc),
+            )
+        )
+        svc.save_state(
+            fresh,
+            action="assess-process",
+            lineage_payload={"process_id": process_id, "effort_reduction": a.effort_reduction_pct},
+        )
+        summary = {
+            "process": record.process_name,
+            "steps": f"{len(inferred.steps)} → {a.to_be_steps}",
+            "manual_touchpoints": f"{inferred.manual_steps} → {a.to_be_manual_touchpoints}",
+            "effort_reduction_pct": a.effort_reduction_pct,
+            "elapsed_reduction_pct": a.elapsed_reduction_pct,
+        }
+        reporter.stage_complete(summary)
+        return summary
+
+    return _start_job(client_slug, project_slug, "processes", work)
+
+
+# ===========================================================================
+# Step 7 — Future role design
+# ===========================================================================
+def _future_role_inputs(
+    state: ProjectState, *, profile_keys: set[str] | None = None
+) -> list[fr.FutureRoleInput]:
+    """Roles eligible for a redesign, most-affected first."""
+    c = state.tasks.clustering
+    if c is None:
+        return []
+    scores = {
+        o.task_cluster_id: (o.automation_pct, o.augmentation_pct)
+        for o in state.workforce.opportunity
+    }
+    if not scores:
+        return []
+
+    context = "\n\n".join(
+        f"### {d.filename}\n{d.text}"
+        for d in state.workforce.context_uploads
+        if d.kind == "strategic_context"
+    )
+    prefix = (
+        "HOW THIS ORGANISATION WANTS FREED-UP TIME USED.\n"
+        "Point the future role at these priorities where they are relevant.\n\n" + context
+        if context
+        else ""
+    )
+
+    agents_by_cluster: dict[int, list[str]] = {}
+    for a in state.workforce.agents:
+        agents_by_cluster.setdefault(a.task_cluster_id, []).append(a.name)
+
+    profile = {d.profile_key: d for d in state.job_profiles}
+    cluster_of = {a.item_id: a.final_profile_id for a in c.assignments}
+    grouped: dict[str, dict[int, float]] = {}
+    for t in state.tasks.inferred:
+        cid = cluster_of.get(t.id)
+        if cid is None or cid not in scores:
+            continue
+        if profile_keys and t.source_profile_key not in profile_keys:
+            continue
+        g = grouped.setdefault(t.source_profile_key, {})
+        g[cid] = g.get(cid, 0.0) + t.proportion
+
+    out: list[fr.FutureRoleInput] = []
+    for key, by_cluster in grouped.items():
+        doc = profile.get(key)
+        tasks = [
+            (c.profile_names.get(cid, str(cid)), prop, scores[cid][0], scores[cid][1])
+            for cid, prop in by_cluster.items()
+        ]
+        covered = sum(prop for _n, prop, _a, _g in tasks)
+        auto = round(sum(prop * a for _n, prop, a, _g in tasks) / covered, 1) if covered else 0.0
+        aug = round(sum(prop * g for _n, prop, _a, g in tasks) / covered, 1) if covered else 0.0
+        out.append(
+            fr.FutureRoleInput(
+                profile_key=key,
+                title=doc.title if doc else key,
+                purpose=str((doc.content or {}).get("about_role", ""))[:600] if doc else "",
+                automation_pct=auto,
+                augmentation_pct=aug,
+                tasks=tasks,
+                agents=sorted({n for cid in by_cluster for n in agents_by_cluster.get(cid, [])}),
+                strategic_context=prefix,
+            )
+        )
+    out.sort(key=lambda i: -i.time_released_pct)
+    return out
+
+
+@router.get("/future-roles")
+def list_future_roles(client_slug: str, project_slug: str) -> dict:
+    _, state = _load(client_slug, project_slug)
+    if not state.workforce.opportunity:
+        raise HTTPException(409, "run the AI opportunity assessment first")
+    existing = {f.profile_key: f for f in state.workforce.future_roles}
+    ancestry = _job_ancestry(state)
+    rows = []
+    for inp in _future_role_inputs(state):
+        fam, cat = ancestry.get(inp.profile_key, ("—", "—"))
+        rows.append(
+            {
+                "profile_key": inp.profile_key,
+                "title": inp.title,
+                "family": fam,
+                "category": cat,
+                "automation": inp.automation_pct,
+                "augmentation": inp.augmentation_pct,
+                "time_released_pct": inp.time_released_pct,
+                "n_tasks": len(inp.tasks),
+                "absorbed": inp.absorbed,
+                "agents": inp.agents,
+                "design": (
+                    existing[inp.profile_key].model_dump(mode="json")
+                    if inp.profile_key in existing
+                    else None
+                ),
+            }
+        )
+    return {
+        "roles": rows,
+        "families": sorted({r["family"] for r in rows}),
+        "designed": len(state.workforce.future_roles),
+        "has_strategic_context": any(
+            d.kind == "strategic_context" for d in state.workforce.context_uploads
+        ),
+        "estimate_all": fr.cost_estimate(sum(1 for r in rows if not r["design"])),
+    }
+
+
+class DesignRolesRequest(BaseModel):
+    profile_keys: list[str] | None = None
+    limit: int | None = None
+    redo: bool = False
+
+
+@router.post("/future-roles/design")
+async def design_future_roles(
+    client_slug: str, project_slug: str, req: DesignRolesRequest, workers: int | None = None
+) -> dict:
+    svc, state = _load(client_slug, project_slug)
+    _workers = llm.resolve_workers(workers)
+    inputs = _future_role_inputs(
+        state, profile_keys=set(req.profile_keys) if req.profile_keys else None
+    )
+    if not req.redo:
+        done = {f.profile_key for f in state.workforce.future_roles}
+        inputs = [i for i in inputs if i.profile_key not in done]
+    if req.limit:
+        inputs = inputs[: req.limit]
+    if not inputs:
+        raise HTTPException(400, "nothing to design — every matching role already has a design")
+
+    def work(reporter: ProgressReporter) -> dict:
+        reporter.stage_start(len(inputs), f"Redesigning {len(inputs)} roles")
+        llm.reset_cache_stats()
+        results = fr.design_many(inputs, workers=_workers, progress=reporter.pmap_callback())
+        made = [r for r in results if r is not None]
+        cache = llm.cache_stats()
+
+        reporter.message("Saving the designs")
+        fresh = svc.load_state(client_slug, project_slug)
+        replacing = {r.profile_key for r in made}
+        fresh.workforce.future_roles = [
+            f for f in fresh.workforce.future_roles if f.profile_key not in replacing
+        ]
+        now = datetime.now(timezone.utc)
+        for r in made:
+            fresh.workforce.future_roles.append(
+                FutureRoleRecord(
+                    profile_key=r.profile_key,
+                    title=r.title,
+                    evolution_today=r.evolution_today,
+                    evolution_after_automation=r.evolution_after_automation,
+                    evolution_future=r.evolution_future,
+                    future_purpose=r.future_purpose,
+                    future_responsibilities=r.future_responsibilities,
+                    absorbed_tasks=r.absorbed_tasks,
+                    deepened_tasks=r.deepened_tasks,
+                    skills_to_build=r.skills_to_build,
+                    deliberate_practice=r.deliberate_practice,
+                    automation_pct=r.automation_pct,
+                    time_released_pct=r.time_released_pct,
+                    computed_at=now,
+                )
+            )
+        svc.save_state(
+            fresh,
+            action="design-future-roles",
+            lineage_payload={"requested": len(inputs), "designed": len(made)},
+        )
+        summary = {
+            "requested": len(inputs),
+            "designed": len(made),
+            "failed": len(inputs) - len(made),
+            "prompt_cache": cache.summary(),
+        }
+        reporter.stage_complete(summary)
+        return summary
+
+    return _start_job(client_slug, project_slug, "future-roles", work)

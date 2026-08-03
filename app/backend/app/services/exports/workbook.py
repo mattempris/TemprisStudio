@@ -333,6 +333,137 @@ def je_dataset(state: ProjectState) -> Dataset:
     return Dataset("Job evaluation", cols, rows)
 
 
+# ---------------------------------------------------------------------------
+# Workforce Studio
+# ---------------------------------------------------------------------------
+# Every one of these carries the provenance of its numbers in a column rather than in a
+# footnote: the two opportunity scores are model estimates, and a spreadsheet that
+# strips that context is the one that ends up pasted into a board pack.
+def actions_dataset(state: ProjectState) -> Dataset:
+    cols = [
+        "Task domain", "Task category", "Task cluster", "Action", "Definition",
+        "% of task", "Automation % (estimate)", "Augmentation % (estimate)",
+        "Cluster automation %", "Cluster augmentation %", "Scores clamped",
+    ]
+    c = state.tasks.clustering
+    w = state.workforce
+    if c is None or not w.actions:
+        return Dataset("AI opportunity", cols, [])
+    parents = {a.final_profile_id: (a.final_category_id, a.final_family_id) for a in c.assignments}
+    rolled = {o.task_cluster_id: o for o in w.opportunity}
+    rows = []
+    for a in w.actions:
+        cat, fam = parents.get(a.task_cluster_id, (-1, -1))
+        o = rolled.get(a.task_cluster_id)
+        rows.append([
+            c.family_names.get(fam, ""),
+            c.category_names.get(cat, ""),
+            c.profile_names.get(a.task_cluster_id, ""),
+            a.name, a.definition, a.pct_of_task, a.automation_pct, a.augmentation_pct,
+            o.automation_pct if o else None,
+            o.augmentation_pct if o else None,
+            "yes" if o and o.clamped else "",
+        ])
+    rows.sort(key=lambda r: (str(r[0]), str(r[1]), str(r[2]), -float(r[5] or 0)))
+    return Dataset("AI opportunity", cols, rows)
+
+
+def agents_dataset(state: ProjectState) -> Dataset:
+    cols = [
+        "Agent", "Task cluster", "Purpose", "Automation % (estimate)",
+        "Time released", "Unit", "Capabilities", "Needs a person in the loop",
+        "Specification file",
+    ]
+    rows = [
+        [
+            a.name, a.cluster_name, a.purpose, a.automation_pct, a.time_released,
+            a.time_released_unit, a.n_capabilities,
+            "yes" if a.human_in_the_loop else "no", a.blob_path,
+        ]
+        for a in state.workforce.agents
+    ]
+    rows.sort(key=lambda r: -float(r[4] or 0))
+    return Dataset("Agents", cols, rows)
+
+
+def skills_guidance_dataset(state: ProjectState) -> Dataset:
+    cols = ["Role", "Task cluster", "Skill file", "Description", "Hook", "Rank score", "Path"]
+    rows = [
+        [s.role_title, s.cluster_name, f"{s.name}.md", s.description, s.hook,
+         s.rank_score, s.blob_path]
+        for s in state.workforce.skills_guidance
+    ]
+    rows.sort(key=lambda r: (str(r[0]), -float(r[5] or 0)))
+    return Dataset("Augmentation skills", cols, rows)
+
+
+def processes_dataset(state: ProjectState) -> Dataset:
+    cols = [
+        "Process", "Ordering confidence", "Step", "Name", "Description", "Actor",
+        "System", "Already automated", "Handoff", "Sign-off", "Task cluster",
+        "Match cosine", "Confirmed by model",
+    ]
+    rows = []
+    for p in state.workforce.processes:
+        for s in p.steps:
+            rows.append([
+                p.process_name, p.ordering_confidence, s.sequence, s.name, s.description,
+                s.actor, s.system,
+                "yes" if s.automated else "", "yes" if s.handoff else "",
+                "yes" if s.sign_off else "",
+                # The honest value for an unmatched step, not a blank that reads as
+                # "not looked at": this is work no job description mentioned.
+                s.task_cluster_name or "(no task cluster — not in any job description)",
+                s.match_cosine if p.mapped_at else None,
+                "yes" if s.routed_by_llm else "",
+            ])
+    return Dataset("Process steps", cols, rows)
+
+
+def process_opportunity_dataset(state: ProjectState) -> Dataset:
+    cols = [
+        "Process", "Steps as-is", "Steps to-be", "Manual touchpoints as-is",
+        "Manual touchpoints to-be", "Actors as-is", "Actors to-be",
+        "Sign-offs as-is", "Sign-offs to-be", "Handoffs as-is",
+        "Handler effort reduction % (estimate)", "Elapsed time reduction % (estimate)",
+        "What changes", "Risks", "Prerequisites",
+    ]
+    names = {p.id: p.process_name for p in state.workforce.processes}
+    rows = [
+        [
+            names.get(a.process_id, a.process_id),
+            a.as_is_steps, a.to_be_steps,
+            a.as_is_manual_touchpoints, a.to_be_manual_touchpoints,
+            a.as_is_actors, a.to_be_actors,
+            a.as_is_sign_offs, a.to_be_sign_offs, a.as_is_handoffs,
+            a.effort_reduction_pct, a.elapsed_reduction_pct,
+            " | ".join(a.what_changes), " | ".join(a.risks), " | ".join(a.prerequisites),
+        ]
+        for a in state.workforce.process_assessments
+    ]
+    return Dataset("Process opportunity", cols, rows)
+
+
+def future_roles_dataset(state: ProjectState) -> Dataset:
+    cols = [
+        "Role", "Automation % (estimate)", "% of week changing shape", "Future purpose",
+        "Today", "First to change", "What it becomes", "Future responsibilities",
+        "Changes shape first", "Deepens", "Skills to build", "Keep sharp by hand",
+    ]
+    rows = [
+        [
+            f.title, f.automation_pct, f.time_released_pct, f.future_purpose,
+            f.evolution_today, f.evolution_after_automation, f.evolution_future,
+            " | ".join(f.future_responsibilities), " | ".join(f.absorbed_tasks),
+            " | ".join(f.deepened_tasks), " | ".join(f.skills_to_build),
+            " | ".join(f.deliberate_practice),
+        ]
+        for f in state.workforce.future_roles
+    ]
+    rows.sort(key=lambda r: -float(r[2] or 0))
+    return Dataset("Future roles", cols, rows)
+
+
 BUILDERS = {
     "architecture": architecture_dataset,
     "input-jobs": input_jobs_dataset,
@@ -342,6 +473,12 @@ BUILDERS = {
     "proficiency": proficiency_dataset,
     "tasks": tasks_dataset,
     "matches": matches_dataset,
+    "ai-opportunity": actions_dataset,
+    "agents": agents_dataset,
+    "augmentation-skills": skills_guidance_dataset,
+    "processes": processes_dataset,
+    "process-opportunity": process_opportunity_dataset,
+    "future-roles": future_roles_dataset,
 }
 
 

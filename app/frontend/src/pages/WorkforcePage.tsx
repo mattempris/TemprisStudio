@@ -1,18 +1,28 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Play } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { ArchitectureGraph, type ColorMode } from "../components/workforce/ArchitectureGraph";
 import { OpportunityStage } from "../components/workforce/OpportunityStage";
 import { ProductivityStage } from "../components/workforce/ProductivityStage";
 import { AgentsStage } from "../components/workforce/AgentsStage";
+import { ProcessStage } from "../components/workforce/ProcessStage";
+import { FutureRolesStage } from "../components/workforce/FutureRolesStage";
 import { ProgressBar } from "../components/wizard/ProgressBar";
 import { JobPulse } from "../components/wizard/JobPulse";
 import { StageSection } from "../components/wizard/StageSection";
+import { StudioToggle } from "../components/wizard/StudioToggle";
 import { Button } from "../components/ui/Button";
 import { Modal } from "../components/ui/Modal";
 import { HEAT_GRADIENT, opportunityColor, opportunitySpan } from "../lib/heat";
 import { useJobStream } from "../hooks/useJobStream";
 import { workforceApi } from "../services/workforceApi";
-import type { GraphCut, GraphLevel, GraphNode, NodeDetail, WorkforceStatus } from "../types/workforce";
+import type {
+  GraphCut,
+  GraphFilters,
+  GraphLevel,
+  GraphNode,
+  NodeDetail,
+  WorkforceStatus,
+} from "../types/workforce";
 
 /**
  * Workforce Studio.
@@ -33,8 +43,12 @@ const STEPS = [
   { id: "processes", title: "Process upload", description: "Upload process documents and map their steps onto the task structure. Optional." },
   { id: "opportunity", title: "AI opportunity assessment", description: "Break each task cluster into actions and score each one for automation and augmentation." },
   { id: "process-opportunity", title: "Process opportunity assessment", description: "Current and future state per uploaded process." },
-  { id: "productivity", title: "Personal productivity", description: "Per role, the tasks a prompt helps most — with a downloadable Claude skill for each." },
-  { id: "agents", title: "Agent definitions", description: "Per task cluster, a full agent specification, ranked by the time it would release." },
+  // Named for the axis each one acts on rather than for its output. Augmentation is
+  // where a person keeps the work and goes faster; automation is where the work leaves
+  // the person. That is the distinction the two scores in step 3 exist to draw, and
+  // naming the steps after it makes the pair legible at a glance.
+  { id: "productivity", title: "Augmentation", description: "Per role, the tasks where AI help gives the most time back — with a downloadable Claude skill for each." },
+  { id: "agents", title: "Automation", description: "Per task cluster, a full agent specification, ranked by the time it would release." },
   { id: "future-roles", title: "Future role design", description: "How a role is redesigned once agents absorb the automatable work." },
 ] as const;
 
@@ -75,6 +89,13 @@ export function WorkforcePage({
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string>("architecture");
   const [colorMode, setColorMode] = useState<ColorMode>("entity");
+  // Skills and tasks answer different questions about the same jobs — what a role needs
+  // to know against what it spends its week doing. Drawing both triples the edges for a
+  // picture nobody reads either half of, so it is one at a time.
+  const [side, setSide] = useState<"skill" | "task">("task");
+  const [filters, setFilters] = useState<GraphFilters | null>(null);
+  const [jobFilter, setJobFilter] = useState<number[]>([]);
+  const [otherFilter, setOtherFilter] = useState<number[]>([]);
   // Bumped when step 3 finishes, which rebuilds the fact table server-side. Without
   // it the graph keeps showing the pre-assessment cut until the page is reloaded.
   const [graphEpoch, setGraphEpoch] = useState(0);
@@ -87,7 +108,14 @@ export function WorkforcePage({
     }
   }, [api]);
 
-  const { state: job, attach } = useJobStream(() => void refresh());
+  // Bumping the epoch on every job completion is what makes the graph actually update.
+  // `refresh` only re-reads status, and `graph_built` does not change when the fact
+  // table is rebuilt — so a rebuild used to leave the old cut on screen, which after an
+  // opportunity run meant the colours silently lagged the data behind them.
+  const { state: job, attach } = useJobStream(() => {
+    void refresh();
+    setGraphEpoch((n) => n + 1);
+  });
 
   useEffect(() => {
     void refresh();
@@ -99,13 +127,36 @@ export function WorkforcePage({
     if (!status?.graph_built) return;
     let live = true;
     api
-      .graph({ jobs: level, skills: level, tasks: level, expand: expanded })
+      .graph({
+        jobs: level,
+        skills: level,
+        tasks: level,
+        expand: expanded,
+        show: ["job", side],
+        jobFilter,
+        skillFilter: side === "skill" ? otherFilter : [],
+        taskFilter: side === "task" ? otherFilter : [],
+        filterLevel: "family",
+      })
       .then((c) => live && setCut(c))
       .catch((e) => live && setError(e instanceof Error ? e.message : String(e)));
     return () => {
       live = false;
     };
-  }, [api, status?.graph_built, level, expanded, graphEpoch]);
+  }, [api, status?.graph_built, level, expanded, graphEpoch, side, jobFilter, otherFilter]);
+
+  // Filter options come from the fact table, so they only exist once it is built.
+  useEffect(() => {
+    if (!status?.graph_built) return;
+    let live = true;
+    api
+      .graphFilters()
+      .then((f) => live && setFilters(f))
+      .catch(() => live && setFilters(null));
+    return () => {
+      live = false;
+    };
+  }, [api, status?.graph_built, graphEpoch]);
 
   const build = async () => {
     setError(null);
@@ -147,6 +198,12 @@ export function WorkforcePage({
   return (
     <div className="mx-auto flex max-w-[1600px] gap-6 px-6 py-6">
       <aside className="sticky top-[76px] hidden h-fit w-56 shrink-0 lg:block">
+        {/* The way back. Without this the toggle exists only on the JAStudio nav, so
+            entering Workforce Studio was a one-way door — you could reach it and then
+            had no route back to the architecture that feeds it. */}
+        <div className="mb-3">
+          <StudioToggle ready missing={[]} />
+        </div>
         <p className="mb-3 text-[11px] font-extrabold uppercase tracking-wider text-text-muted">
           Workforce
         </p>
@@ -167,6 +224,12 @@ export function WorkforcePage({
       </aside>
 
       <main className="min-w-0 flex-1 space-y-4">
+        {/* The sidebar is hidden below `lg`, so the way back needs to exist here too —
+            otherwise the one-way door reappears on a narrow window. */}
+        <div className="lg:hidden">
+          <StudioToggle ready missing={[]} />
+        </div>
+
         {error && (
           <p className="rounded-[10px] border border-brand-border bg-brand-bg px-4 py-3 text-[12.5px] text-brand">
             {error}
@@ -178,7 +241,11 @@ export function WorkforcePage({
           const isOpportunity = s.id === "opportunity";
           const isProductivity = s.id === "productivity";
           const isAgents = s.id === "agents";
-          const locked = !isArchitecture && !isOpportunity && !isProductivity && !isAgents;
+          const isProcesses = s.id === "processes";
+          const isProcessOpportunity = s.id === "process-opportunity";
+          const isFutureRoles = s.id === "future-roles";
+          // Every step now has an implementation, so nothing is "built in a later phase" —
+          // each one gates on the asset it actually reads instead.
           // Steps 5 and 6 read step 3's scores, so they unlock on the first assessed
           // cluster rather than on the whole taxonomy being done — the ranking is
           // useful, and honest about its coverage, long before it is complete.
@@ -191,13 +258,15 @@ export function WorkforcePage({
               title={s.title}
               description={s.description}
               state={
-                locked
-                  ? "locked"
+                isProcesses
+                  ? status?.ready
+                    ? "active"
+                    : "locked"
                   : isOpportunity
                     ? status?.ready
                       ? "active"
                       : "locked"
-                    : isProductivity || isAgents
+                    : isProductivity || isAgents || isFutureRoles || isProcessOpportunity
                       ? assessed
                         ? "active"
                         : "locked"
@@ -206,15 +275,17 @@ export function WorkforcePage({
                         : "active"
               }
               lockedReason={
-                locked
-                  ? "Built in a later phase."
-                  : isOpportunity && !status?.ready
-                    ? "Needs the completed job architecture."
-                    : isProductivity && !assessed
-                      ? "Needs the AI opportunity assessment — it ranks tasks by augmentation."
-                      : isAgents && !assessed
-                        ? "Needs the AI opportunity assessment — it ranks clusters by automation."
-                        : undefined
+                (isOpportunity || isProcesses) && !status?.ready
+                  ? "Needs the completed job architecture."
+                  : isProductivity && !assessed
+                    ? "Needs the AI opportunity assessment — it ranks tasks by augmentation."
+                    : isAgents && !assessed
+                      ? "Needs the AI opportunity assessment — it ranks clusters by automation."
+                      : isFutureRoles && !assessed
+                        ? "Needs the AI opportunity assessment — it decides what changes shape."
+                        : isProcessOpportunity && !assessed
+                          ? "Needs the AI opportunity assessment, and at least one mapped process."
+                          : undefined
               }
               summary={
                 isArchitecture && cut
@@ -245,6 +316,24 @@ export function WorkforcePage({
               )}
 
               {isAgents && assessed && <AgentsStage api={api} onError={setError} />}
+
+              {/* Steps 2 and 4 are the same screen: the assessment is per process, and
+                  putting it elsewhere would mean navigating away from the thing being
+                  assessed. Step 4's section points at it rather than duplicating it. */}
+              {isProcesses && status?.ready && (
+                <ProcessStage api={api} onError={setError} hasOpportunity={assessed} />
+              )}
+
+              {isProcessOpportunity && assessed && (
+                <p className="rounded-[10px] border border-border bg-panel px-4 py-3 text-[12px] leading-snug text-text-secondary">
+                  The as-is/to-be assessment runs per process and appears against each one
+                  in <strong className="text-text">step 2</strong>, where the steps it is
+                  reasoning about are visible. Upload a process there and press{" "}
+                  <strong className="text-text">Assess as-is / to-be</strong>.
+                </p>
+              )}
+
+              {isFutureRoles && assessed && <FutureRolesStage api={api} onError={setError} />}
               {isArchitecture && (
                 <div className="space-y-3">
                   {!status?.ready && status && (
@@ -264,10 +353,17 @@ export function WorkforcePage({
 
                   {status?.ready && (
                     <div className="flex flex-wrap items-center gap-3">
+                      {/* The fact table is derived from project state, so anything that
+                          changes state — a new assessment, a re-clustering, generated
+                          agents — leaves it behind until it is recomputed. Named for
+                          what it is for rather than "rebuild", which reads like a
+                          repair. */}
                       <Button variant={status.graph_built ? "default" : "primary"} onClick={build} disabled={job.running}>
                         <span className="flex items-center gap-1.5">
-                          <Play size={12} />
-                          {status.graph_built ? "Rebuild the architecture" : "Build the work architecture"}
+                          <RefreshCw size={12} />
+                          {status.graph_built
+                            ? "Update the graph from the latest data"
+                            : "Build the work architecture"}
                         </span>
                       </Button>
                       <JobPulse job={job} />
@@ -302,6 +398,28 @@ export function WorkforcePage({
                               }`}
                             >
                               {LEVEL_LABEL[l]}
+                            </button>
+                          ))}
+                        </span>
+                        <span className="text-[11px] font-extrabold uppercase tracking-wider text-text-muted">
+                          Against
+                        </span>
+                        <span className="flex gap-1">
+                          {(["skill", "task"] as const).map((s) => (
+                            <button
+                              key={s}
+                              onClick={() => {
+                                setSide(s);
+                                setOtherFilter([]);
+                                setExpanded([]);
+                              }}
+                              className={`rounded-[6px] border px-2 py-0.5 text-[11.5px] font-semibold transition-colors ${
+                                side === s
+                                  ? "border-accent bg-accent-bg text-accent"
+                                  : "border-border bg-card text-text-secondary hover:border-accent"
+                              }`}
+                            >
+                              {s === "skill" ? "Skills" : "Tasks"}
                             </button>
                           ))}
                         </span>
@@ -341,6 +459,29 @@ export function WorkforcePage({
                         )}
                       </div>
 
+                      {filters && (
+                        <div className="flex flex-wrap items-start gap-x-4 gap-y-2 rounded-[10px] border border-border bg-panel px-4 py-2.5">
+                          <FilterGroup
+                            title={filters.job?.level_titles.family ?? "Job family"}
+                            options={filters.job?.family ?? []}
+                            selected={jobFilter}
+                            onChange={(v) => {
+                              setJobFilter(v);
+                              setExpanded([]);
+                            }}
+                          />
+                          <FilterGroup
+                            title={filters[side]?.level_titles.family ?? "Family"}
+                            options={filters[side]?.family ?? []}
+                            selected={otherFilter}
+                            onChange={(v) => {
+                              setOtherFilter(v);
+                              setExpanded([]);
+                            }}
+                          />
+                        </div>
+                      )}
+
                       {cut.totals.nodes > LEGIBLE_NODES && (
                         <p className="rounded-[10px] border border-warning-border bg-warning-bg px-4 py-2.5 text-[11.5px] leading-snug text-text-secondary">
                           <strong className="text-text">
@@ -379,6 +520,69 @@ export function WorkforcePage({
       </main>
 
       {detail && <NodeModal detail={detail} onClose={() => setDetail(null)} />}
+    </div>
+  );
+}
+
+/**
+ * Multi-select filter as toggle chips.
+ *
+ * Chips rather than a `<select multiple>`: the counts have to be visible — a filter list
+ * that does not say how much of the graph each option covers makes choosing one
+ * guesswork — and a native multi-select hides them behind a scroll and a modifier key.
+ * Nothing selected means everything, which is the same convention as the rest of the app.
+ */
+function FilterGroup({
+  title,
+  options,
+  selected,
+  onChange,
+}: {
+  title: string;
+  options: { id: number; name: string; leaves: number }[];
+  selected: number[];
+  onChange: (next: number[]) => void;
+}) {
+  if (options.length === 0) return null;
+  return (
+    <div className="min-w-0">
+      <div className="mb-1 flex items-baseline gap-2">
+        <span className="text-[10px] font-extrabold uppercase tracking-wider text-text-muted">
+          {title}
+        </span>
+        {selected.length > 0 && (
+          <button
+            onClick={() => onChange([])}
+            className="text-[10.5px] font-semibold text-accent hover:underline"
+          >
+            all
+          </button>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {options.map((o) => {
+          const on = selected.includes(o.id);
+          return (
+            <button
+              key={o.id}
+              onClick={() =>
+                onChange(on ? selected.filter((x) => x !== o.id) : [...selected, o.id])
+              }
+              title={`${o.leaves} beneath`}
+              className={`rounded-[5px] border px-1.5 py-0.5 text-[10.5px] font-semibold transition-colors ${
+                on
+                  ? "border-accent bg-accent text-white"
+                  : "border-border bg-card text-text-secondary hover:border-accent"
+              }`}
+            >
+              {o.name}
+              <span className={`ml-1 tabular-nums ${on ? "text-white/70" : "text-text-muted"}`}>
+                {o.leaves}
+              </span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

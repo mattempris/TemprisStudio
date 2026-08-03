@@ -39,8 +39,23 @@ export interface GraphEdge {
   weight: number;
 }
 
+export interface FilterOption {
+  id: number;
+  name: string;
+  leaves: number;
+  /** Categories only: which family they sit under. */
+  family?: number;
+}
+
+export type GraphFilters = Record<
+  string,
+  { level_titles: Record<GraphLevel, string>; family: FilterOption[]; category: FilterOption[] }
+>;
+
 export interface GraphCut {
   levels: Record<string, GraphLevel>;
+  /** Which hierarchies this cut drew — skills and tasks are mutually exclusive. */
+  shown: string[];
   expanded: string[];
   nodes: GraphNode[];
   edges: GraphEdge[];
@@ -327,6 +342,116 @@ export interface AgentImpactReport {
     unsupervised: number;
     mean_automation: number;
   };
+}
+
+// ---------------------------------------------------------------------------
+// Steps 2 and 4 — processes
+// ---------------------------------------------------------------------------
+export interface ProcessStep {
+  sequence: number;
+  name: string;
+  description: string;
+  actor: string;
+  system: string;
+  automated: boolean;
+  handoff: boolean;
+  sign_off: boolean;
+  /** Null means no task cluster is a plausible home — work the job descriptions
+   *  never mentioned, which is a finding rather than a failure. */
+  task_cluster_id: number | null;
+  task_cluster_name: string;
+  match_cosine: number;
+  routed_by_llm: boolean;
+  match_confidence: number | null;
+  match_reasoning: string;
+}
+
+export interface ProcessAssessment {
+  process_id: string;
+  as_is_steps: number;
+  as_is_manual_touchpoints: number;
+  as_is_actors: number;
+  as_is_sign_offs: number;
+  as_is_handoffs: number;
+  to_be_steps: number;
+  to_be_manual_touchpoints: number;
+  to_be_actors: number;
+  to_be_sign_offs: number;
+  effort_reduction_pct: number;
+  elapsed_reduction_pct: number;
+  as_is_narrative: string;
+  to_be_narrative: string;
+  what_changes: string[];
+  risks: string[];
+  prerequisites: string[];
+  computed_at: string | null;
+}
+
+export interface ProcessRecord {
+  id: string;
+  filename: string;
+  process_name: string;
+  summary: string;
+  /** Whether the source document carried a reliable sequence. A diagram gives labels
+   *  but not arrows, so this is surfaced rather than assumed. */
+  ordering_confidence: "high" | "medium" | "low";
+  steps: ProcessStep[];
+  uploaded_at: string | null;
+  mapped_at: string | null;
+  unmatched_steps: number;
+  manual_steps: number;
+  handoffs: number;
+  sign_offs: number;
+  assessment: ProcessAssessment | null;
+}
+
+export interface ProcessReport {
+  processes: ProcessRecord[];
+  supported_extensions: string[];
+  assessed: number;
+  has_opportunity: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Step 7 — future roles
+// ---------------------------------------------------------------------------
+export interface FutureRoleDesign {
+  profile_key: string;
+  title: string;
+  evolution_today: string;
+  evolution_after_automation: string;
+  evolution_future: string;
+  future_purpose: string;
+  future_responsibilities: string[];
+  absorbed_tasks: string[];
+  deepened_tasks: string[];
+  skills_to_build: string[];
+  deliberate_practice: string[];
+  automation_pct: number;
+  time_released_pct: number;
+  computed_at: string | null;
+}
+
+export interface FutureRoleCandidate {
+  profile_key: string;
+  title: string;
+  family: string;
+  category: string;
+  automation: number;
+  augmentation: number;
+  time_released_pct: number;
+  n_tasks: number;
+  absorbed: string[];
+  agents: string[];
+  design: FutureRoleDesign | null;
+}
+
+export interface FutureRoleReport {
+  roles: FutureRoleCandidate[];
+  families: string[];
+  designed: number;
+  has_strategic_context: boolean;
+  estimate_all: { roles: number; calls: number; est_usd: number; basis: string };
 }
 
 export interface RoleOpportunityReport {

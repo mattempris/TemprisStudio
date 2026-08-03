@@ -425,6 +425,97 @@ class ContextDocRecord(BaseModel):
     uploaded_at: datetime
 
 
+class ProcessStepRecord(BaseModel):
+    """One step of an uploaded process, with where it landed in the task taxonomy.
+
+    `task_cluster_id` of None is a real, useful outcome, not a failure: work that
+    exists in the process but was invisible to job-description-derived inference.
+    """
+
+    sequence: int
+    name: str
+    description: str
+    actor: str
+    system: str
+    automated: bool = False
+    handoff: bool = False
+    sign_off: bool = False
+    task_cluster_id: int | None = None
+    task_cluster_name: str = ""
+    match_cosine: float = 0.0
+    routed_by_llm: bool = False
+    match_confidence: float | None = None
+    match_reasoning: str = ""
+
+
+class ProcessRecord(BaseModel):
+    """An uploaded process document, parsed and mapped — step 2."""
+
+    id: str
+    filename: str
+    blob_path: str
+    process_name: str
+    summary: str
+    # "high" | "medium" | "low" — whether the source carried a reliable sequence. A
+    # diagram gives labels but not arrows, so this is surfaced rather than assumed.
+    ordering_confidence: str = "low"
+    steps: list[ProcessStepRecord] = Field(default_factory=list)
+    uploaded_at: datetime | None = None
+    mapped_at: datetime | None = None
+
+    @property
+    def unmatched_steps(self) -> int:
+        return sum(1 for s in self.steps if s.task_cluster_id is None)
+
+
+class ProcessAssessmentRecord(BaseModel):
+    """As-is and to-be for one process — step 4.
+
+    The as-is counts are measured from the steps rather than asked of the model; only
+    the to-be counts and the narrative are its judgement.
+    """
+
+    process_id: str
+    as_is_steps: int
+    as_is_manual_touchpoints: int
+    as_is_actors: int
+    as_is_sign_offs: int
+    as_is_handoffs: int
+    to_be_steps: int
+    to_be_manual_touchpoints: int
+    to_be_actors: int
+    to_be_sign_offs: int
+    effort_reduction_pct: float
+    elapsed_reduction_pct: float
+    as_is_narrative: str = ""
+    to_be_narrative: str = ""
+    what_changes: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    prerequisites: list[str] = Field(default_factory=list)
+    computed_at: datetime | None = None
+
+
+class FutureRoleRecord(BaseModel):
+    """How a role is redesigned once agents absorb the automatable work — step 7."""
+
+    profile_key: str
+    title: str
+    evolution_today: str
+    evolution_after_automation: str
+    evolution_future: str
+    future_purpose: str
+    future_responsibilities: list[str] = Field(default_factory=list)
+    absorbed_tasks: list[str] = Field(default_factory=list)
+    deepened_tasks: list[str] = Field(default_factory=list)
+    skills_to_build: list[str] = Field(default_factory=list)
+    # Keeping AI-assisted judgement sharp: what the person should still do by hand,
+    # and why. Without this a redesigned role quietly deskills.
+    deliberate_practice: list[str] = Field(default_factory=list)
+    automation_pct: float = 0.0
+    time_released_pct: float = 0.0
+    computed_at: datetime | None = None
+
+
 class WorkforceState(BaseModel):
     """Workforce Studio's own state. Phase B populates actions and opportunity, phase C
     skills guidance and agents; processes and future roles arrive with their phases."""
@@ -434,6 +525,9 @@ class WorkforceState(BaseModel):
     skills_guidance: list[TaskSkillRecord] = Field(default_factory=list)
     agents: list[AgentDefinitionRecord] = Field(default_factory=list)
     context_uploads: list[ContextDocRecord] = Field(default_factory=list)
+    processes: list[ProcessRecord] = Field(default_factory=list)
+    process_assessments: list[ProcessAssessmentRecord] = Field(default_factory=list)
+    future_roles: list[FutureRoleRecord] = Field(default_factory=list)
     # Hours in a full-time week, used only to express released capacity in hours.
     # Configurable because a 35-hour and a 40-hour week give materially different
     # numbers and neither is a safe silent default.

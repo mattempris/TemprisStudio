@@ -23,7 +23,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-SUPPORTED_EXTENSIONS = {".pdf", ".doc", ".docx", ".txt", ".html", ".htm"}
+SUPPORTED_EXTENSIONS = {".pdf", ".doc", ".docx", ".txt", ".html", ".htm", ".svg", ".xlsx", ".xls"}
 
 
 class UnsupportedFileType(ValueError):
@@ -207,6 +207,69 @@ def parse_doc(data: bytes) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Process diagrams and spreadsheets — added for Workforce Studio step 2
+# ---------------------------------------------------------------------------
+def parse_svg(data: bytes) -> str:
+    """Labels out of an SVG diagram, in document order.
+
+    A process map drawn as SVG carries its step names as `<text>` nodes, so the labels
+    are recoverable. The *arrows* are not: connector geometry would have to be matched
+    back to boxes by coordinate, which is a different and much less reliable job. So
+    this yields the labels and whatever ordering the document happens to have, and the
+    UI says exactly that at upload rather than implying a reconstructed flowchart.
+
+    `<tspan>` runs are joined without a separator because a single label is routinely
+    split across them for line wrapping — "Approve" / "invoice" is one step, not two.
+    """
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(data, "xml")
+    if soup.find("svg") is None:
+        # Fall back to the HTML parser: an SVG saved by a drawing tool is sometimes
+        # wrapped in enough HTML that the XML parser finds no root svg.
+        soup = BeautifulSoup(data, "lxml")
+
+    lines: list[str] = []
+    for node in soup.find_all(["text", "title", "desc"]):
+        if node.name == "text":
+            spans = node.find_all("tspan")
+            text = "".join(s.get_text() for s in spans) if spans else node.get_text()
+        else:
+            text = node.get_text()
+        text = re.sub(r"\s+", " ", text).strip()
+        if text and text not in lines[-1:]:
+            lines.append(text)
+    return _clean("\n".join(lines))
+
+
+def parse_xlsx(data: bytes) -> str:
+    """Every sheet as tab-separated rows, sheet names as headings.
+
+    Deliberately not a table-shape guess. A process or catalogue spreadsheet may put
+    its header on row 4, use merged cells, or spread across sheets; inferring a schema
+    here would be a second column-mapping problem. The model reads the text and works
+    it out, which is what it is good at.
+    """
+    import pandas as pd
+
+    try:
+        sheets = pd.read_excel(io.BytesIO(data), sheet_name=None, header=None, dtype=str)
+    except Exception as e:  # noqa: BLE001 — pandas raises a wide variety here
+        raise ParseFailed(f"could not read the spreadsheet: {type(e).__name__}: {e}") from e
+
+    parts: list[str] = []
+    for name, df in sheets.items():
+        rows = [
+            "\t".join(str(v) for v in row if str(v) not in ("nan", "None", ""))
+            for row in df.fillna("").itertuples(index=False)
+        ]
+        rows = [r for r in rows if r.strip()]
+        if rows:
+            parts.append(f"## {name}\n" + "\n".join(rows))
+    return _clean("\n\n".join(parts))
+
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 _PARSERS = {
@@ -216,6 +279,9 @@ _PARSERS = {
     ".pdf": parse_pdf,
     ".docx": parse_docx,
     ".doc": parse_doc,
+    ".svg": parse_svg,
+    ".xlsx": parse_xlsx,
+    ".xls": parse_xlsx,
 }
 
 

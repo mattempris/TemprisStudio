@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Offer to Hire - Future State</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"/>
+  <style>
+    :root{
+      --canvas:#f2f3f6;--panel:#f7f8fb;--card:#ffffff;--border:#e1e3ea;
+      --text:#1e2233;--muted:#4a4f63;--muted2:#7a8095;
+      --brand:#c00000;--brandBg:rgba(192,0,0,0.06);--brandBorder:rgba(192,0,0,0.22);
+      --shadow-card:0 1px 3px rgba(0,0,0,0.07);--shadow-modal:0 12px 40px rgba(0,0,0,0.14);
+      --radius-card:12px;--radius-modal:20px;
+      --l1:#192c48;--l2:#c00000;--l3:#9b2457;--l4:#a85400;--l5:#3c2d7a;--l6:#1a2f3e;
+    }
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:Inter,system-ui,-apple-system,sans-serif;background:var(--canvas);color:var(--text);padding:52px 40px 72px;min-width:1100px}
+    .page{max-width:1340px;margin:0 auto}
+
+    .kicker{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+    .badge{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:999px;font-size:10.5px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase}
+    .badge-red{background:var(--brandBg);color:var(--brand);border:1px solid var(--brandBorder)}
+    .badge-gray{background:var(--panel);color:var(--muted2);border:1px solid var(--border)}
+    .badge-green{background:rgba(22,163,74,0.08);color:#15803d;border:1px solid rgba(22,163,74,0.25)}
+    h1{font-size:40px;font-weight:900;letter-spacing:-0.045em;line-height:1.04;margin-bottom:20px}
+    h1 span{color:var(--brand)}
+
+    /* Comparison strip */
+    .compare-strip{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:0;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-card);overflow:hidden;margin-bottom:20px;box-shadow:var(--shadow-card)}
+    .compare-side{padding:16px 22px}
+    .compare-side.before{border-right:1px solid var(--border)}
+    .compare-side.after{border-left:1px solid var(--border);background:rgba(22,163,74,0.04)}
+    .compare-arrow{padding:0 18px;color:var(--muted2);font-size:18px}
+    .compare-label{font-size:9.5px;font-weight:800;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted2);margin-bottom:8px}
+    .compare-stats{display:flex;gap:20px;flex-wrap:wrap}
+    .cstat{display:flex;flex-direction:column}
+    .cstat .val{font-size:22px;font-weight:900;letter-spacing:-0.03em;line-height:1}
+    .before .cstat .val{color:var(--muted)}
+    .after .cstat .val{color:#15803d}
+    .cstat .lbl{font-size:10px;font-weight:600;color:var(--muted2);margin-top:3px}
+
+    /* Intro card */
+    .intro-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-card);padding:18px 24px;margin-bottom:20px;box-shadow:var(--shadow-card);border-left:4px solid var(--brand)}
+    .intro-list{list-style:none;display:grid;gap:9px}
+    .intro-list li{display:flex;align-items:flex-start;gap:11px;font-size:13.5px;color:var(--muted);line-height:1.65}
+    .intro-list li i{color:var(--brand);font-size:10px;margin-top:5px;flex-shrink:0}
+
+    /* Harvey Ball legend */
+    .hb-legend{display:flex;align-items:center;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-card);padding:11px 18px;margin-bottom:24px;box-shadow:var(--shadow-card);flex-wrap:wrap;gap:6px}
+    .hb-legend-label{font-size:10.5px;font-weight:800;color:var(--muted2);text-transform:uppercase;letter-spacing:0.08em;margin-right:14px;white-space:nowrap}
+    .hb-legend-items{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+    .hb-legend-item{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted);font-weight:600}
+
+    /* Process card */
+    .process-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-modal);box-shadow:var(--shadow-modal);overflow:hidden;position:relative}
+    .process-card::after{content:'';position:absolute;top:-100px;right:-80px;width:340px;height:340px;background:radial-gradient(circle,rgba(192,0,0,0.04) 0%,transparent 70%);pointer-events:none;z-index:0}
+
+    /* Flow bar */
+    .flow-bar{display:flex;align-items:stretch;border-bottom:1px solid var(--border);background:var(--panel);padding:10px 18px;gap:6px;position:relative;z-index:1}
+    .flow-stage{flex:1;display:flex;align-items:center;justify-content:center;gap:7px;font-size:10.5px;font-weight:800;letter-spacing:0.07em;text-transform:uppercase;color:var(--muted2)}
+    .flow-stage .dot{width:10px;height:10px;border-radius:3px;flex-shrink:0}
+    .flow-arrow{display:flex;align-items:center;color:var(--border);font-size:12px}
+
+    /* Swim lanes */
+    .swim-lanes{display:grid;grid-template-columns:repeat(6,1fr);align-items:start;position:relative;z-index:1}
+    .lane{display:flex;flex-direction:column;border-right:1px solid rgba(0,0,0,0.06)}
+    .lane:last-child{border-right:none}
+    .lane-header{padding:14px 13px 13px;text-align:center;font-size:11px;font-weight:800;letter-spacing:0.055em;text-transform:uppercase;color:rgba(255,255,255,0.96);line-height:1.4;min-height:60px;display:flex;align-items:center;justify-content:center}
+    .lane.agent-lane .lane-header{background:var(--brand);letter-spacing:0.04em}
+    .lane-body{padding:18px 12px 20px;display:flex;flex-direction:column;align-items:stretch;background:var(--panel)}
+
+    /* Step cards */
+    .step{background:var(--card);border-radius:9px;border:1px solid var(--border);padding:11px 12px 12px;box-shadow:var(--shadow-card);transition:box-shadow 0.14s,transform 0.14s;position:relative}
+    .step:hover{box-shadow:0 6px 20px rgba(0,0,0,0.11);transform:translateY(-1px)}
+    .step.automated{background:#f9fffe;border-color:rgba(22,163,74,0.22)}
+    .step.conditional{border-style:dashed;background:#fffbf6;border-color:rgba(175,100,0,0.3)}
+    .step.hitl{background:#fafbff;border-color:rgba(60,45,122,0.22)}
+    .step.third-party{background:var(--panel);border-color:var(--border)}
+    .step.final{background:var(--brandBg);border-color:var(--brandBorder)}
+
+    .step-tag{display:inline-block;font-size:9px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;padding:2px 7px;border-radius:4px;margin-bottom:6px}
+    .tag-auto{color:#15803d;background:rgba(22,163,74,0.1)}
+    .tag-cond{color:#a06000;background:rgba(175,100,0,0.1)}
+    .tag-hitl{color:#3c2d7a;background:rgba(60,45,122,0.1)}
+    .tag-3p{color:var(--muted2);background:var(--panel)}
+    .tag-final{color:var(--brand);background:var(--brandBg)}
+
+    .step-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px}
+    .step-icon{width:28px;height:28px;border-radius:7px;display:grid;place-items:center;font-size:12px;flex-shrink:0}
+    .hb-badge{width:26px;height:26px;border-radius:6px;display:flex;align-items:center;justify-content:center;cursor:help;flex-shrink:0;border:1px solid #9ca3af;background:#f1f2f4;transition:transform 0.12s,box-shadow 0.12s}
+    .hb-badge:hover{transform:scale(1.14);box-shadow:0 2px 8px rgba(0,0,0,0.15)}
+
+    .step-title{font-size:12px;font-weight:700;color:var(--text);line-height:1.35;margin-bottom:4px}
+    .step.final .step-title{color:var(--brand)}
+    .step-desc{font-size:11px;color:var(--muted2);line-height:1.5}
+    .step-conn{display:flex;align-items:center;justify-content:center;height:24px;color:#c8ccd8;font-size:12px}
+
+    /* Map footer */
+    .map-footer{display:flex;align-items:center;justify-content:space-between;padding:11px 20px;border-top:1px solid var(--border);background:var(--panel);position:relative;z-index:1;flex-wrap:wrap;gap:10px}
+    .legend{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+    .legend-item{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--muted2);font-weight:600}
+    .legend-swatch{width:12px;height:12px;border-radius:3px}
+    .map-footer .credit{font-size:11px;color:var(--muted2);font-weight:600;letter-spacing:0.04em}
+    .map-footer .credit span{color:var(--brand)}
+
+    /* Global tooltip */
+    #hb-tip{position:fixed;z-index:9999;width:360px;background:#1a1f35;color:#e8eaf0;border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,0.38);padding:0;pointer-events:none;opacity:0;transition:opacity 0.12s;font-size:12px;line-height:1.5}
+    #hb-tip.visible{opacity:1}
+    .tip-head{display:flex;align-items:center;gap:10px;padding:13px 14px 11px;border-bottom:1px solid rgba(255,255,255,0.08)}
+    .tip-hb-wrap{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;border:1px solid rgba(255,255,255,0.12);background:rgba(107,114,128,0.15)}
+    .tip-meta{flex:1;min-width:0}
+    .tip-level-num{font-size:9.5px;font-weight:800;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:2px;color:#9ca3af}
+    .tip-level-name{font-size:13px;font-weight:800;line-height:1.2;color:#9ca3af}
+    .tip-body{padding:11px 14px 13px;display:grid;gap:9px}
+    .tip-ux{font-size:11.5px;color:#b0b8d0;line-height:1.65}
+    .tip-role{display:grid;gap:4px}
+    .tip-role-head{font-size:9.5px;font-weight:800;letter-spacing:0.1em;text-transform:uppercase;display:flex;align-items:center;gap:6px}
+    .tip-role-head i{font-size:9px;width:14px;text-align:center}
+    .tip-role-head.human{color:#93c5fd}
+    .tip-role-head.agent{color:#f9a8d4}
+    .tip-role-head.erp{color:#86efac}
+    .tip-role-body{font-size:11px;color:#8e96b5;line-height:1.55;padding-left:20px}
+    .tip-divider{height:1px;background:rgba(255,255,255,0.07)}
+    .tip-section-head{font-size:9.5px;font-weight:800;letter-spacing:0.1em;text-transform:uppercase;color:#6b7394;display:flex;align-items:center;gap:6px}
+    .tip-section-head i{font-size:9px}
+    .tip-list{list-style:none;display:grid;gap:5px}
+    .tip-list li{display:flex;align-items:flex-start;gap:7px;font-size:11px;color:#8e96b5;line-height:1.5}
+    .tip-list li::before{content:'';width:4px;height:4px;border-radius:50%;background:#4a5280;flex-shrink:0;margin-top:6px}
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <div class="kicker">
+    <span class="badge badge-red"><i class="fa-solid fa-diagram-project"></i>&nbsp; Process Map</span>
+    <span class="badge badge-green"><i class="fa-solid fa-bolt"></i>&nbsp; Future State</span>
+    <span class="badge badge-gray">Talent Acquisition</span>
+  </div>
+  <h1>Offer to <span>Hire</span> - Reimagined</h1>
+
+  <!-- Intro -->
+  <div class="intro-card">
+    <ul class="intro-list">
+      <li><i class="fa-solid fa-circle-dot"></i>On offer signature, the Agent automatically detects the event and initiates background screening - no coordinator action required</li>
+      <li><i class="fa-solid fa-circle-dot"></i>Background check exceptions are handled by the Agent; the HR Coordinator provides a single-click approval of an AI-drafted candidate communication in ChatGPT Enterprise</li>
+      <li><i class="fa-solid fa-circle-dot"></i>The screening team completes a Four Eyed Check supported by an AI-prepared adjudication brief, reducing review time from days to under an hour</li>
+      <li><i class="fa-solid fa-circle-dot"></i>On clearance, the Agent pre-populates the Workday hire action and presents it to TA Ops for single-click approval; all onboarding workflows trigger automatically</li>
+    </ul>
+  </div>
+
+  <!-- Harvey Ball legend -->
+  <div class="hb-legend">
+    <div class="hb-legend-label">Automation Level</div>
+    <div class="hb-legend-items">
+      <div class="hb-legend-item">
+        <svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><line x1="5" y1="15" x2="15" y2="5" stroke="#4b5563" stroke-width="1.5" stroke-linecap="round"/></svg>
+        Third Party
+      </div>
+      <div class="hb-legend-item">
+        <svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><path d="M10 10 L10 2 A8 8 0 0 1 18 10 Z" fill="#4b5563"/></svg>
+        Accelerate
+      </div>
+      <div class="hb-legend-item">
+        <svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><path d="M10 10 L10 2 A8 8 0 0 1 10 18 Z" fill="#4b5563"/></svg>
+        Human In the Loop
+      </div>
+      <div class="hb-legend-item">
+        <svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#4b5563" stroke="#374151" stroke-width="1.5"/></svg>
+        Human Out the Loop
+      </div>
+    </div>
+  </div>
+
+  <!-- Process map -->
+  <div class="process-card">
+    <div class="flow-bar">
+      <div class="flow-stage"><div class="dot" style="background:var(--l1)"></div>Offer Acceptance</div>
+      <div class="flow-arrow"><i class="fa-solid fa-chevron-right"></i></div>
+      <div class="flow-stage"><div class="dot" style="background:var(--l2)"></div>Automated Initiation</div>
+      <div class="flow-arrow"><i class="fa-solid fa-chevron-right"></i></div>
+      <div class="flow-stage"><div class="dot" style="background:var(--l3)"></div>Exception Handling</div>
+      <div class="flow-arrow"><i class="fa-solid fa-chevron-right"></i></div>
+      <div class="flow-stage"><div class="dot" style="background:var(--l4)"></div>Vendor</div>
+      <div class="flow-arrow"><i class="fa-solid fa-chevron-right"></i></div>
+      <div class="flow-stage"><div class="dot" style="background:var(--l5)"></div>Adjudication</div>
+      <div class="flow-arrow"><i class="fa-solid fa-chevron-right"></i></div>
+      <div class="flow-stage"><div class="dot" style="background:var(--l6)"></div>Hire Approval</div>
+    </div>
+
+    <div class="swim-lanes">
+
+      <!-- Lane 1: Candidate -->
+      <div class="lane">
+        <div class="lane-header" style="background:var(--l1)">Candidate</div>
+        <div class="lane-body">
+          <div class="step">
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(25,44,72,0.09)"><i class="fa-solid fa-file-signature" style="color:var(--l1)"></i></div>
+              <div class="hb-badge" data-hb="c_l1s1"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><path d="M10 10 L10 2 A8 8 0 0 1 18 10 Z" fill="#4b5563"/></svg></div>
+            </div>
+            <div class="step-title">Wet Signature Attestation</div>
+            <div class="step-desc">Candidate physically signs and returns offer letter</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Lane 2: AI Orchestration Agent -->
+      <div class="lane agent-lane">
+        <div class="lane-header">AI Orchestration<br>Agent</div>
+        <div class="lane-body">
+
+          <div class="step automated">
+            <span class="step-tag tag-auto">Fully Automated</span>
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(192,0,0,0.08)"><i class="fa-solid fa-bolt" style="color:var(--brand)"></i></div>
+              <div class="hb-badge" data-hb="c_l2s1"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#4b5563" stroke="#374151" stroke-width="1.5"/></svg></div>
+            </div>
+            <div class="step-title">Detect Signature &amp; Auto-Submit Screening Request</div>
+            <div class="step-desc">Monitors DocuSign via MCP, retrieves ATS data, submits vendor order in ~30 seconds</div>
+          </div>
+
+          <div class="step-conn"><i class="fa-solid fa-chevron-down"></i></div>
+
+          <div class="step conditional">
+            <span class="step-tag tag-cond">If Exception</span>
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(192,0,0,0.08)"><i class="fa-solid fa-arrows-spin" style="color:var(--brand)"></i></div>
+              <div class="hb-badge" data-hb="c_l2s2"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#4b5563" stroke="#374151" stroke-width="1.5"/></svg></div>
+            </div>
+            <div class="step-title">Draft &amp; Route Exception Communications</div>
+            <div class="step-desc">Parses vendor flag, drafts candidate comms, routes to HR Coordinator for single-click approval</div>
+          </div>
+
+          <div class="step-conn"><i class="fa-solid fa-chevron-down"></i></div>
+
+          <div class="step automated">
+            <span class="step-tag tag-auto">Fully Automated</span>
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(192,0,0,0.08)"><i class="fa-solid fa-file-waveform" style="color:var(--brand)"></i></div>
+              <div class="hb-badge" data-hb="c_l2s3"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#4b5563" stroke="#374151" stroke-width="1.5"/></svg></div>
+            </div>
+            <div class="step-title">Parse Report &amp; Generate Adjudication Brief</div>
+            <div class="step-desc">Receives vendor report, cross-references policy, queues structured brief for reviewers in ~2 minutes</div>
+          </div>
+
+          <div class="step-conn"><i class="fa-solid fa-chevron-down"></i></div>
+
+          <div class="step automated">
+            <span class="step-tag tag-auto">Fully Automated</span>
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(192,0,0,0.08)"><i class="fa-solid fa-rocket" style="color:var(--brand)"></i></div>
+              <div class="hb-badge" data-hb="c_l2s4"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#4b5563" stroke="#374151" stroke-width="1.5"/></svg></div>
+            </div>
+            <div class="step-title">Execute Clearance &amp; Hire Completion</div>
+            <div class="step-desc">Pre-populates Workday on dual sign-off; triggers onboarding, welcome email, and stakeholder notifications on TA Ops approval</div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Lane 3: HR Coordinator -->
+      <div class="lane">
+        <div class="lane-header" style="background:var(--l3)">HR Coordinator</div>
+        <div class="lane-body">
+          <div class="step hitl conditional">
+            <span class="step-tag tag-hitl">1 Approval</span>
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(155,36,87,0.1)"><i class="fa-solid fa-circle-check" style="color:var(--l3)"></i></div>
+              <div class="hb-badge" data-hb="c_l3s1"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><path d="M10 10 L10 2 A8 8 0 0 1 10 18 Z" fill="#4b5563"/></svg></div>
+            </div>
+            <div class="step-title">Review &amp; Approve Candidate Communication</div>
+            <div class="step-desc">Opens pre-drafted comms in ChatGPT Enterprise task queue; clicks Approve &amp; Send. ~90 seconds</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Lane 4: Background Screening Vendor -->
+      <div class="lane">
+        <div class="lane-header" style="background:var(--l4)">Background<br>Screening Vendor</div>
+        <div class="lane-body">
+          <div class="step third-party">
+            <span class="step-tag tag-3p">Third Party</span>
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(168,84,0,0.1)"><i class="fa-solid fa-magnifying-glass" style="color:var(--l4)"></i></div>
+              <div class="hb-badge" data-hb="c_l4s1"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><line x1="5" y1="15" x2="15" y2="5" stroke="#4b5563" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+            </div>
+            <div class="step-title">Conduct Background Check</div>
+            <div class="step-desc">Vendor-managed. Agent monitors progress via API and surfaces SLA risks to coordinator dashboard</div>
+          </div>
+          <div class="step-conn"><i class="fa-solid fa-chevron-down"></i></div>
+          <div class="step third-party">
+            <span class="step-tag tag-3p">Third Party</span>
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(168,84,0,0.1)"><i class="fa-solid fa-arrow-right-to-bracket" style="color:var(--l4)"></i></div>
+              <div class="hb-badge" data-hb="c_l4s2"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><line x1="5" y1="15" x2="15" y2="5" stroke="#4b5563" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+            </div>
+            <div class="step-title">Return Completed Results via API</div>
+            <div class="step-desc">Vendor webhook fires; Agent receives report and immediately triggers adjudication brief pipeline</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Lane 5: Background Screening Team -->
+      <div class="lane">
+        <div class="lane-header" style="background:var(--l5)">Background<br>Screening Team</div>
+        <div class="lane-body">
+          <div class="step hitl">
+            <span class="step-tag tag-hitl">Four Eyed Check</span>
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(60,45,122,0.1)"><i class="fa-solid fa-eye" style="color:var(--l5)"></i></div>
+              <div class="hb-badge" data-hb="c_l5s1"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><path d="M10 10 L10 2 A8 8 0 0 1 10 18 Z" fill="#4b5563"/></svg></div>
+            </div>
+            <div class="step-title">AI-Assisted Four Eyed Check</div>
+            <div class="step-desc">Two reviewers work through an AI-prepared adjudication brief in ChatGPT Enterprise; each signs off independently</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Lane 6: TA Ops -->
+      <div class="lane">
+        <div class="lane-header" style="background:var(--l6)">TA Ops</div>
+        <div class="lane-body">
+          <div class="step final">
+            <span class="step-tag tag-final">1 Approval</span>
+            <div class="step-top">
+              <div class="step-icon" style="background:var(--brandBg)"><i class="fa-solid fa-flag-checkered" style="color:var(--brand)"></i></div>
+              <div class="hb-badge" data-hb="c_l6s1"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><path d="M10 10 L10 2 A8 8 0 0 1 10 18 Z" fill="#4b5563"/></svg></div>
+            </div>
+            <div class="step-title">Single-Click Hire Approval</div>
+            <div class="step-desc">Reviews AI-validated Workday form (pre-populated by Agent); clicks Approve. Agent executes hire and triggers all downstream workflows. ~5 minutes</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="map-footer">
+      <div class="legend">
+        <div class="legend-item"><div class="legend-swatch" style="background:var(--brandBg);border:1px solid var(--brandBorder)"></div>AI Agent Step</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:#f9fffe;border:1px solid rgba(22,163,74,0.22)"></div>Fully Automated</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:#fafbff;border:1px solid rgba(60,45,122,0.22)"></div>Human In the Loop</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:var(--panel);border:1px solid var(--border)"></div>Third Party</div>
+      </div>
+      <div class="credit">Northwind &nbsp;·&nbsp; <span>Talent Acquisition Operations - Future State</span></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Global tooltip -->
+<div id="hb-tip">
+  <div class="tip-head">
+    <div class="tip-hb-wrap" id="tip-hb-icon"></div>
+    <div class="tip-meta">
+      <div class="tip-level-num" id="tip-level-num"></div>
+      <div class="tip-level-name" id="tip-level-name"></div>
+    </div>
+  </div>
+  <div class="tip-body" id="tip-body"></div>
+</div>
+
+<script>
+const HB = {
+  c_l1s1:{score:1,label:'Acceleration Opportunity',
+    ux:'The wet signature requirement is unchanged - a legal necessity. However, the Agent monitors the coordinator\'s inbox via MCP for the confirmation of receipt, and fires the entire screening pipeline automatically the moment it arrives. The coordinator\'s only involvement is confirming receipt of the physical document.',
+    human:'Candidate signs and returns the offer letter. Coordinator confirms receipt (email or system update).',
+    agent:'Monitors for signature confirmation event via MCP. Immediately fires the screening initiation pipeline on receipt - no coordinator action needed.',
+    erp:'ATS status updated to "Offer Accepted - Screening Pending" automatically on confirmation.',
+    skills:['Auto-draft SLA reminder emails to candidates approaching signature deadline','Generate attestation confirmation record on receipt for audit trail'],
+    agents:[]},
+
+  c_l2s1:{score:4,label:'Human Out the Loop',
+    ux:'Within ~30 seconds of signature confirmation, the Agent has submitted the screening order - with no human involvement. The TA Coordinator receives a passive FYI notification in Teams ("Screening initiated for [Name]"). No action is needed. In the current state, this takes 1-2 days of coordinator effort across multiple manual steps.',
+    human:'Nothing. TA Coordinator receives a passive FYI notification in Teams. No action required in the normal flow.',
+    agent:'Connects to ATS via MCP → retrieves candidate profile, role, jurisdiction, and screening package → maps all fields to vendor API schema → validates completeness → submits screening order via vendor API → logs confirmation in ATS → sends FYI to TA Coordinator.',
+    erp:'ATS updated to "Background Screening In Progress". Vendor order reference logged against candidate record. Workday pre-screening record created.',
+    skills:['Auto-populate all screening order fields from ATS candidate record','Generate submission confirmation log entry for compliance audit trail'],
+    agents:['ATS-to-Vendor Orchestration Agent: monitors signature event via MCP webhook, retrieves candidate data from ATS, submits screening order via vendor API, handles confirmation and error recovery - fully autonomous']},
+
+  c_l2s2:{score:4,label:'Human Out the Loop (Routing)',
+    ux:'If the vendor API raises an information flag, the Agent intercepts it before any human sees it. It identifies exactly what\'s needed, generates a plain-language candidate email, and drops it into the HR Coordinator\'s ChatGPT Enterprise task queue - already drafted and ready to approve. The HR Coordinator\'s total effort is ~90 seconds. After the candidate responds, the Agent validates the documents and re-submits to the vendor. No human is involved in any of the handoffs.',
+    human:'HR Coordinator opens ChatGPT Enterprise task queue → reads the 3-sentence AI-drafted communication → optionally edits tone → clicks "Approve & Send". ~90 seconds total.',
+    agent:'Polls vendor API for information flags → parses specific requirement → triggers drafting skill in ChatGPT Enterprise → generates candidate-friendly communication → routes to HR Coordinator task queue. After approval: sends to candidate, monitors for response, validates received documents, auto-submits to vendor.',
+    erp:'Vendor flag logged in ATS. Candidate communication recorded against screening record. Document receipt and vendor re-submission timestamped for audit.',
+    skills:['Draft empathetic candidate communication tailored to the specific information required and the candidate\'s jurisdiction','Validate received document format and completeness against vendor specification'],
+    agents:['Exception Handling Agent: monitors vendor API for flags, orchestrates the full request → draft → approval → send → validate → resubmit loop with a single human approval gate in ChatGPT Enterprise']},
+
+  c_l2s3:{score:4,label:'Human Out the Loop',
+    ux:'The moment the vendor marks the check complete via API, the Agent retrieves the report and begins analysis immediately. Within ~2 minutes, both reviewers have a notification in Teams and a structured adjudication brief loaded in their ChatGPT Enterprise review interface - with findings summarised, policy cross-referenced, anomalies highlighted, and a provisional recommendation drafted. In the current state, this routing and preparation can take hours.',
+    human:'Nothing. Reviewers are passively notified that their brief is ready.',
+    agent:'Receives vendor webhook → retrieves full report via vendor API → parses structured findings → cross-references every finding against Northwind\'s policy rulebook and jurisdiction requirements using RAG → identifies anomalies → generates structured adjudication brief with provisional recommendation → loads brief into both reviewers\' ChatGPT Enterprise interface → sends Teams notification.',
+    erp:'ATS updated to "Report Received - Adjudication Pending". Brief attached to screening record. Timestamp logged for SLA tracking.',
+    skills:['Parse background check report into standardised internal format','Generate structured adjudication brief: findings summary, policy crosswalk table, anomaly highlights, and provisional recommendation','Draft provisional clearance or escalation recommendation with policy justification'],
+    agents:['Report Analysis Agent: receives vendor webhook, retrieves and parses report, applies Northwind policy rules via retrieval-augmented generation against the policy knowledge base, generates reviewable adjudication brief - autonomously, within ~2 minutes of report receipt']},
+
+  c_l2s4:{score:4,label:'Human Out the Loop',
+    ux:'This step is entirely orchestrated between the two human approval gates - Four Eyed Check and TA Ops sign-off. The moment both reviewers sign off, the Agent fires the pipeline: ATS updated, Workday pre-populated, TA Ops notified. After TA Ops clicks approve, the Agent confirms the Workday hire action, triggers onboarding, sends the welcome email, and dispatches notifications to the hiring manager, IT, Facilities, and HRBP - within minutes.',
+    human:'Nothing. This step runs fully between the Four Eyed Check and TA Ops approval.',
+    agent:'Detects dual sign-off → updates ATS to Cleared → retrieves all hire data (comp, start date, cost centre, job code, manager) → validates against Workday schema → pre-populates hire action form → notifies TA Ops. Post-approval: confirms Workday hire action → triggers onboarding workflow → sends personalised welcome email → dispatches notifications to all stakeholders.',
+    erp:'Workday: hire action pre-populated and surfaced for TA Ops approval. Post-approval: employee record created, payroll and benefits enrolment initiated, cost centre confirmed. ATS: status updated to "Hired". IT provisioning request generated.',
+    skills:['Auto-populate all Workday hire fields from ATS data with data source labelling for TA Ops transparency','Draft personalised welcome email to new hire','Generate stakeholder notifications: hiring manager, IT, Facilities, HRBP'],
+    agents:['Hire Completion Agent: orchestrates clearance → Workday pre-population → TA Ops notification pipeline, then executes all post-approval downstream actions (hire confirmation, onboarding trigger, comms dispatch) - fully autonomous between the two human gates']},
+
+  c_l3s1:{score:2,label:'Human In the Loop',
+    ux:'The HR Coordinator receives a Teams message: "Action required: Background check information request for [Candidate Name]." They click through to their ChatGPT Enterprise task queue and see the AI-drafted candidate email, pre-populated with the specific information required, the plain-language reason, and the submission instructions. A context panel shows what the vendor flagged and the Agent\'s reasoning. They read the 3-5 sentence draft, optionally adjust the tone, and click "Approve & Send." Total effort: ~90 seconds. The Agent handles everything after - sending, monitoring, receiving documents, and re-submitting to the vendor.',
+    human:'Open ChatGPT Enterprise task queue (via Teams notification). Read the AI-drafted candidate communication and context panel. Approve as-is or make a minor edit. Click "Approve & Send". ~90 seconds.',
+    agent:'Has pre-drafted the communication and context card and loaded them into the task queue. After approval: sends email to candidate, monitors for response, validates received documents against vendor requirements, auto-submits to vendor, logs confirmation.',
+    erp:'Approved communication logged against candidate\'s ATS record. Response tracking and document receipt managed by Agent.',
+    skills:['Draft empathetic candidate communication with plain-language explanation of information request','Provide HR Coordinator with a context card showing vendor flag details, suggested approach, and tone guidance'],
+    agents:[]},
+
+  c_l4s1:{score:0,label:'Third Party - No Leverage',
+    ux:'The vendor conducts the check as in the current state - this is outside Northwind\'s direct control. However, the Agent maintains a live connection to the vendor\'s status API and continuously surfaces progress to a TA Coordinator monitoring dashboard. Pre-set SLA thresholds trigger automatic escalation alerts if a check is at risk of breaching the timeline.',
+    human:'No action required unless the Agent surfaces an SLA escalation.',
+    agent:'Continuously polls vendor API for status updates. Surfaces real-time progress to coordinator dashboard. Auto-escalates in Teams if check approaches SLA deadline.',
+    erp:'ATS screening record updated with real-time vendor status at each polling interval.',
+    skills:[],
+    agents:['SLA Monitoring Agent: polls vendor API on a defined schedule, surfaces risk indicators to coordinator dashboard, triggers automatic Teams escalation if check approaches deadline']},
+
+  c_l4s2:{score:0,label:'Third Party - No Leverage',
+    ux:'When the vendor marks the check complete, their API fires a webhook that the Agent is listening on. This event immediately triggers the report parsing and adjudication brief pipeline. From vendor completion to brief in reviewers\' queues: approximately 2 minutes. In the current state, this handoff typically takes hours.',
+    human:'Nothing.',
+    agent:'Receives vendor webhook → immediately triggers report parsing and adjudication brief pipeline in the background.',
+    erp:'ATS updated to "Report Received". Timestamp logged for SLA reporting and audit.',
+    skills:[],
+    agents:['Report Analysis Agent triggered on webhook receipt - see Agent lane step 3 for full detail']},
+
+  c_l5s1:{score:2,label:'Human In the Loop',
+    ux:'Each reviewer receives a Teams notification: "Four Eyed Check ready for [Candidate Name]." They open the integrated review interface - a ChatGPT Enterprise plugin or lightweight web tool - and are presented with the AI-prepared brief. The brief shows: a structured findings summary by check type, a policy crosswalk table mapping each finding to the relevant Northwind policy, anomalies ranked by priority, and the Agent\'s provisional recommendation with policy justification. Reviewers can interrogate specific findings by asking the Agent follow-up questions inline. Each reviewer independently records their sign-off. The Agent detects both completions and immediately fires the clearance pipeline.',
+    human:'Open the adjudication brief in ChatGPT Enterprise review interface (via Teams notification). Read AI-prepared findings summary and policy crosswalk. Interrogate anomalies using the inline AI assistant if needed. Record sign-off decision. ~15-30 minutes per reviewer, vs. 1-2 days in the current state.',
+    agent:'Prepared the adjudication brief and loaded it into the review interface. Answers inline reviewer questions by retrieving relevant policy, jurisdiction data, and vendor report details. Monitors for both sign-offs. Fires clearance pipeline on dual completion.',
+    erp:'Both sign-offs recorded against the screening record in ATS with timestamps. Dual completion event triggers the Agent\'s hire completion pipeline.',
+    skills:['Pre-process report to highlight anomalies and policy-relevant findings for reviewer attention','Generate structured adjudication brief: findings summary, policy crosswalk, anomaly highlights, provisional recommendation','Answer reviewer follow-up questions inline using policy knowledge base and report data'],
+    agents:['Four Eyed Check Support Agent: loads brief into review interface, answers reviewer questions by retrieving policy and vendor data dynamically, monitors sign-off completion, fires clearance pipeline on dual approval']},
+
+  c_l6s1:{score:2,label:'Human In the Loop',
+    ux:'TA Ops receives a Teams notification: "Hire action ready for approval - [Candidate Name]." They click through to Workday (or an integrated approval view), where every hire field is pre-populated and validated by the Agent. A data source panel shows where each value came from (ATS, offer letter, org structure), and an AI data quality check confirms all values are internally consistent. Key fields are surfaced prominently: compensation, start date, cost centre, and regulatory registrations. TA Ops reviews the summary, clicks "Approve Hire Action", and the Agent executes everything downstream - Workday confirmation, onboarding trigger, welcome email, stakeholder notifications - within minutes.',
+    human:'Open pre-populated Workday hire action from Teams notification. Review key fields and AI data quality check summary. Click "Approve Hire Action". ~5 minutes.',
+    agent:'Has pre-populated all Workday fields, validated data consistency, and prepared the data source transparency panel. After approval: confirms Workday hire action, triggers onboarding workflow, sends welcome email to candidate, dispatches notifications to hiring manager, IT, Facilities, HRBP.',
+    erp:'Workday: hire action executed, employee record created, payroll and benefits enrolment triggered, cost centre assignment confirmed, regulatory registrations submitted. ATS: status updated to "Hired". IT provisioning request generated automatically.',
+    skills:['Auto-populate all Workday hire fields from ATS data with data source labelling for TA Ops transparency','Validate field consistency and surface any discrepancies for TA Ops review before approval','Draft personalised new hire welcome email and all stakeholder notification messages'],
+    agents:['Hire Completion Agent: executes all downstream actions on TA Ops approval - Workday confirmation, ATS update, onboarding workflow trigger, welcome email dispatch, stakeholder notifications - fully autonomous post-approval']}
+};
+
+const SVGS = {
+  0:'<svg width="18" height="18" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#1e2a3a" stroke="#9ca3af" stroke-width="1.5"/><line x1="5" y1="15" x2="15" y2="5" stroke="#9ca3af" stroke-width="1.5" stroke-linecap="round"/></svg>',
+  1:'<svg width="18" height="18" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#1e2a3a" stroke="#9ca3af" stroke-width="1.5"/><path d="M10 10 L10 2 A8 8 0 0 1 18 10 Z" fill="#9ca3af"/></svg>',
+  2:'<svg width="18" height="18" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#1e2a3a" stroke="#9ca3af" stroke-width="1.5"/><path d="M10 10 L10 2 A8 8 0 0 1 10 18 Z" fill="#9ca3af"/></svg>',
+  4:'<svg width="18" height="18" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#9ca3af" stroke="#6b7280" stroke-width="1.5"/></svg>'
+};
+const LEVEL_NAMES = ['Already Automated / Third Party','Acceleration Opportunity','Human In the Loop','Human On the Loop','Human Out the Loop'];
+
+const tip  = document.getElementById('hb-tip');
+const body = document.getElementById('tip-body');
+
+function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
+
+function buildBody(d){
+  let h = `<div class="tip-ux">${esc(d.ux)}</div>`;
+  h += `<div class="tip-divider"></div>`;
+  if(d.human){ h += `<div class="tip-role"><div class="tip-role-head human"><i class="fa-solid fa-user"></i> Human Action</div><div class="tip-role-body">${esc(d.human)}</div></div>`; }
+  if(d.agent){ h += `<div class="tip-role"><div class="tip-role-head agent"><i class="fa-solid fa-robot"></i> Agent Action</div><div class="tip-role-body">${esc(d.agent)}</div></div>`; }
+  if(d.erp){   h += `<div class="tip-role"><div class="tip-role-head erp"><i class="fa-solid fa-database"></i> ERP / System</div><div class="tip-role-body">${esc(d.erp)}</div></div>`; }
+  if(d.skills && d.skills.length){
+    h += `<div class="tip-divider"></div><div class="tip-section-head"><i class="fa-solid fa-bolt"></i> Skills</div><ul class="tip-list">${d.skills.map(s=>`<li>${esc(s)}</li>`).join('')}</ul>`;
+  }
+  if(d.agents && d.agents.length){
+    h += `<div class="tip-section-head" style="margin-top:4px"><i class="fa-solid fa-robot"></i> Agents</div><ul class="tip-list">${d.agents.map(s=>`<li>${esc(s)}</li>`).join('')}</ul>`;
+  }
+  return h;
+}
+
+document.querySelectorAll('.hb-badge[data-hb]').forEach(el=>{
+  el.addEventListener('mouseenter',()=>{
+    const d = HB[el.dataset.hb]; if(!d) return;
+    document.getElementById('tip-hb-icon').innerHTML = SVGS[d.score] || SVGS[2];
+    document.getElementById('tip-level-num').textContent = `Level ${d.score} · ${LEVEL_NAMES[d.score]||''}`;
+    document.getElementById('tip-level-name').textContent = d.label;
+    body.innerHTML = buildBody(d);
+    tip.classList.add('visible');
+    pos(el);
+  });
+  el.addEventListener('mouseleave',()=>tip.classList.remove('visible'));
+  el.addEventListener('mousemove',()=>pos(el));
+});
+
+function pos(el){
+  const r=el.getBoundingClientRect(), tw=360, th=tip.offsetHeight||320, pad=8;
+  let left=r.right-tw, top=r.bottom+pad;
+  if(left<pad) left=pad;
+  if(left+tw>window.innerWidth-pad) left=window.innerWidth-tw-pad;
+  if(top+th>window.innerHeight-pad) top=r.top-th-pad;
+  tip.style.left=left+'px'; tip.style.top=top+'px';
+}
+</script>
+</body>
+</html>

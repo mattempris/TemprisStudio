@@ -67,6 +67,21 @@ METRIC_TITLES_NO_HEADCOUNT: dict[str, str] = {
 }
 
 
+# What a cluster with no parent is called. An id of -1 means the tier above never
+# assigned this cluster — it happens when a cluster was left unnamed at the time its
+# parent tier was confirmed, and the members are real work that has to stay visible.
+# Rendering it as the bare string "-1" made it look like a rendering fault; naming it
+# says what it is and points at the fix.
+UNPARENTED = "(no parent assigned)"
+
+
+def label_of(ef: "EntityFacts", level: str, cluster_id: int) -> str:
+    name = ef.labels.get(level, {}).get(cluster_id)
+    if name:
+        return name
+    return UNPARENTED if cluster_id < 0 else f"{level} {cluster_id}"
+
+
 class GraphNotReady(RuntimeError):
     """The graph needs all three hierarchies confirmed and profiles generated."""
 
@@ -396,19 +411,57 @@ def metric_titles(facts: Facts) -> dict[str, str]:
     return METRIC_TITLES if facts.has_headcount else METRIC_TITLES_NO_HEADCOUNT
 
 
+def _leaf_filter(
+    ef: EntityFacts, keep: set[int] | None, level: str
+) -> set[int] | None:
+    """Which leaves survive a filter expressed at `level`.
+
+    Filtering is done on leaves rather than on the finished nodes because an edge is a
+    leaf-to-leaf fact: dropping a node after aggregation would leave its edge weight
+    folded into a neighbour, and the picture would quietly overstate what is left.
+    """
+    if not keep:
+        return None
+    idx = LEVELS.index(level)
+    out = set()
+    for leaf, (cat, fam) in ef.ancestry.items():
+        at = fam if idx == 0 else cat if idx == 1 else leaf
+        if at in keep:
+            out.add(leaf)
+    return out
+
+
 def cut(
     facts: Facts,
     *,
     levels: dict[str, str],
     expanded: set[str] | None = None,
+    show: tuple[str, ...] = ENTITIES,
+    filters: dict[str, tuple[str, set[int]]] | None = None,
 ) -> dict:
     """Roll the fact table up to one view.
 
-    `levels` is the requested resolution per entity; `expanded` is the set of node
-    ids whose children should be shown. Returns only the nodes and edges the view
-    needs — a few hundred rather than a few thousand.
+    `levels` is the requested resolution per entity; `expanded` is the set of node ids
+    whose children should be shown.
+
+    `show` is which hierarchies to draw at all. Skills and tasks answer different
+    questions about the same jobs — what a role needs to know against what it spends its
+    week doing — and drawing both at once triples the edge count for a picture nobody
+    reads either half of. One at a time is the legible default.
+
+    `filters` narrows each hierarchy to a chosen set of ancestors, e.g.
+    `{"job": ("family", {3, 7})}`. Applied to leaves before aggregation, so the weights
+    that survive are the weights that belong to what is on screen.
     """
     expanded = expanded or set()
+    filters = filters or {}
+    show = tuple(e for e in ENTITIES if e in show) or ENTITIES
+    kept: dict[str, set[int] | None] = {}
+    for entity in ENTITIES:
+        spec = filters.get(entity)
+        kept[entity] = (
+            _leaf_filter(facts.entities[entity], spec[1], spec[0]) if spec else None
+        )
     titles = metric_titles(facts)
     nodes: dict[str, dict] = {}
     mapped: dict[str, dict[int, str]] = {e: {} for e in ENTITIES}
@@ -423,12 +476,15 @@ def cut(
         "task": facts.task_opportunity,
     }
 
-    for entity in ENTITIES:
+    for entity in show:
         ef = facts.entities[entity]
         base = levels.get(entity, "family")
         if base not in LEVELS:
             raise ValueError(f"unknown level {base!r}; expected one of {list(LEVELS)}")
+        allowed = kept[entity]
         for leaf in ef.ancestry:
+            if allowed is not None and leaf not in allowed:
+                continue
             level, node_id = _display_level(ef, leaf, base, expanded, entity)
             key = f"{entity}:{level}:{node_id}"
             mapped[entity][leaf] = key
@@ -439,7 +495,7 @@ def cut(
                     "entity": entity,
                     "level": level,
                     "cluster_id": node_id,
-                    "name": ef.labels.get(level, {}).get(node_id, f"{level} {node_id}"),
+                    "name": label_of(ef, level, node_id),
                     "level_title": LEVEL_TITLES[entity][level],
                     "metric": 0.0,
                     "metric_title": titles[entity],
@@ -530,6 +586,7 @@ def cut(
 
     return {
         "levels": {e: levels.get(e, "family") for e in ENTITIES},
+        "shown": list(show),
         "expanded": sorted(expanded),
         "nodes": sorted(nodes.values(), key=lambda n: (n["entity"], -n["metric"], n["name"])),
         "edges": [
@@ -545,6 +602,46 @@ def cut(
             "leaves": facts.leaf_counts(),
         },
     }
+
+
+def filter_options(facts: Facts) -> dict:
+    """Every family and category per hierarchy, with how many leaves sit under each.
+
+    The counts are the point: a filter list that does not say how much of the graph each
+    option covers makes choosing one guesswork.
+    """
+    out: dict[str, dict] = {}
+    for entity in ENTITIES:
+        ef = facts.entities[entity]
+        fam: dict[int, int] = {}
+        cat: dict[int, tuple[int, int]] = {}
+        for leaf, (c, f) in ef.ancestry.items():
+            fam[f] = fam.get(f, 0) + 1
+            n, _ = cat.get(c, (0, f))
+            cat[c] = (n + 1, f)
+        out[entity] = {
+            "level_titles": LEVEL_TITLES[entity],
+            "family": sorted(
+                (
+                    {"id": f, "name": label_of(ef, "family", f), "leaves": n}
+                    for f, n in fam.items()
+                ),
+                key=lambda x: x["name"],
+            ),
+            "category": sorted(
+                (
+                    {
+                        "id": c,
+                        "name": label_of(ef, "category", c),
+                        "leaves": n,
+                        "family": f,
+                    }
+                    for c, (n, f) in cat.items()
+                ),
+                key=lambda x: x["name"],
+            ),
+        }
+    return out
 
 
 def node_detail(facts: Facts, node_id: str) -> dict:
@@ -587,7 +684,7 @@ def node_detail(facts: Facts, node_id: str) -> dict:
                 child,
                 {
                     "id": f"{entity}:{children_level}:{child}",
-                    "name": ef.labels.get(children_level, {}).get(child, str(child)),
+                    "name": label_of(ef, children_level, child),
                     "metric": 0.0,
                     "members": 0,
                 },
@@ -654,7 +751,7 @@ def node_detail(facts: Facts, node_id: str) -> dict:
                     {
                         "name": a.name,
                         "definition": a.definition,
-                        "cluster": ef.labels.get("profile", {}).get(leaf, str(leaf)),
+                        "cluster": label_of(ef, "profile", leaf),
                         "pct_of_task": a.pct_of_task,
                         "automation": a.automation_pct,
                         "augmentation": a.augmentation_pct,
@@ -670,7 +767,7 @@ def node_detail(facts: Facts, node_id: str) -> dict:
         "entity": entity,
         "level": level,
         "level_title": LEVEL_TITLES[entity][level],
-        "name": ef.labels.get(level, {}).get(cid, str(cid)),
+        "name": label_of(ef, level, cid),
         "metric": round(sum(ef.metrics.get(x, 0.0) for x in leaves), 2),
         "metric_title": metric_titles(facts)[entity],
         "members": sum(ef.members.get(x, 0) for x in leaves),
@@ -691,7 +788,7 @@ def _action_detail(facts: Facts, *, cluster: int, index: int) -> dict:
         raise ValueError(f"no action {index} on task cluster {cluster}")
     a = siblings[index]
     tf = facts.entities["task"]
-    cluster_name = tf.labels.get("profile", {}).get(cluster, str(cluster))
+    cluster_name = label_of(tf, "profile", cluster)
     return {
         "id": f"{ACTION_ENTITY}:{cluster}:{index}",
         "entity": ACTION_ENTITY,
@@ -731,6 +828,6 @@ def _action_detail(facts: Facts, *, cluster: int, index: int) -> dict:
 def _top(hits: dict[int, float], ef: EntityFacts, limit: int = 12) -> list[dict]:
     ranked = sorted(hits.items(), key=lambda kv: -kv[1])[:limit]
     return [
-        {"name": ef.labels.get("profile", {}).get(cid, str(cid)), "weight": round(w, 2)}
+        {"name": label_of(ef, "profile", cid), "weight": round(w, 2)}
         for cid, w in ranked
     ]

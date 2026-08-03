@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Offer to Hire Work Flow</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"/>
+  <style>
+    :root {
+      --canvas:#f2f3f6; --panel:#f7f8fb; --card:#ffffff; --border:#e1e3ea;
+      --text:#1e2233; --muted:#4a4f63; --muted2:#7a8095;
+      --brand:#c00000; --brandBg:rgba(192,0,0,0.06); --brandBorder:rgba(192,0,0,0.22);
+      --shadow-card:0 1px 3px rgba(0,0,0,0.07); --shadow-modal:0 12px 40px rgba(0,0,0,0.14);
+      --radius-card:12px; --radius-modal:20px;
+      --l1:#192c48; --l2:#125d9e; --l3:#9b2457; --l4:#a85400; --l5:#3c2d7a; --l6:#1a2f3e;
+    }
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:Inter,system-ui,-apple-system,sans-serif;background:var(--canvas);color:var(--text);padding:52px 40px 72px;min-width:1100px}
+    .page{max-width:1340px;margin:0 auto}
+
+    /* Header */
+    .kicker{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+    .badge{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:999px;font-size:10.5px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase}
+    .badge-red{background:var(--brandBg);color:var(--brand);border:1px solid var(--brandBorder)}
+    .badge-gray{background:var(--panel);color:var(--muted2);border:1px solid var(--border)}
+    h1{font-size:40px;font-weight:900;letter-spacing:-0.045em;line-height:1.04;margin-bottom:20px}
+    h1 span{color:var(--brand)}
+
+    /* Intro card */
+    .intro-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-card);padding:18px 24px;margin-bottom:20px;box-shadow:var(--shadow-card);border-left:4px solid var(--brand)}
+    .intro-list{list-style:none;display:grid;gap:9px}
+    .intro-list li{display:flex;align-items:flex-start;gap:11px;font-size:13.5px;color:var(--muted);line-height:1.65}
+    .intro-list li i{color:var(--brand);font-size:10px;margin-top:5px;flex-shrink:0}
+
+    /* Harvey Ball legend */
+    .hb-legend{display:flex;align-items:center;gap:0;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-card);padding:11px 18px;margin-bottom:24px;box-shadow:var(--shadow-card);flex-wrap:wrap;gap:6px}
+    .hb-legend-label{font-size:10.5px;font-weight:800;color:var(--muted2);text-transform:uppercase;letter-spacing:0.08em;margin-right:14px;white-space:nowrap}
+    .hb-legend-items{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+    .hb-legend-item{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted);font-weight:600}
+
+    /* Process card */
+    .process-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-modal);box-shadow:var(--shadow-modal);overflow:hidden;position:relative}
+    .process-card::after{content:'';position:absolute;top:-100px;right:-80px;width:340px;height:340px;background:radial-gradient(circle,rgba(192,0,0,0.04) 0%,transparent 70%);pointer-events:none;z-index:0}
+
+    /* Flow bar */
+    .flow-bar{display:flex;align-items:stretch;border-bottom:1px solid var(--border);background:var(--panel);padding:10px 18px;gap:6px;position:relative;z-index:1}
+    .flow-stage{flex:1;display:flex;align-items:center;justify-content:center;gap:7px;font-size:10.5px;font-weight:800;letter-spacing:0.07em;text-transform:uppercase;color:var(--muted2)}
+    .flow-stage .dot{width:10px;height:10px;border-radius:3px;flex-shrink:0}
+    .flow-arrow{display:flex;align-items:center;color:var(--border);font-size:12px}
+
+    /* Swim lanes */
+    .swim-lanes{display:grid;grid-template-columns:repeat(6,1fr);align-items:stretch;position:relative;z-index:1}
+    .lane{display:flex;flex-direction:column;border-right:1px solid rgba(0,0,0,0.06)}
+    .lane:last-child{border-right:none}
+    .lane-header{padding:14px 13px 13px;text-align:center;font-size:11px;font-weight:800;letter-spacing:0.055em;text-transform:uppercase;color:rgba(255,255,255,0.96);line-height:1.4;min-height:60px;display:flex;align-items:center;justify-content:center}
+    .lane-body{flex:1;padding:18px 12px 20px;display:flex;flex-direction:column;align-items:stretch;background:var(--panel)}
+
+    /* Step cards */
+    .step{background:var(--card);border-radius:9px;border:1px solid var(--border);padding:11px 12px 12px;box-shadow:var(--shadow-card);transition:box-shadow 0.14s,transform 0.14s;position:relative;margin-bottom:0}
+    .step:hover{box-shadow:0 6px 20px rgba(0,0,0,0.11);transform:translateY(-1px)}
+    .step.conditional{border-style:dashed;background:#fffbf6;border-color:rgba(175,100,0,0.3)}
+    .step.final{background:var(--brandBg);border-color:var(--brandBorder)}
+    .step.dual-control{background:#f5f3ff;border-color:rgba(60,45,122,0.35)}
+
+    .step-tag{display:inline-block;font-size:9px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;padding:2px 7px;border-radius:4px;margin-bottom:6px}
+    .tag-cond{color:#a06000;background:rgba(175,100,0,0.1)}
+    .tag-final{color:var(--brand);background:var(--brandBg)}
+    .tag-dual{color:#3c2d7a;background:rgba(60,45,122,0.1)}
+
+    /* Step top row: icon + harvey ball */
+    .step-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px}
+    .step-icon{width:28px;height:28px;border-radius:7px;display:grid;place-items:center;font-size:12px;flex-shrink:0}
+
+    /* Harvey Ball badge (square) */
+    .hb-badge{width:26px;height:26px;border-radius:6px;display:flex;align-items:center;justify-content:center;cursor:help;flex-shrink:0;border:1px solid;transition:transform 0.12s,box-shadow 0.12s}
+    .hb-badge:hover{transform:scale(1.14);box-shadow:0 2px 8px rgba(0,0,0,0.15)}
+    .hb-0,.hb-1,.hb-2,.hb-3,.hb-4{background:#f1f2f4;border-color:#9ca3af}
+
+    .step-title{font-size:12px;font-weight:700;color:var(--text);line-height:1.35;margin-bottom:4px}
+    .step.final .step-title{color:var(--brand)}
+    .step.dual-control .step-title{color:#3c2d7a}
+    .step-desc{font-size:11px;color:var(--muted2);line-height:1.5}
+
+    .step-conn{display:flex;align-items:center;justify-content:center;height:24px;color:#c8ccd8;font-size:12px}
+
+    /* Map footer */
+    .map-footer{display:flex;align-items:center;justify-content:space-between;padding:11px 20px;border-top:1px solid var(--border);background:var(--panel);position:relative;z-index:1;flex-wrap:wrap;gap:10px}
+    .legend{display:flex;align-items:center;gap:18px}
+    .legend-item{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--muted2);font-weight:600}
+    .legend-swatch{width:12px;height:12px;border-radius:3px}
+    .swatch-std{background:var(--border);border:1px solid #c0c4d0}
+    .swatch-cond{background:rgba(175,100,0,0.15);border:1px dashed rgba(175,100,0,0.45)}
+    .swatch-dual{background:rgba(60,45,122,0.12);border:1px solid rgba(60,45,122,0.35)}
+    .swatch-end{background:var(--brandBg);border:1px solid var(--brandBorder)}
+    .map-footer .credit{font-size:11px;color:var(--muted2);font-weight:600;letter-spacing:0.04em}
+    .map-footer .credit span{color:var(--brand)}
+
+    /* Global Harvey Ball tooltip */
+    #hb-tip{position:fixed;z-index:9999;width:310px;background:#1a1f35;color:#e8eaf0;border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,0.35);padding:0;pointer-events:none;opacity:0;transition:opacity 0.12s;font-size:12px;line-height:1.5}
+    #hb-tip.visible{opacity:1}
+    .tip-head{display:flex;align-items:center;gap:10px;padding:13px 14px 11px;border-bottom:1px solid rgba(255,255,255,0.08)}
+    .tip-hb-wrap{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;border:1px solid rgba(255,255,255,0.15)}
+    .tip-meta{flex:1;min-width:0}
+    .tip-level-num{font-size:9.5px;font-weight:800;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:2px;opacity:0.65}
+    .tip-level-name{font-size:13px;font-weight:800;line-height:1.2}
+    .tip-body{padding:11px 14px 13px;display:grid;gap:10px}
+    .tip-desc{font-size:11.5px;color:#b0b8d0;line-height:1.6}
+    .tip-section-head{font-size:9.5px;font-weight:800;letter-spacing:0.1em;text-transform:uppercase;color:#6b7394;margin-bottom:5px;display:flex;align-items:center;gap:6px}
+    .tip-section-head i{font-size:9px}
+    .tip-list{list-style:none;display:grid;gap:5px;padding-left:0}
+    .tip-list li{display:flex;align-items:flex-start;gap:7px;font-size:11px;color:#8e96b5;line-height:1.5}
+    .tip-list li::before{content:'';width:4px;height:4px;border-radius:50%;background:#4a5280;flex-shrink:0;margin-top:6px}
+    .tip-none{font-size:11px;color:#4a5280;font-style:italic;padding:2px 0}
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <div class="kicker">
+    <span class="badge badge-red"><i class="fa-solid fa-diagram-project"></i>&nbsp; Process Map</span>
+    <span class="badge badge-gray">Talent Acquisition</span>
+  </div>
+  <h1>Offer to <span>Hire</span> Work Flow</h1>
+
+  <div class="intro-card">
+    <ul class="intro-list">
+      <li><i class="fa-solid fa-circle-dot"></i>After the candidate signs his/her offer letter, the recruiting coordinator gets a task to progress the candidate to background screening</li>
+      <li><i class="fa-solid fa-circle-dot"></i>Once this task is submitted, the process is passed over to the background screening team</li>
+      <li><i class="fa-solid fa-circle-dot"></i>The background screening team may ask the HR coordinator to request additional information from the candidate</li>
+      <li><i class="fa-solid fa-circle-dot"></i>When the background check is complete, the process back to TA Ops to complete the hire</li>
+    </ul>
+  </div>
+
+  <!-- Harvey Ball scale legend -->
+  <div class="hb-legend">
+    <div class="hb-legend-label">Automation Potential</div>
+    <div class="hb-legend-items">
+      <div class="hb-legend-item">
+        <svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><line x1="5" y1="15" x2="15" y2="5" stroke="#4b5563" stroke-width="1.5" stroke-linecap="round"/></svg>
+        Already automated / third party
+      </div>
+      <div class="hb-legend-item">
+        <svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><path d="M10 10 L10 2 A8 8 0 0 1 18 10 Z" fill="#4b5563"/></svg>
+        Accelerate
+      </div>
+      <div class="hb-legend-item">
+        <svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><path d="M10 10 L10 2 A8 8 0 0 1 10 18 Z" fill="#4b5563"/></svg>
+        Human In the Loop
+      </div>
+      <div class="hb-legend-item">
+        <svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><path d="M10 10 L10 2 A8 8 0 1 1 2 10 Z" fill="#4b5563"/></svg>
+        Human On the Loop
+      </div>
+      <div class="hb-legend-item">
+        <svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#4b5563" stroke="#374151" stroke-width="1.5"/></svg>
+        Human Out the Loop
+      </div>
+    </div>
+  </div>
+
+  <!-- Process map -->
+  <div class="process-card">
+    <div class="flow-bar">
+      <div class="flow-stage"><div class="dot" style="background:var(--l1)"></div>Offer Acceptance</div>
+      <div class="flow-arrow"><i class="fa-solid fa-chevron-right"></i></div>
+      <div class="flow-stage"><div class="dot" style="background:var(--l2)"></div>Screening Initiation</div>
+      <div class="flow-arrow"><i class="fa-solid fa-chevron-right"></i></div>
+      <div class="flow-stage"><div class="dot" style="background:var(--l3)"></div>Info Gathering</div>
+      <div class="flow-arrow"><i class="fa-solid fa-chevron-right"></i></div>
+      <div class="flow-stage"><div class="dot" style="background:var(--l4)"></div>Verification</div>
+      <div class="flow-arrow"><i class="fa-solid fa-chevron-right"></i></div>
+      <div class="flow-stage"><div class="dot" style="background:var(--l5)"></div>Adjudication</div>
+      <div class="flow-arrow"><i class="fa-solid fa-chevron-right"></i></div>
+      <div class="flow-stage"><div class="dot" style="background:var(--l6)"></div>Hire Complete</div>
+    </div>
+
+    <div class="swim-lanes">
+
+      <!-- Lane 1 -->
+      <div class="lane">
+        <div class="lane-header" style="background:var(--l1)">TA / Recruiting<br>Coordinator</div>
+        <div class="lane-body">
+
+          <div class="step">
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(25,44,72,0.09)"><i class="fa-solid fa-file-signature" style="color:var(--l1)"></i></div>
+              <div class="hb-badge hb-1" data-hb="l1s1"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><path d="M10 10 L10 2 A8 8 0 0 1 18 10 Z" fill="#4b5563"/></svg></div>
+            </div>
+            <div class="step-title">Wet Signature Attestation</div>
+            <div class="step-desc">Candidate physically signs and returns offer letter; coordinator attests receipt of wet signature</div>
+          </div>
+
+          <div class="step-conn"><i class="fa-solid fa-chevron-down"></i></div>
+
+          <div class="step">
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(25,44,72,0.09)"><i class="fa-solid fa-list-check" style="color:var(--l1)"></i></div>
+              <div class="hb-badge hb-3" data-hb="l1s2"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><path d="M10 10 L10 2 A8 8 0 1 1 2 10 Z" fill="#4b5563"/></svg></div>
+            </div>
+            <div class="step-title">Task: Progress Candidate to Background Screening</div>
+            <div class="step-desc">System-generated task assigned to recruiting coordinator to initiate screening</div>
+          </div>
+
+          <div class="step-conn"><i class="fa-solid fa-chevron-down"></i></div>
+
+          <div class="step">
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(25,44,72,0.09)"><i class="fa-solid fa-paper-plane" style="color:var(--l1)"></i></div>
+              <div class="hb-badge hb-3" data-hb="l1s3"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><path d="M10 10 L10 2 A8 8 0 1 1 2 10 Z" fill="#4b5563"/></svg></div>
+            </div>
+            <div class="step-title">Submit Background Screening Request</div>
+            <div class="step-desc">Coordinator completes and submits request; process passed to background screening team</div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Lane 2 -->
+      <div class="lane">
+        <div class="lane-header" style="background:var(--l2)">Background<br>Screening Initiated</div>
+        <div class="lane-body">
+
+          <div class="step">
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(18,93,158,0.1)"><i class="fa-solid fa-clipboard-list" style="color:var(--l2)"></i></div>
+              <div class="hb-badge hb-3" data-hb="l2s1"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><path d="M10 10 L10 2 A8 8 0 1 1 2 10 Z" fill="#4b5563"/></svg></div>
+            </div>
+            <div class="step-title">Screening Order Created</div>
+            <div class="step-desc">Background check order placed and assigned to vendor</div>
+          </div>
+
+          <div class="step-conn"><i class="fa-solid fa-chevron-down"></i></div>
+
+          <div class="step">
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(18,93,158,0.1)"><i class="fa-solid fa-envelope" style="color:var(--l2)"></i></div>
+              <div class="hb-badge hb-4" data-hb="l2s2"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#4b5563" stroke="#374151" stroke-width="1.5"/></svg></div>
+            </div>
+            <div class="step-title">Candidate Invitation Sent</div>
+            <div class="step-desc">Email invitation to complete background check forms dispatched to candidate</div>
+          </div>
+
+          <div class="step-conn"><i class="fa-solid fa-chevron-down"></i></div>
+
+          <div class="step">
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(18,93,158,0.1)"><i class="fa-solid fa-keyboard" style="color:var(--l2)"></i></div>
+              <div class="hb-badge hb-0" data-hb="l2s3"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><line x1="5" y1="15" x2="15" y2="5" stroke="#4b5563" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+            </div>
+            <div class="step-title">Candidate Completes Intake Forms</div>
+            <div class="step-desc">Employment, education, and personal history submitted online</div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Lane 3 -->
+      <div class="lane">
+        <div class="lane-header" style="background:var(--l3)">HR Coordinator</div>
+        <div class="lane-body">
+
+          <div class="step conditional">
+            <span class="step-tag tag-cond">If Required</span>
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(155,36,87,0.1)"><i class="fa-solid fa-circle-exclamation" style="color:var(--l3)"></i></div>
+              <div class="hb-badge hb-3" data-hb="l3s1"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><path d="M10 10 L10 2 A8 8 0 1 1 2 10 Z" fill="#4b5563"/></svg></div>
+            </div>
+            <div class="step-title">Additional Information Requested</div>
+            <div class="step-desc">Background screening team asks HR coordinator to request additional information from the candidate</div>
+          </div>
+
+          <div class="step-conn"><i class="fa-solid fa-chevron-down"></i></div>
+
+          <div class="step conditional">
+            <span class="step-tag tag-cond">If Required</span>
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(155,36,87,0.1)"><i class="fa-solid fa-phone" style="color:var(--l3)"></i></div>
+              <div class="hb-badge hb-2" data-hb="l3s2"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><path d="M10 10 L10 2 A8 8 0 0 1 10 18 Z" fill="#4b5563"/></svg></div>
+            </div>
+            <div class="step-title">Contact Candidate</div>
+            <div class="step-desc">HR Coordinator reaches out to candidate for outstanding documentation</div>
+          </div>
+
+          <div class="step-conn"><i class="fa-solid fa-chevron-down"></i></div>
+
+          <div class="step conditional">
+            <span class="step-tag tag-cond">If Required</span>
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(155,36,87,0.1)"><i class="fa-solid fa-file-arrow-up" style="color:var(--l3)"></i></div>
+              <div class="hb-badge hb-3" data-hb="l3s3"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><path d="M10 10 L10 2 A8 8 0 1 1 2 10 Z" fill="#4b5563"/></svg></div>
+            </div>
+            <div class="step-title">Submit Documentation to Vendor</div>
+            <div class="step-desc">Collected candidate documents forwarded to background screening vendor</div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Lane 4 -->
+      <div class="lane">
+        <div class="lane-header" style="background:var(--l4)">Background<br>Screening Vendor</div>
+        <div class="lane-body">
+
+          <div class="step">
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(168,84,0,0.1)"><i class="fa-solid fa-magnifying-glass" style="color:var(--l4)"></i></div>
+              <div class="hb-badge hb-0" data-hb="l4s1"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><line x1="5" y1="15" x2="15" y2="5" stroke="#4b5563" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+            </div>
+            <div class="step-title">Conduct Background Check</div>
+            <div class="step-desc">Criminal, employment, education, and reference checks performed</div>
+          </div>
+
+          <div class="step-conn"><i class="fa-solid fa-chevron-down"></i></div>
+
+          <div class="step conditional">
+            <span class="step-tag tag-cond">If Required</span>
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(168,84,0,0.1)"><i class="fa-solid fa-circle-question" style="color:var(--l4)"></i></div>
+              <div class="hb-badge hb-0" data-hb="l4s2"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><line x1="5" y1="15" x2="15" y2="5" stroke="#4b5563" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+            </div>
+            <div class="step-title">Request Additional Information</div>
+            <div class="step-desc">Escalated to HR Coordinator where data is missing or insufficient</div>
+          </div>
+
+          <div class="step-conn"><i class="fa-solid fa-chevron-down"></i></div>
+
+          <div class="step">
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(168,84,0,0.1)"><i class="fa-solid fa-check-double" style="color:var(--l4)"></i></div>
+              <div class="hb-badge hb-0" data-hb="l4s3"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><line x1="5" y1="15" x2="15" y2="5" stroke="#4b5563" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+            </div>
+            <div class="step-title">Background Check Complete</div>
+            <div class="step-desc">All verifications finalised; report submitted to background screening team</div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Lane 5 -->
+      <div class="lane">
+        <div class="lane-header" style="background:var(--l5)">Background<br>Screening Team</div>
+        <div class="lane-body">
+
+          <div class="step">
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(60,45,122,0.1)"><i class="fa-solid fa-inbox" style="color:var(--l5)"></i></div>
+              <div class="hb-badge hb-4" data-hb="l5s1"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#4b5563" stroke="#374151" stroke-width="1.5"/></svg></div>
+            </div>
+            <div class="step-title">Receive Completed Report</div>
+            <div class="step-desc">Background check results received from vendor for review</div>
+          </div>
+
+          <div class="step-conn"><i class="fa-solid fa-chevron-down"></i></div>
+
+          <div class="step dual-control">
+            <span class="step-tag tag-dual">Dual Control</span>
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(60,45,122,0.12)"><i class="fa-solid fa-eye" style="color:var(--l5)"></i></div>
+              <div class="hb-badge hb-2" data-hb="l5s2"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><path d="M10 10 L10 2 A8 8 0 0 1 10 18 Z" fill="#4b5563"/></svg></div>
+            </div>
+            <div class="step-title">Four Eyed Check</div>
+            <div class="step-desc">Two reviewers independently assess results against policy and compliance requirements</div>
+          </div>
+
+          <div class="step-conn"><i class="fa-solid fa-chevron-down"></i></div>
+
+          <div class="step">
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(60,45,122,0.1)"><i class="fa-solid fa-circle-check" style="color:var(--l5)"></i></div>
+              <div class="hb-badge hb-3" data-hb="l5s3"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><path d="M10 10 L10 2 A8 8 0 1 1 2 10 Z" fill="#4b5563"/></svg></div>
+            </div>
+            <div class="step-title">Background Check Cleared</div>
+            <div class="step-desc">Clearance notification dispatched to TA Ops to proceed with hire</div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Lane 6 -->
+      <div class="lane">
+        <div class="lane-header" style="background:var(--l6)">TA Ops</div>
+        <div class="lane-body">
+
+          <div class="step">
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(26,47,62,0.1)"><i class="fa-solid fa-bell" style="color:var(--l6)"></i></div>
+              <div class="hb-badge hb-4" data-hb="l6s1"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#4b5563" stroke="#374151" stroke-width="1.5"/></svg></div>
+            </div>
+            <div class="step-title">Receive Clearance Notification</div>
+            <div class="step-desc">Background check cleared - hire process unlocked in system</div>
+          </div>
+
+          <div class="step-conn"><i class="fa-solid fa-chevron-down"></i></div>
+
+          <div class="step">
+            <div class="step-top">
+              <div class="step-icon" style="background:rgba(26,47,62,0.1)"><i class="fa-solid fa-briefcase" style="color:var(--l6)"></i></div>
+              <div class="hb-badge hb-2" data-hb="l6s2"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><path d="M10 10 L10 2 A8 8 0 0 1 10 18 Z" fill="#4b5563"/></svg></div>
+            </div>
+            <div class="step-title">Complete Hire in Workday</div>
+            <div class="step-desc">Hire action processed; start date confirmed; onboarding triggered</div>
+          </div>
+
+          <div class="step-conn"><i class="fa-solid fa-chevron-down"></i></div>
+
+          <div class="step final">
+            <span class="step-tag tag-final">Complete</span>
+            <div class="step-top">
+              <div class="step-icon" style="background:var(--brandBg)"><i class="fa-solid fa-flag-checkered" style="color:var(--brand)"></i></div>
+              <div class="hb-badge hb-3" data-hb="l6s3"><svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.5"/><path d="M10 10 L10 2 A8 8 0 1 1 2 10 Z" fill="#4b5563"/></svg></div>
+            </div>
+            <div class="step-title">Hire Complete</div>
+            <div class="step-desc">Candidate officially on-boarded; TA Ops notifies relevant stakeholders</div>
+          </div>
+
+        </div>
+      </div>
+
+    </div><!-- /swim-lanes -->
+
+    <div class="map-footer">
+      <div class="legend">
+        <div class="legend-item"><div class="legend-swatch swatch-std"></div>Standard Step</div>
+        <div class="legend-item"><div class="legend-swatch swatch-cond"></div>Conditional Step</div>
+        <div class="legend-item"><div class="legend-swatch swatch-dual"></div>Four Eyed Check</div>
+        <div class="legend-item"><div class="legend-swatch swatch-end"></div>Process End</div>
+      </div>
+      <div class="credit">Northwind &nbsp;·&nbsp; <span>Talent Acquisition Operations</span></div>
+    </div>
+  </div>
+
+</div><!-- /page -->
+
+<!-- Global Harvey Ball tooltip -->
+<div id="hb-tip">
+  <div class="tip-head">
+    <div class="tip-hb-wrap" id="tip-hb-icon"></div>
+    <div class="tip-meta">
+      <div class="tip-level-num" id="tip-level-num"></div>
+      <div class="tip-level-name" id="tip-level-name"></div>
+    </div>
+  </div>
+  <div class="tip-body">
+    <div class="tip-desc" id="tip-desc"></div>
+    <div id="tip-skills-block">
+      <div class="tip-section-head"><i class="fa-solid fa-bolt"></i> Skills</div>
+      <ul class="tip-list" id="tip-skills"></ul>
+    </div>
+    <div id="tip-agents-block">
+      <div class="tip-section-head"><i class="fa-solid fa-robot"></i> Agents</div>
+      <ul class="tip-list" id="tip-agents"></ul>
+    </div>
+  </div>
+</div>
+
+<script>
+const HB = {
+  l1s1:{score:1,label:'Acceleration Opportunity',
+    desc:'The wet signature requirement is legally mandated and cannot be removed, but the coordination, chasing, and confirmation process around it can be significantly accelerated.',
+    skills:['Auto-draft tailored reminder communications to candidates as SLA thresholds approach','Generate attestation confirmation records and audit-trail summaries automatically on receipt of signed document'],
+    agents:[]},
+  l1s2:{score:3,label:'Human On the Loop',
+    desc:'The task to progress a candidate can be auto-triggered the moment offer signature is confirmed. Coordinators review batches periodically rather than processing each task manually.',
+    skills:['Auto-populate progress task and pre-fill background screening request fields from the ATS candidate record','Generate batch status dashboards for coordinator periodic review'],
+    agents:['Monitor offer platform for signature completion events and auto-trigger the progress task','Validate candidate data completeness before submission; surface exceptions to the coordinator batch queue']},
+  l1s3:{score:3,label:'Human On the Loop',
+    desc:'The background screening request form can be auto-populated from ATS data and submitted automatically. TA coordinators QA batches of submissions rather than handling each one.',
+    skills:['Map and auto-populate all screening request fields from the candidate\'s ATS record','Draft covering notes and special instruction fields based on role type and jurisdiction'],
+    agents:['Retrieve candidate profile and role details from ATS, validate against screening form requirements, and auto-submit to vendor','Monitor submission confirmations and escalate any rejections or data errors to the coordinator batch queue']},
+  l2s1:{score:3,label:'Human On the Loop',
+    desc:'Screening order creation can be auto-triggered following request submission. Periodic QA of order confirmations provides sufficient oversight.',
+    skills:['Auto-generate order confirmation notifications to relevant stakeholders','Draft exception communications for failed or delayed order creation'],
+    agents:['Orchestrate order creation via vendor API on receipt of an approved screening request','Monitor order status and surface anomalies in coordinator batch dashboard']},
+  l2s2:{score:4,label:'Human Out the Loop',
+    desc:'Candidate invitation emails are standard, low-risk system communications. This step can be fully automated with no human review required.',
+    skills:['Personalise invitation email content based on candidate profile, role type, and jurisdiction'],
+    agents:['Trigger invitation send via vendor API immediately on order confirmation; log delivery status and auto-retry failed sends']},
+  l2s3:{score:0,label:'Third Party - No Leverage',
+    desc:'This step is performed by the candidate and is outside Northwind\'s direct control. Improvement is limited to the quality of instructions provided in the invitation.',
+    skills:[],agents:[]},
+  l3s1:{score:3,label:'Human On the Loop',
+    desc:'Vendor flags for additional information can be automatically parsed, the required information identified, and a pre-populated task created for the HR Coordinator. Batch oversight is sufficient.',
+    skills:['Parse vendor flag to extract specific missing information requirements','Draft targeted information request communications for HR Coordinator review and sending'],
+    agents:['Monitor vendor system for information flags via MCP/API, extract requirements, and auto-create HR Coordinator task with pre-populated context and draft communications','Track outstanding information requests and send automated SLA-threshold reminders']},
+  l3s2:{score:2,label:'Human In the Loop',
+    desc:'Candidate communications about background check queries are sensitive - poorly worded messages can cause distress or legal risk. A human must approve each communication, but the drafting workload can be entirely eliminated.',
+    skills:['Draft empathetic, legally-reviewed candidate communications tailored to the specific information required and the candidate\'s jurisdiction','Summarise the vendor\'s technical information request in plain, candidate-friendly language'],
+    agents:[]},
+  l3s3:{score:3,label:'Human On the Loop',
+    desc:'Document packaging and vendor submission is a manual routing task that can be fully automated. HR Coordinators QA batches of submissions periodically.',
+    skills:['Package and format received candidate documents to vendor specification','Generate submission confirmation notes and handoff summaries'],
+    agents:['Monitor document receipt from candidate, validate format and completeness, and auto-submit to vendor via API','Log submission confirmations and track vendor acknowledgement; escalate unacknowledged submissions']},
+  l4s1:{score:0,label:'Third Party - No Leverage',
+    desc:'The background check is conducted entirely by the external screening vendor. Northwind cannot automate or directly influence this step.',
+    skills:[],agents:[]},
+  l4s2:{score:0,label:'Third Party - No Leverage',
+    desc:'The decision to request additional information is made by the vendor\'s screening process. Northwind\'s leverage is limited to improving the speed of the HR Coordinator response.',
+    skills:[],agents:[]},
+  l4s3:{score:0,label:'Third Party - No Leverage',
+    desc:'Background check completion is a vendor milestone. Northwind\'s automation opportunity lies entirely in the speed of downstream processing once this notification is received.',
+    skills:[],agents:[]},
+  l5s1:{score:4,label:'Human Out the Loop',
+    desc:'Report receipt and routing is a system event requiring no human action. The report can be parsed, structured, and queued for review entirely automatically.',
+    skills:['Parse and structure the vendor background check report into a standardised internal format','Generate a concise findings summary to improve reviewer efficiency'],
+    agents:['Monitor vendor platform via MCP for report completion events, retrieve and parse report data, and auto-populate the screening team\'s review queue with structured findings']},
+  l5s2:{score:2,label:'Human In the Loop',
+    desc:'The Four Eyed Check mandates two independent human sign-offs per case. Review workload can be significantly reduced through AI-assisted pre-analysis, but dual human approval of every case is non-negotiable.',
+    skills:['Pre-process the report to highlight anomalies, discrepancies, or policy-relevant findings','Generate a structured adjudication brief for each reviewer with key findings and items requiring attention','Draft provisional clearance or escalation recommendations with policy justification for reviewers to accept or override'],
+    agents:['Cross-reference report findings against Northwind policy rules and jurisdiction-specific requirements; auto-populate the reviewer\'s decision template','Track dual sign-off completion and send automated reminders to reviewers approaching SLA deadlines']},
+  l5s3:{score:3,label:'Human On the Loop',
+    desc:'The clearance notification to TA Ops can be automatically triggered on completion of dual sign-off. Periodic QA of notification logs provides sufficient oversight.',
+    skills:['Auto-generate clearance confirmation with a structured case summary for TA Ops'],
+    agents:['Monitor for dual sign-off completion and immediately trigger clearance notification to TA Ops via system API','Update candidate status in ATS and log clearance timestamp for SLA and audit reporting']},
+  l6s1:{score:4,label:'Human Out the Loop',
+    desc:'Clearance notification receipt and status update is a system event requiring no human action. TA Ops can be automatically notified and the candidate record updated immediately.',
+    skills:['Auto-generate internal notification to TA Ops with candidate summary and a pre-populated next-step checklist'],
+    agents:['Monitor for clearance event, auto-update candidate record in ATS and Workday, notify TA Ops team with a pre-populated hire action briefing']},
+  l6s2:{score:2,label:'Human In the Loop',
+    desc:'The Workday hire action is a high-stakes HRIS transaction affecting payroll, benefits, and regulatory records. All data entry can be automated, but a TA Ops team member must authorise each individual hire action.',
+    skills:['Auto-populate all required Workday hire fields from ATS data: compensation, start date, cost centre, org assignments, and regulatory registrations','Validate data completeness and flag inconsistencies before presenting to TA Ops for approval'],
+    agents:['Retrieve all hire-required data points from ATS, map to Workday field schema, pre-populate the hire form, and present to TA Ops for single-click authorisation','Monitor approved hire actions and confirm successful Workday submission; escalate any system failures immediately']},
+  l6s3:{score:3,label:'Human On the Loop',
+    desc:'Hire completion communications, onboarding workflow triggers, and stakeholder notifications can be fully automated. TA Ops batch-reviews completion logs periodically.',
+    skills:['Draft personalised welcome communications to the new hire','Generate stakeholder notification emails (hiring manager, IT, Facilities, HR Business Partner)'],
+    agents:['On Workday hire confirmation, auto-trigger onboarding workflows, send welcome communications, and notify all relevant internal stakeholders','Update all downstream systems and log completion for SLA tracking and audit reporting']},
+};
+
+const COLORS = {
+  0:{fill:'#9ca3af',bg:'rgba(107,114,128,0.15)',text:'#d1d5db',svg:'<svg width="18" height="18" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#1e2a3a" stroke="#9ca3af" stroke-width="1.5"/><line x1="5" y1="15" x2="15" y2="5" stroke="#9ca3af" stroke-width="1.5" stroke-linecap="round"/></svg>'},
+  1:{fill:'#9ca3af',bg:'rgba(107,114,128,0.15)',text:'#d1d5db',svg:'<svg width="18" height="18" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#1e2a3a" stroke="#9ca3af" stroke-width="1.5"/><path d="M10 10 L10 2 A8 8 0 0 1 18 10 Z" fill="#9ca3af"/></svg>'},
+  2:{fill:'#9ca3af',bg:'rgba(107,114,128,0.15)',text:'#d1d5db',svg:'<svg width="18" height="18" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#1e2a3a" stroke="#9ca3af" stroke-width="1.5"/><path d="M10 10 L10 2 A8 8 0 0 1 10 18 Z" fill="#9ca3af"/></svg>'},
+  3:{fill:'#9ca3af',bg:'rgba(107,114,128,0.15)',text:'#d1d5db',svg:'<svg width="18" height="18" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#1e2a3a" stroke="#9ca3af" stroke-width="1.5"/><path d="M10 10 L10 2 A8 8 0 1 1 2 10 Z" fill="#9ca3af"/></svg>'},
+  4:{fill:'#9ca3af',bg:'rgba(107,114,128,0.15)',text:'#d1d5db',svg:'<svg width="18" height="18" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="#9ca3af" stroke="#6b7280" stroke-width="1.5"/></svg>'},
+};
+
+const LEVEL_NUMS = ['Already Automated / Third Party','Acceleration Opportunity','Human In the Loop','Human On the Loop','Human Out the Loop'];
+
+const tip    = document.getElementById('hb-tip');
+const tipIcon= document.getElementById('tip-hb-icon');
+const tipNum = document.getElementById('tip-level-num');
+const tipName= document.getElementById('tip-level-name');
+const tipDesc= document.getElementById('tip-desc');
+const tipSkB = document.getElementById('tip-skills-block');
+const tipSkL = document.getElementById('tip-skills');
+const tipAgB = document.getElementById('tip-agents-block');
+const tipAgL = document.getElementById('tip-agents');
+
+function renderList(ul, items){
+  ul.innerHTML = items.map(s=>`<li>${s}</li>`).join('');
+}
+
+document.querySelectorAll('.hb-badge').forEach(el=>{
+  el.addEventListener('mouseenter', ()=>{
+    const d = HB[el.dataset.hb];
+    if(!d) return;
+    const c = COLORS[d.score];
+    tipIcon.innerHTML = c.svg;
+    tipIcon.style.background = c.bg;
+    tipNum.textContent  = `Level ${d.score} · ${LEVEL_NUMS[d.score]}`;
+    tipNum.style.color  = c.text;
+    tipName.textContent = d.label;
+    tipName.style.color = c.fill;
+    tipDesc.textContent = d.desc;
+    if(d.skills.length){
+      renderList(tipSkL, d.skills);
+      tipSkB.style.display='block';
+    } else {
+      tipSkB.style.display='none';
+    }
+    if(d.agents.length){
+      renderList(tipAgL, d.agents);
+      tipAgB.style.display='block';
+    } else {
+      tipAgB.style.display='none';
+    }
+    tip.classList.add('visible');
+    position(el);
+  });
+  el.addEventListener('mouseleave', ()=> tip.classList.remove('visible'));
+  el.addEventListener('mousemove', ()=> position(el));
+});
+
+function position(el){
+  const r   = el.getBoundingClientRect();
+  const tw  = 310;
+  const th  = tip.offsetHeight || 280;
+  const pad = 8;
+  let left  = r.right - tw;
+  let top   = r.bottom + pad;
+  if(left < pad) left = pad;
+  if(left + tw > window.innerWidth - pad) left = window.innerWidth - tw - pad;
+  if(top + th > window.innerHeight - pad) top = r.top - th - pad;
+  tip.style.left = left + 'px';
+  tip.style.top  = top  + 'px';
+}
+</script>
+</body>
+</html>

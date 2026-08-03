@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as d3 from "d3";
 import { OPPORTUNITY_CEILING, opportunityColorIn } from "../../lib/heat";
 import type { GraphCut, GraphNode } from "../../types/workforce";
@@ -8,10 +8,22 @@ import type { GraphCut, GraphNode } from "../../types/workforce";
  *
  * Renders whatever cut the server returned — a few hundred nodes at most, never the
  * whole graph — so the layout stays legible and the simulation stays cheap at any
- * project size. Zoom and expansion happen server-side; this only draws.
+ * project size. Zoom, filtering and expansion happen server-side; this only draws.
  *
  * Colours come from the design tokens rather than literals, so the palettes carry
  * through to the graph instead of stopping at the canvas edge.
+ *
+ * **Layout: relationships, not columns.** An earlier version pinned each hierarchy to
+ * its own x column, which read as three separate clouds and put the strongest
+ * relationships — a job and the skills it needs — at opposite ends of the canvas with a
+ * line between them. Now the link force does the arranging and jobs sit slightly left
+ * of centre, so related things end up near each other and the clustering you can see is
+ * the clustering in the data.
+ *
+ * **No labels.** At a few hundred nodes every label drawn overlaps another, and the
+ * result is unreadable in a way that also hides the shape underneath it. Identity comes
+ * from hovering, and from a tooltip that stays put when you click so it can be read and
+ * compared rather than chased with the cursor.
  */
 
 const ENTITY_TOKEN: Record<string, string> = {
@@ -30,6 +42,12 @@ const SCALE_OF: Record<string, string> = { action: "task" };
  *  AI opportunity", which is the whole reason step 3's scores reach the graph. */
 export type ColorMode = "entity" | "opportunity";
 
+// Deliberately small. The previous 5-24px range meant a few hundred nodes covered most
+// of the canvas and the edges vanished underneath them; at this size the topology is
+// what you see first and size is a secondary read.
+const R_MIN = 2.2;
+const R_MAX = 9;
+
 function token(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || "#888";
 }
@@ -45,6 +63,15 @@ interface Simulated extends GraphNode {
   y?: number;
   fx?: number | null;
   fy?: number | null;
+}
+
+interface Hovered {
+  node: GraphNode;
+  /** Screen position, so the card can be placed without re-reading the DOM. */
+  x: number;
+  y: number;
+  /** Pinned cards survive the pointer leaving, so they can be read and compared. */
+  pinned: boolean;
 }
 
 export function ArchitectureGraph({
@@ -67,6 +94,10 @@ export function ArchitectureGraph({
   opportunitySpan?: [number, number];
 }) {
   const host = useRef<HTMLDivElement>(null);
+  const [cards, setCards] = useState<Hovered[]>([]);
+  // Measured, not assumed: the flip threshold for a card near the right edge has to be
+  // this canvas's width, and a constant would put cards off-screen at other sizes.
+  const [hostWidth, setHostWidth] = useState(900);
 
   // The simulation mutates its input, so it gets copies — otherwise React's props
   // acquire x/y/vx/vy and a re-render restarts the layout from wherever it was.
@@ -78,10 +109,14 @@ export function ArchitectureGraph({
     [cut],
   );
 
+  // A new cut invalidates every card: the nodes behind them may not be in it.
+  useEffect(() => setCards([]), [data]);
+
   useEffect(() => {
     const el = host.current;
     if (!el) return;
     const width = el.clientWidth || 900;
+    setHostWidth(width);
 
     const colours: Record<string, string> = {
       job: token(ENTITY_TOKEN.job),
@@ -93,9 +128,9 @@ export function ArchitectureGraph({
       muted: token("--color-text-muted"),
     };
 
-    // In opportunity mode an unassessed node is drawn muted rather than at the
-    // bottom of the scale — "not measured" and "no opportunity" look identical
-    // otherwise, and only one of them is a finding.
+    // In opportunity mode an unassessed node is drawn muted rather than at the bottom
+    // of the scale — "not measured" and "no opportunity" look identical otherwise, and
+    // only one of them is a finding.
     const fill = (n: Simulated) =>
       colorMode === "opportunity"
         ? n.automation === null || n.automation === undefined
@@ -112,19 +147,20 @@ export function ArchitectureGraph({
       .attr("viewBox", `0 0 ${width} ${height}`);
 
     const root = svg.append("g");
-    // Pan and zoom are view-only; the server decides what is in the cut.
-    svg.call(
-      d3
-        .zoom<SVGSVGElement, unknown>()
-        .scaleExtent([0.25, 6])
-        .on("zoom", (e) => root.attr("transform", e.transform.toString())),
-    );
+    // Pan and zoom are view-only; the server decides what is in the cut. The transform
+    // is tracked so pinned cards can follow the nodes they belong to.
+    let transform = d3.zoomIdentity;
+    const zoom = d3
+      .zoom<SVGSVGElement, unknown>()
+      .scaleExtent([0.25, 8])
+      .on("zoom", (e) => {
+        transform = e.transform;
+        root.attr("transform", transform.toString());
+        placeCards();
+      });
+    svg.call(zoom);
 
     const maxWeight = d3.max(data.links, (l) => l.weight) ?? 1;
-    // One radius scale per hierarchy. The three metrics are different quantities —
-    // 159 jobs against 1,036 skills against 54 FTE — so a shared scale renders the
-    // job side as dots and says nothing true in the process. Within a hierarchy the
-    // comparison is meaningful, which is the only place size should be compared.
     const scaleKey = (n: Simulated) => SCALE_OF[n.entity] ?? n.entity;
     const perEntityMax = new Map<string, number>();
     for (const n of data.nodes) {
@@ -132,13 +168,13 @@ export function ArchitectureGraph({
       perEntityMax.set(k, Math.max(perEntityMax.get(k) ?? 0, n.metric));
     }
     const radius = (n: Simulated) =>
-      d3.scaleSqrt().domain([0, perEntityMax.get(scaleKey(n)) || 1]).range([5, 24])(n.metric);
-    const stroke = d3.scaleLinear().domain([0, maxWeight]).range([0.4, 4]);
+      d3.scaleSqrt().domain([0, perEntityMax.get(scaleKey(n)) || 1]).range([R_MIN, R_MAX])(n.metric);
+    const stroke = d3.scaleLinear().domain([0, maxWeight]).range([0.3, 2.2]);
 
     const link = root
       .append("g")
       .attr("stroke", colours.edge)
-      .attr("stroke-opacity", 0.55)
+      .attr("stroke-opacity", 0.45)
       .selectAll("line")
       .data(data.links)
       .join("line")
@@ -146,64 +182,67 @@ export function ArchitectureGraph({
 
     const node = root
       .append("g")
-      .selectAll<SVGGElement, Simulated>("g")
+      .selectAll<SVGCircleElement, Simulated>("circle")
       .data(data.nodes)
-      .join("g")
-      .attr("cursor", "pointer");
-
-    node
-      .append("circle")
+      .join("circle")
       .attr("r", (n) => radius(n))
       .attr("fill", fill)
-      .attr("fill-opacity", 0.85)
+      .attr("fill-opacity", 0.9)
       .attr("stroke", (n) => (n.expanded ? colours.label : fill(n)))
-      .attr("stroke-width", (n) => (n.expanded ? 2 : 1));
+      .attr("stroke-width", (n) => (n.expanded ? 1.6 : 0.6))
+      .attr("cursor", "pointer");
 
-    // Label only the largest few per hierarchy. At a few hundred nodes every label
-    // drawn is a label overlapping another, and the tooltip covers the rest. Actions
-    // are always labelled: there are at most a handful, they only exist because
-    // someone opened that cluster, and their names are the answer to why.
-    const labelled = new Set([
-      ...(["job", "skill", "task"] as const).flatMap((e) =>
-        data.nodes
-          .filter((n) => n.entity === e)
-          .sort((a, b) => b.metric - a.metric)
-          .slice(0, 8)
-          .map((n) => n.id),
-      ),
-      ...data.nodes.filter((n) => n.entity === "action").map((n) => n.id),
-    ]);
+    // ---- tooltips -------------------------------------------------------
+    // Positions are recomputed from the simulation rather than captured on hover, so a
+    // pinned card tracks its node while the layout settles, pans and zooms.
+    const byId = new Map(data.nodes.map((n) => [n.id, n]));
+    function screenOf(id: string): { x: number; y: number } | null {
+      const n = byId.get(id);
+      if (!n || n.x === undefined || n.y === undefined) return null;
+      const [sx, sy] = transform.apply([n.x, n.y]);
+      // The svg is drawn in viewBox units and scaled to the element, so convert.
+      const k = (el?.clientWidth || width) / width;
+      return { x: sx * k, y: sy * k };
+    }
+    function placeCards() {
+      setCards((prev) =>
+        prev
+          .map((c) => {
+            const p = screenOf(c.node.id);
+            return p ? { ...c, x: p.x, y: p.y } : null;
+          })
+          .filter((c): c is Hovered => c !== null),
+      );
+    }
+
     node
-      .filter((n) => labelled.has(n.id))
-      .append("text")
-      .text((n) => (n.name.length > 24 ? `${n.name.slice(0, 23)}…` : n.name))
-      .attr("x", (n) => radius(n) + 4)
-      .attr("y", 4)
-      .attr("font-size", 10)
-      .attr("font-weight", 600)
-      .attr("fill", colours.label)
-      .attr("pointer-events", "none");
+      .on("pointerenter", (event: PointerEvent, n) => {
+        const p = screenOf(n.id) ?? { x: event.offsetX, y: event.offsetY };
+        setCards((prev) =>
+          prev.some((c) => c.node.id === n.id)
+            ? prev
+            : [...prev.filter((c) => c.pinned), { node: n, x: p.x, y: p.y, pinned: false }],
+        );
+      })
+      .on("pointerleave", (_e, n) => {
+        setCards((prev) => prev.filter((c) => c.pinned || c.node.id !== n.id));
+      })
+      .on("click", (event: MouseEvent, n) => {
+        // Click pins the card so it can be read and compared; the actions that used to
+        // be on click are on the card itself, where they are labelled.
+        event.stopPropagation();
+        const p = screenOf(n.id) ?? { x: event.offsetX, y: event.offsetY };
+        setCards((prev) => {
+          const existing = prev.find((c) => c.node.id === n.id);
+          if (existing?.pinned) return prev.filter((c) => c.node.id !== n.id);
+          return [
+            ...prev.filter((c) => c.node.id !== n.id),
+            { node: n, x: p.x, y: p.y, pinned: true },
+          ];
+        });
+      });
 
-    node.append("title").text(
-      (n) =>
-        `${n.level_title}: ${n.name}\n${n.metric} ${n.metric_title}` +
-        (n.leaves > 1 ? ` · ${n.leaves} beneath` : "") +
-        (n.pct_of_task !== undefined ? ` · ${n.pct_of_task}% of its cluster` : "") +
-        (n.automation !== null && n.automation !== undefined
-          ? `\n${n.automation}% automatable · ${n.augmentation}% augmentable` +
-            (n.opportunity_coverage < 99 ? ` (${n.opportunity_coverage}% assessed)` : "")
-          : cut.has_opportunity
-            ? "\nnot yet assessed"
-            : "") +
-        (n.expandable ? "\n\nclick to open · shift-click for detail" : "\n\nclick for detail"),
-    );
-
-    node.on("click", (event: MouseEvent, n) => {
-      // Expanding is the common action on a group, so it is the plain click; detail
-      // is a modifier. On a leaf there is nothing to expand, so click opens detail.
-      if (n.expandable && !event.shiftKey) onExpand(n);
-      else onOpen(n);
-    });
+    svg.on("click", () => setCards([]));
 
     const sim = d3
       .forceSimulation<Simulated>(data.nodes)
@@ -213,36 +252,31 @@ export function ArchitectureGraph({
           .forceLink<Simulated, (typeof data.links)[number]>(data.links)
           .id((n) => n.id)
           // An action-to-cluster link is structural, not a weighted relationship: the
-          // action *is* part of that cluster. Weighting it like the rest left actions
-          // adrift in open space — at the finest cut there are 10,000 other links, so
-          // a 40%-of-task weight resolved to near the minimum strength and the column
-          // force won. Short and rigid instead, so opening a cluster reads as its
-          // contents rather than as unrelated nodes appearing.
-          .distance((l) => (isAction(l.target) ? 34 : 90))
-          .strength((l) =>
-            isAction(l.target) ? 1 : Math.min(1, l.weight / maxWeight + 0.1),
-          ),
+          // action *is* part of that cluster. Short and rigid so opening a cluster reads
+          // as its contents rather than as unrelated nodes appearing.
+          .distance((l) => (isAction(l.target) ? 18 : 70))
+          // Capped well below 1. These cuts are dense — 36 nodes can carry 250 edges —
+          // and at full strength every link pulls the whole thing into a single knot
+          // that uses a fifth of the canvas. Weak links plus real repulsion is what
+          // makes the clustering visible instead of collapsing it.
+          .strength((l) => (isAction(l.target) ? 1 : Math.min(0.5, l.weight / maxWeight + 0.04))),
       )
-      .force("charge", d3.forceManyBody().strength(-320).distanceMax(420))
-      // No forceCenter: with a per-entity x force it fights the columns and pulls
-      // all three hierarchies into one overlapping ball in the middle.
-      .force("y", d3.forceY(height / 2).strength(0.13))
+      .force("charge", d3.forceManyBody().strength(-170).distanceMax(420))
+      // Full strength, deliberately: this is what keeps the drawing in the middle of the
+      // canvas. Weakened, the whole layout drifts to wherever it happened to start.
+      .force("centre", d3.forceCenter(width / 2, height / 2))
       .force(
         "collide",
-        d3.forceCollide<Simulated>().radius((n) => radius(n) + 4),
+        d3.forceCollide<Simulated>().radius((n) => radius(n) + 1.2),
       )
-      // Pull each hierarchy towards its own column, so the picture reads as
-      // jobs-need-skills-and-tasks rather than one undifferentiated cloud.
+      // A gentle nudge, not a column: jobs left of centre and their skills or tasks
+      // right of it, so the picture has a direction while the link force is still what
+      // decides who sits next to whom.
       .force(
         "x",
         d3
-          .forceX<Simulated>((n) =>
-            n.entity === "job" ? width * 0.16 : n.entity === "task" ? width * 0.82 : width * 0.5,
-          )
-          // Actions are exempt from the columns. Their place in the picture is "next to
-          // my cluster", which the link above already says; a column force would only
-          // fight it.
-          .strength((n) => (n.entity === "action" ? 0 : 0.3)),
+          .forceX<Simulated>((n) => (n.entity === "job" ? width * 0.34 : width * 0.64))
+          .strength((n) => (n.entity === "action" ? 0 : 0.08)),
       )
       .on("tick", () => {
         link
@@ -250,12 +284,13 @@ export function ArchitectureGraph({
           .attr("y1", (l) => (l.source as unknown as Simulated).y ?? 0)
           .attr("x2", (l) => (l.target as unknown as Simulated).x ?? 0)
           .attr("y2", (l) => (l.target as unknown as Simulated).y ?? 0);
-        node.attr("transform", (n) => `translate(${n.x ?? 0},${n.y ?? 0})`);
-      });
+        node.attr("cx", (n) => n.x ?? 0).attr("cy", (n) => n.y ?? 0);
+      })
+      .on("end", placeCards);
 
     node.call(
       d3
-        .drag<SVGGElement, Simulated>()
+        .drag<SVGCircleElement, Simulated>()
         .on("start", (e, n) => {
           if (!e.active) sim.alphaTarget(0.2).restart();
           n.fx = n.x;
@@ -264,6 +299,7 @@ export function ArchitectureGraph({
         .on("drag", (e, n) => {
           n.fx = e.x;
           n.fy = e.y;
+          placeCards();
         })
         .on("end", (e, n) => {
           if (!e.active) sim.alphaTarget(0);
@@ -279,8 +315,6 @@ export function ArchitectureGraph({
   }, [
     data,
     height,
-    onOpen,
-    onExpand,
     paletteKey,
     colorMode,
     cut.has_opportunity,
@@ -288,5 +322,113 @@ export function ArchitectureGraph({
     opportunitySpan[1],
   ]);
 
-  return <div ref={host} className="w-full overflow-hidden rounded-[10px] border border-border bg-panel" />;
+  return (
+    <div className="relative">
+      <div
+        ref={host}
+        className="w-full overflow-hidden rounded-[10px] border border-border bg-panel"
+      />
+      {cards.map((c) => (
+        <NodeCard
+          key={c.node.id}
+          card={c}
+          hostWidth={hostWidth}
+          hasOpportunity={cut.has_opportunity}
+          onExpand={() => onExpand(c.node)}
+          onOpen={() => onOpen(c.node)}
+          onClose={() => setCards((prev) => prev.filter((x) => x.node.id !== c.node.id))}
+        />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The tooltip. Pinned ones get controls; hover ones are read-only.
+ *
+ * Positioned with a translate that flips near the right and bottom edges, so a node in
+ * the corner does not get a card hanging off the canvas.
+ */
+function NodeCard({
+  card,
+  hostWidth,
+  hasOpportunity,
+  onExpand,
+  onOpen,
+  onClose,
+}: {
+  card: Hovered;
+  hostWidth: number;
+  hasOpportunity: boolean;
+  onExpand: () => void;
+  onOpen: () => void;
+  onClose: () => void;
+}) {
+  const n = card.node;
+  // Card is 14rem wide plus a 12px offset; flip when that would overflow the canvas.
+  const flipX = card.x + 236 > hostWidth;
+  return (
+    <div
+      // Class names are written out rather than interpolated: Tailwind generates styles
+      // by scanning source text, so `pointer-events-${...}` produces no CSS at all.
+      className={`absolute z-20 w-56 rounded-[8px] border bg-card px-2.5 py-2 shadow-[var(--shadow-modal)] ${
+        card.pinned ? "pointer-events-auto border-accent" : "pointer-events-none border-border"
+      }`}
+      style={{
+        left: card.x,
+        top: card.y,
+        transform: `translate(${flipX ? "calc(-100% - 12px)" : "12px"}, -50%)`,
+      }}
+    >
+      <p className="text-[10px] font-extrabold uppercase tracking-wider text-text-muted">
+        {n.level_title}
+      </p>
+      <p className="mt-0.5 text-[12px] font-bold leading-snug text-text">{n.name}</p>
+      {n.definition && (
+        <p className="mt-0.5 text-[10.5px] leading-snug text-text-secondary">{n.definition}</p>
+      )}
+      <p className="mt-1 text-[11px] tabular-nums text-text-secondary">
+        {n.metric} {n.metric_title}
+        {n.leaves > 1 && ` · ${n.leaves} beneath`}
+        {n.pct_of_task !== undefined && ` · ${n.pct_of_task}% of its cluster`}
+      </p>
+      {n.automation !== null && n.automation !== undefined ? (
+        <p className="mt-0.5 text-[11px] tabular-nums text-text-secondary">
+          {n.automation}% automatable · {n.augmentation}% augmentable
+          {n.opportunity_coverage < 99 && (
+            <span className="text-text-muted"> ({n.opportunity_coverage}% assessed)</span>
+          )}
+        </p>
+      ) : (
+        hasOpportunity && <p className="mt-0.5 text-[11px] text-text-muted">Not yet assessed</p>
+      )}
+
+      {card.pinned && (
+        <div className="mt-1.5 flex items-center gap-1.5 border-t border-border pt-1.5">
+          {n.expandable && (
+            <button
+              onClick={onExpand}
+              className="rounded-[5px] border border-accent-border bg-accent-bg px-1.5 py-0.5 text-[10.5px] font-semibold text-accent transition-colors hover:bg-accent hover:text-white"
+            >
+              {n.expanded ? "Collapse" : "Open"}
+            </button>
+          )}
+          <button
+            onClick={onOpen}
+            className="rounded-[5px] border border-border bg-card px-1.5 py-0.5 text-[10.5px] font-semibold text-text transition-colors hover:bg-panel"
+          >
+            Detail
+          </button>
+          <span className="flex-1" />
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="px-1 text-[11px] text-text-muted transition-colors hover:text-text"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }

@@ -40,6 +40,52 @@ export function heatColor(value: number, min: number, max: number): string {
   return heatColorAt(heatPosition(value, min, max));
 }
 
+/**
+ * Colour for an AI opportunity percentage.
+ *
+ * Same ramp, deliberately, so the app has one visual language for "further along
+ * means more" — but linear rather than logarithmic, because these are percentages of
+ * a bounded quantity and are not skewed the way cluster sizes are. The ceiling is the
+ * assessment's own: no action may score above 80, so 80 is the top of the scale and a
+ * 60% action reads as high rather than as two-thirds of the way to nothing.
+ */
+export const OPPORTUNITY_CEILING = 80;
+
+export function opportunityColor(pct: number, ceiling = OPPORTUNITY_CEILING): string {
+  return heatColorAt(pct / ceiling);
+}
+
+/**
+ * The same ramp stretched to a given range, for the graph.
+ *
+ * In a table the colour is decoration — the number is written beside it. On the graph
+ * the colour *is* the number, and the absolute 0-80 scale turns out to say almost
+ * nothing: real cluster automation on a whole taxonomy spans about 20% to 40%, which
+ * on 0-80 is hues 217 to 242 — twenty-five degrees of blue, indistinguishable at the
+ * size a node is drawn. Stretching to the observed range makes the picture readable.
+ *
+ * Safe only because the legend is labelled with the actual endpoints. An unlabelled
+ * stretched ramp would let a workforce that is 20-40% automatable look as though its
+ * hot end were fully absorbable.
+ */
+export function opportunityColorIn(pct: number, lo: number, hi: number): string {
+  return hi > lo ? heatColorAt((pct - lo) / (hi - lo)) : heatColorAt(0.5);
+}
+
+/** Observed range of a set of scores, widened to at least 10 points so a taxonomy
+ *  that genuinely agrees with itself does not get a ramp built out of noise. */
+export function opportunitySpan(values: number[], minWidth = 10): [number, number] {
+  if (!values.length) return [0, OPPORTUNITY_CEILING];
+  let lo = Math.min(...values);
+  let hi = Math.max(...values);
+  if (hi - lo < minWidth) {
+    const pad = (minWidth - (hi - lo)) / 2;
+    lo = Math.max(0, lo - pad);
+    hi = Math.min(OPPORTUNITY_CEILING, hi + pad);
+  }
+  return [Math.floor(lo), Math.ceil(hi)];
+}
+
 /** CSS gradient matching the scale, for a legend. */
 export const HEAT_GRADIENT = `linear-gradient(to right, ${[0, 0.2, 0.4, 0.6, 0.8, 1]
   .map((t) => heatColorAt(t))

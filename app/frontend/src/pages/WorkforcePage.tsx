@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Play } from "lucide-react";
-import { ArchitectureGraph } from "../components/workforce/ArchitectureGraph";
+import { ArchitectureGraph, type ColorMode } from "../components/workforce/ArchitectureGraph";
+import { OpportunityStage } from "../components/workforce/OpportunityStage";
 import { ProgressBar } from "../components/wizard/ProgressBar";
 import { JobPulse } from "../components/wizard/JobPulse";
 import { StageSection } from "../components/wizard/StageSection";
 import { Button } from "../components/ui/Button";
 import { Modal } from "../components/ui/Modal";
+import { HEAT_GRADIENT, opportunityColor, opportunitySpan } from "../lib/heat";
 import { useJobStream } from "../hooks/useJobStream";
 import { workforceApi } from "../services/workforceApi";
 import type { GraphCut, GraphLevel, GraphNode, NodeDetail, WorkforceStatus } from "../types/workforce";
@@ -14,9 +16,9 @@ import type { GraphCut, GraphLevel, GraphNode, NodeDetail, WorkforceStatus } fro
  * Workforce Studio.
  *
  * Same shape as the JAStudio wizard — sticky step list, scrolling accordion of
- * stages — reusing its components rather than reimplementing them. Step 1 is built;
- * steps 2-7 are declared and locked, so the shape of the whole thing is visible from
- * the start rather than appearing a step at a time.
+ * stages — reusing its components rather than reimplementing them. Steps 1 and 3 are
+ * built; the rest are declared and locked, so the shape of the whole thing is visible
+ * from the start rather than appearing a step at a time.
  */
 
 const STEPS = [
@@ -33,6 +35,16 @@ const STEPS = [
   { id: "agents", title: "Agent definitions", description: "Per task cluster, a full agent specification, ranked by the time it would release." },
   { id: "future-roles", title: "Future role design", description: "How a role is redesigned once agents absorb the automatable work." },
 ] as const;
+
+/**
+ * Above this, a force-directed layout stops being a picture and becomes a mass.
+ *
+ * Measured rather than guessed: at the reference project's finest cut — 1,870 nodes
+ * and 10,300 links — the simulation takes tens of seconds to settle and then shows
+ * an undifferentiated blob. "Finest" is still offered because it is the user's
+ * choice and the data is real, but it says so rather than pretending.
+ */
+const LEGIBLE_NODES = 600;
 
 const LEVEL_LABEL: Record<GraphLevel, string> = {
   family: "Broadest",
@@ -60,6 +72,10 @@ export function WorkforcePage({
   const [detail, setDetail] = useState<NodeDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string>("architecture");
+  const [colorMode, setColorMode] = useState<ColorMode>("entity");
+  // Bumped when step 3 finishes, which rebuilds the fact table server-side. Without
+  // it the graph keeps showing the pre-assessment cut until the page is reloaded.
+  const [graphEpoch, setGraphEpoch] = useState(0);
 
   const refresh = useCallback(async () => {
     try {
@@ -87,7 +103,7 @@ export function WorkforcePage({
     return () => {
       live = false;
     };
-  }, [api, status?.graph_built, level, expanded]);
+  }, [api, status?.graph_built, level, expanded, graphEpoch]);
 
   const build = async () => {
     setError(null);
@@ -98,6 +114,19 @@ export function WorkforcePage({
       setError(e instanceof Error ? e.message : String(e));
     }
   };
+
+  // The ramp covers what this cut actually contains, not the theoretical 0-80 — see
+  // opportunitySpan. Recomputed per cut so zooming does not silently change what a
+  // colour means without the legend following.
+  const span = useMemo<[number, number]>(
+    () =>
+      opportunitySpan(
+        (cut?.nodes ?? [])
+          .filter((n) => n.entity !== "action" && n.automation !== null)
+          .map((n) => n.automation as number),
+      ),
+    [cut],
+  );
 
   const onExpand = useCallback((n: GraphNode) => {
     setExpanded((prev) => (prev.includes(n.id) ? prev.filter((x) => x !== n.id) : [...prev, n.id]));
@@ -144,7 +173,8 @@ export function WorkforcePage({
 
         {STEPS.map((s, i) => {
           const isArchitecture = s.id === "architecture";
-          const locked = !isArchitecture;
+          const isOpportunity = s.id === "opportunity";
+          const locked = !isArchitecture && !isOpportunity;
           return (
             <StageSection
               key={s.id}
@@ -155,11 +185,21 @@ export function WorkforcePage({
               state={
                 locked
                   ? "locked"
-                  : status?.graph_built
-                    ? "complete"
-                    : "active"
+                  : isOpportunity
+                    ? status?.ready
+                      ? "active"
+                      : "locked"
+                    : status?.graph_built
+                      ? "complete"
+                      : "active"
               }
-              lockedReason={locked ? "Built in a later phase." : undefined}
+              lockedReason={
+                locked
+                  ? "Built in a later phase."
+                  : isOpportunity && !status?.ready
+                    ? "Needs the completed job architecture."
+                    : undefined
+              }
               summary={
                 isArchitecture && cut
                   ? `${cut.totals.leaves.job} job profiles · ${cut.totals.leaves.skill} skill clusters · ${cut.totals.leaves.task} task clusters`
@@ -168,6 +208,19 @@ export function WorkforcePage({
               expanded={open === s.id}
               onToggle={() => setOpen(open === s.id ? "" : s.id)}
             >
+              {isOpportunity && status?.ready && (
+                <OpportunityStage
+                  api={api}
+                  onError={setError}
+                  onAssessed={() => {
+                    setGraphEpoch((n) => n + 1);
+                    // Once there is something to see, colour by it — the point of
+                    // putting the scores on the graph is that they are visible
+                    // without having to go looking for a control.
+                    setColorMode("opportunity");
+                  }}
+                />
+              )}
               {isArchitecture && (
                 <div className="space-y-3">
                   {!status?.ready && status && (
@@ -240,19 +293,57 @@ export function WorkforcePage({
                           </button>
                         )}
                         <span className="flex-1" />
-                        <Legend />
+                        {cut.has_opportunity && (
+                          <span className="flex gap-1">
+                            {(["entity", "opportunity"] as ColorMode[]).map((m) => (
+                              <button
+                                key={m}
+                                onClick={() => setColorMode(m)}
+                                className={`rounded-[6px] border px-2 py-0.5 text-[11.5px] font-semibold transition-colors ${
+                                  colorMode === m
+                                    ? "border-accent bg-accent-bg text-accent"
+                                    : "border-border bg-card text-text-secondary hover:border-accent"
+                                }`}
+                              >
+                                {m === "entity" ? "Colour by type" : "Colour by AI opportunity"}
+                              </button>
+                            ))}
+                          </span>
+                        )}
+                        {colorMode === "opportunity" && cut.has_opportunity ? (
+                          <OpportunityLegend span={span} />
+                        ) : (
+                          <Legend hasActions={cut.totals.actions > 0} />
+                        )}
                       </div>
+
+                      {cut.totals.nodes > LEGIBLE_NODES && (
+                        <p className="rounded-[10px] border border-warning-border bg-warning-bg px-4 py-2.5 text-[11.5px] leading-snug text-text-secondary">
+                          <strong className="text-text">
+                            {cut.totals.nodes.toLocaleString()} nodes is past what a
+                            force-directed layout can show legibly
+                          </strong>{" "}
+                          — it will settle into a dense mass rather than a readable
+                          picture, and takes a while doing it. For a project this size the
+                          usable path is a coarser resolution with individual branches
+                          opened, which keeps the view under a few hundred nodes.
+                        </p>
+                      )}
 
                       <ArchitectureGraph
                         cut={cut}
                         onOpen={onOpen}
                         onExpand={onExpand}
                         paletteKey={paletteKey}
+                        colorMode={colorMode}
+                        opportunitySpan={span}
                       />
                       <p className="text-[11px] text-text-muted">
                         Click a group to open it, shift-click for detail. Drag to rearrange, scroll
                         to zoom. Node size is the metric named in its tooltip; link thickness is the
                         strength of the relationship.
+                        {cut.has_opportunity &&
+                          " Opening a task cluster at the finest resolution shows the actions inside it."}
                       </p>
                     </>
                   )}
@@ -268,11 +359,12 @@ export function WorkforcePage({
   );
 }
 
-function Legend() {
+function Legend({ hasActions = false }: { hasActions?: boolean }) {
   const items = [
     ["job", "Jobs", "bg-accent"],
     ["skill", "Skills", "bg-teal"],
     ["task", "Tasks", "bg-purple"],
+    ...(hasActions ? ([["action", "Actions", "bg-orange"]] as const) : []),
   ] as const;
   return (
     <span className="flex items-center gap-3">
@@ -282,6 +374,24 @@ function Legend() {
           {label}
         </span>
       ))}
+    </span>
+  );
+}
+
+/**
+ * The graph's ramp is stretched to what this cut contains, so the endpoints must be
+ * labelled with the real numbers — otherwise a hot node reads as "fully absorbable"
+ * when it might mean 38%.
+ */
+function OpportunityLegend({ span }: { span: [number, number] }) {
+  return (
+    <span className="flex items-center gap-1.5 text-[10.5px] text-text-muted">
+      {span[0]}%
+      <span className="h-2.5 w-20 rounded-full" style={{ background: HEAT_GRADIENT }} />
+      {span[1]}% automatable
+      <span className="ml-1.5 flex items-center gap-1">
+        <span className="h-2.5 w-2.5 rounded-full bg-text-muted" /> not assessed
+      </span>
     </span>
   );
 }
@@ -301,6 +411,93 @@ function NodeModal({ detail, onClose }: { detail: NodeDetail; onClose: () => voi
       onClose={onClose}
     >
       <div className="space-y-4">
+        {detail.definition && (
+          <p className="text-[12px] leading-snug text-text-secondary">{detail.definition}</p>
+        )}
+
+        {detail.parent && (
+          <p className="text-[11.5px] text-text-muted">
+            An action within{" "}
+            <strong className="font-semibold text-text">{detail.parent.name}</strong>.
+          </p>
+        )}
+
+        {detail.opportunity && (
+          <div className="rounded-[10px] border border-border bg-panel px-3.5 py-2.5">
+            <p className="mb-1.5 text-[10px] font-extrabold uppercase tracking-wider text-text-muted">
+              AI opportunity
+            </p>
+            <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1">
+              <span className="flex items-baseline gap-1.5">
+                <span
+                  className="rounded-[5px] px-1.5 py-0.5 text-[12px] font-bold tabular-nums text-white"
+                  style={{ background: opportunityColor(detail.opportunity.automation) }}
+                >
+                  {detail.opportunity.automation}%
+                </span>
+                <span className="text-[11px] text-text-secondary">automatable</span>
+              </span>
+              <span className="flex items-baseline gap-1.5">
+                <span
+                  className="rounded-[5px] px-1.5 py-0.5 text-[12px] font-bold tabular-nums text-white"
+                  style={{ background: opportunityColor(detail.opportunity.augmentation) }}
+                >
+                  {detail.opportunity.augmentation}%
+                </span>
+                <span className="text-[11px] text-text-secondary">augmentable</span>
+              </span>
+            </div>
+            {detail.opportunity.coverage < 99 && (
+              <p className="mt-1.5 text-[11px] text-text-muted">
+                Weighted over the {detail.opportunity.coverage}% of this node that has been
+                assessed. The rest is unknown, not zero.
+              </p>
+            )}
+            <p className="mt-1.5 text-[11px] text-text-muted">
+              A model estimate, calibrated by prompt and validated for range — not a measurement.
+            </p>
+          </div>
+        )}
+
+        {detail.actions.length > 0 && (
+          <div>
+            <p className="mb-1 text-[10px] font-extrabold uppercase tracking-wider text-text-muted">
+              {detail.parent ? "Actions in this cluster" : "Actions"} ({detail.actions.length})
+            </p>
+            <div className="space-y-1.5">
+              {detail.actions.map((a, i) => (
+                <div
+                  key={`${a.name}-${i}`}
+                  className={`rounded-[7px] border px-2.5 py-1.5 ${
+                    a.current ? "border-accent bg-accent-bg" : "border-border bg-panel"
+                  }`}
+                >
+                  <div className="flex items-baseline gap-2">
+                    <span className="min-w-0 flex-1 text-[11.5px] font-semibold text-text">
+                      {a.name}
+                    </span>
+                    <span className="shrink-0 text-[10.5px] tabular-nums text-text-muted">
+                      {a.pct_of_task.toFixed(0)}% of task
+                    </span>
+                    <span
+                      className="shrink-0 rounded-[4px] px-1 py-0.5 text-[10px] font-bold tabular-nums text-white"
+                      style={{ background: opportunityColor(a.automation) }}
+                    >
+                      {a.automation}%
+                    </span>
+                  </div>
+                  <p className="mt-0.5 text-[10.5px] leading-snug text-text-secondary">
+                    {a.definition}
+                  </p>
+                  {!detail.parent && detail.level !== "profile" && (
+                    <p className="mt-0.5 text-[10px] text-text-muted">{a.cluster}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {detail.children.length > 0 && (
           <div>
             <p className="mb-1 text-[10px] font-extrabold uppercase tracking-wider text-text-muted">
@@ -336,8 +533,7 @@ function NodeModal({ detail, onClose }: { detail: NodeDetail; onClose: () => voi
         )}
 
         <p className="border-t border-border pt-2 text-[11px] text-text-muted">
-          Later steps add AI opportunity, generated skills, agents and the future role design to
-          this panel.
+          Later steps add generated skills, agents and the future role design to this panel.
         </p>
       </div>
     </Modal>

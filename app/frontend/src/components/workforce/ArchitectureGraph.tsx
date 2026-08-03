@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import * as d3 from "d3";
+import { OPPORTUNITY_CEILING, opportunityColorIn } from "../../lib/heat";
 import type { GraphCut, GraphNode } from "../../types/workforce";
 
 /**
@@ -17,10 +18,26 @@ const ENTITY_TOKEN: Record<string, string> = {
   job: "--color-accent",
   skill: "--color-teal",
   task: "--color-purple",
+  action: "--color-orange",
 };
+
+/** Which radius scale a node belongs to. Actions share the task scale: an action's
+ *  metric is a slice of its cluster's, and on its own scale the largest action of a
+ *  tiny cluster would draw the same size as the largest task in the project. */
+const SCALE_OF: Record<string, string> = { action: "task" };
+
+/** How the fill is chosen. "opportunity" answers "where in this architecture is the
+ *  AI opportunity", which is the whole reason step 3's scores reach the graph. */
+export type ColorMode = "entity" | "opportunity";
 
 function token(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || "#888";
+}
+
+/** A link endpoint is an id before the simulation resolves it and a node after. */
+function isAction(endpoint: unknown): boolean {
+  if (typeof endpoint === "string") return endpoint.startsWith("action:");
+  return (endpoint as GraphNode | undefined)?.entity === "action";
 }
 
 interface Simulated extends GraphNode {
@@ -36,6 +53,8 @@ export function ArchitectureGraph({
   onOpen,
   onExpand,
   paletteKey,
+  colorMode = "entity",
+  opportunitySpan = [0, OPPORTUNITY_CEILING],
 }: {
   cut: GraphCut;
   height?: number;
@@ -43,6 +62,9 @@ export function ArchitectureGraph({
   onExpand: (node: GraphNode) => void;
   /** Changes when the palette changes, so the colours are re-read. */
   paletteKey: string;
+  colorMode?: ColorMode;
+  /** Range the opportunity ramp covers. The legend must show these endpoints. */
+  opportunitySpan?: [number, number];
 }) {
   const host = useRef<HTMLDivElement>(null);
 
@@ -61,14 +83,25 @@ export function ArchitectureGraph({
     if (!el) return;
     const width = el.clientWidth || 900;
 
-    const colours = {
+    const colours: Record<string, string> = {
       job: token(ENTITY_TOKEN.job),
       skill: token(ENTITY_TOKEN.skill),
       task: token(ENTITY_TOKEN.task),
+      action: token(ENTITY_TOKEN.action),
       edge: token("--color-border"),
       label: token("--color-text"),
       muted: token("--color-text-muted"),
     };
+
+    // In opportunity mode an unassessed node is drawn muted rather than at the
+    // bottom of the scale — "not measured" and "no opportunity" look identical
+    // otherwise, and only one of them is a finding.
+    const fill = (n: Simulated) =>
+      colorMode === "opportunity"
+        ? n.automation === null || n.automation === undefined
+          ? colours.muted
+          : opportunityColorIn(n.automation, opportunitySpan[0], opportunitySpan[1])
+        : colours[n.entity];
 
     d3.select(el).selectAll("*").remove();
     const svg = d3
@@ -92,12 +125,14 @@ export function ArchitectureGraph({
     // 159 jobs against 1,036 skills against 54 FTE — so a shared scale renders the
     // job side as dots and says nothing true in the process. Within a hierarchy the
     // comparison is meaningful, which is the only place size should be compared.
+    const scaleKey = (n: Simulated) => SCALE_OF[n.entity] ?? n.entity;
     const perEntityMax = new Map<string, number>();
     for (const n of data.nodes) {
-      perEntityMax.set(n.entity, Math.max(perEntityMax.get(n.entity) ?? 0, n.metric));
+      const k = scaleKey(n);
+      perEntityMax.set(k, Math.max(perEntityMax.get(k) ?? 0, n.metric));
     }
     const radius = (n: Simulated) =>
-      d3.scaleSqrt().domain([0, perEntityMax.get(n.entity) || 1]).range([5, 24])(n.metric);
+      d3.scaleSqrt().domain([0, perEntityMax.get(scaleKey(n)) || 1]).range([5, 24])(n.metric);
     const stroke = d3.scaleLinear().domain([0, maxWeight]).range([0.4, 4]);
 
     const link = root
@@ -119,22 +154,25 @@ export function ArchitectureGraph({
     node
       .append("circle")
       .attr("r", (n) => radius(n))
-      .attr("fill", (n) => colours[n.entity])
+      .attr("fill", fill)
       .attr("fill-opacity", 0.85)
-      .attr("stroke", (n) => (n.expanded ? colours.label : colours[n.entity]))
+      .attr("stroke", (n) => (n.expanded ? colours.label : fill(n)))
       .attr("stroke-width", (n) => (n.expanded ? 2 : 1));
 
     // Label only the largest few per hierarchy. At a few hundred nodes every label
-    // drawn is a label overlapping another, and the tooltip covers the rest.
-    const labelled = new Set(
-      (["job", "skill", "task"] as const).flatMap((e) =>
+    // drawn is a label overlapping another, and the tooltip covers the rest. Actions
+    // are always labelled: there are at most a handful, they only exist because
+    // someone opened that cluster, and their names are the answer to why.
+    const labelled = new Set([
+      ...(["job", "skill", "task"] as const).flatMap((e) =>
         data.nodes
           .filter((n) => n.entity === e)
           .sort((a, b) => b.metric - a.metric)
           .slice(0, 8)
           .map((n) => n.id),
       ),
-    );
+      ...data.nodes.filter((n) => n.entity === "action").map((n) => n.id),
+    ]);
     node
       .filter((n) => labelled.has(n.id))
       .append("text")
@@ -150,6 +188,13 @@ export function ArchitectureGraph({
       (n) =>
         `${n.level_title}: ${n.name}\n${n.metric} ${n.metric_title}` +
         (n.leaves > 1 ? ` · ${n.leaves} beneath` : "") +
+        (n.pct_of_task !== undefined ? ` · ${n.pct_of_task}% of its cluster` : "") +
+        (n.automation !== null && n.automation !== undefined
+          ? `\n${n.automation}% automatable · ${n.augmentation}% augmentable` +
+            (n.opportunity_coverage < 99 ? ` (${n.opportunity_coverage}% assessed)` : "")
+          : cut.has_opportunity
+            ? "\nnot yet assessed"
+            : "") +
         (n.expandable ? "\n\nclick to open · shift-click for detail" : "\n\nclick for detail"),
     );
 
@@ -167,8 +212,16 @@ export function ArchitectureGraph({
         d3
           .forceLink<Simulated, (typeof data.links)[number]>(data.links)
           .id((n) => n.id)
-          .distance(90)
-          .strength((l) => Math.min(1, l.weight / maxWeight + 0.1)),
+          // An action-to-cluster link is structural, not a weighted relationship: the
+          // action *is* part of that cluster. Weighting it like the rest left actions
+          // adrift in open space — at the finest cut there are 10,000 other links, so
+          // a 40%-of-task weight resolved to near the minimum strength and the column
+          // force won. Short and rigid instead, so opening a cluster reads as its
+          // contents rather than as unrelated nodes appearing.
+          .distance((l) => (isAction(l.target) ? 34 : 90))
+          .strength((l) =>
+            isAction(l.target) ? 1 : Math.min(1, l.weight / maxWeight + 0.1),
+          ),
       )
       .force("charge", d3.forceManyBody().strength(-320).distanceMax(420))
       // No forceCenter: with a per-entity x force it fights the columns and pulls
@@ -184,9 +237,12 @@ export function ArchitectureGraph({
         "x",
         d3
           .forceX<Simulated>((n) =>
-            n.entity === "job" ? width * 0.16 : n.entity === "task" ? width * 0.84 : width * 0.5,
+            n.entity === "job" ? width * 0.16 : n.entity === "task" ? width * 0.82 : width * 0.5,
           )
-          .strength(0.3),
+          // Actions are exempt from the columns. Their place in the picture is "next to
+          // my cluster", which the link above already says; a column force would only
+          // fight it.
+          .strength((n) => (n.entity === "action" ? 0 : 0.3)),
       )
       .on("tick", () => {
         link
@@ -220,7 +276,17 @@ export function ArchitectureGraph({
       sim.stop();
       d3.select(el).selectAll("*").remove();
     };
-  }, [data, height, onOpen, onExpand, paletteKey]);
+  }, [
+    data,
+    height,
+    onOpen,
+    onExpand,
+    paletteKey,
+    colorMode,
+    cut.has_opportunity,
+    opportunitySpan[0],
+    opportunitySpan[1],
+  ]);
 
   return <div ref={host} className="w-full overflow-hidden rounded-[10px] border border-border bg-panel" />;
 }

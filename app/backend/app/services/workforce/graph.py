@@ -33,6 +33,14 @@ LEVELS: tuple[str, str, str] = ("family", "category", "profile")
 
 ENTITIES: tuple[str, str, str] = ("job", "skill", "task")
 
+# Actions are not a fourth hierarchy — they hang off a single task cluster and have
+# no levels of their own. They appear only when their cluster is expanded at the
+# finest resolution, which is where "what within this work is automatable" is a
+# question worth drawing. Kept out of ENTITIES so the roll-up code never has to
+# special-case a hierarchy that has one level.
+ACTION_ENTITY = "action"
+GRAPH_ENTITIES: tuple[str, ...] = ENTITIES + (ACTION_ENTITY,)
+
 LEVEL_TITLES: dict[str, dict[str, str]] = {
     "job": {"family": "Job family", "category": "Job category", "profile": "Job profile"},
     "skill": {"family": "Skill family", "category": "Skill category", "profile": "Skill cluster"},
@@ -78,6 +86,18 @@ class EntityFacts:
 
 
 @dataclass
+class ActionFact:
+    """One action of one task cluster, with both opportunity scores."""
+
+    task_cluster: int
+    name: str
+    definition: str
+    pct_of_task: float
+    automation_pct: float
+    augmentation_pct: float
+
+
+@dataclass
 class Facts:
     """The whole graph at leaf resolution. Serialised to one blob."""
 
@@ -89,6 +109,16 @@ class Facts:
     # (job profile cluster, other cluster) -> weight, per relationship
     job_skill: list[tuple[int, int, float]] = field(default_factory=list)
     job_task: list[tuple[int, int, float]] = field(default_factory=list)
+    # Step 3. Absent until the opportunity assessment has run, which is why every
+    # consumer treats an unscored cluster as unknown rather than as zero.
+    actions: list[ActionFact] = field(default_factory=list)
+    # task cluster -> (automation_pct, augmentation_pct), the action-weighted means
+    task_opportunity: dict[int, tuple[float, float]] = field(default_factory=dict)
+    # job profile -> (automation_pct, augmentation_pct, coverage_pct). Derived from
+    # the profile's task mix, so it says "this share of this job could be absorbed".
+    # `coverage_pct` is how much of the role's time sits in an assessed cluster —
+    # without it, a half-assessed role reads as a low-opportunity one.
+    job_opportunity: dict[int, tuple[float, float, float]] = field(default_factory=dict)
 
     def to_json(self) -> dict:
         return {
@@ -106,6 +136,12 @@ class Facts:
             },
             "job_skill": [list(x) for x in self.job_skill],
             "job_task": [list(x) for x in self.job_task],
+            "actions": [
+                [a.task_cluster, a.name, a.definition, a.pct_of_task, a.automation_pct, a.augmentation_pct]
+                for a in self.actions
+            ],
+            "task_opportunity": {str(k): list(v) for k, v in self.task_opportunity.items()},
+            "job_opportunity": {str(k): list(v) for k, v in self.job_opportunity.items()},
         }
 
     @staticmethod
@@ -125,10 +161,30 @@ class Facts:
             },
             job_skill=[(int(a), int(b), float(w)) for a, b, w in d["job_skill"]],
             job_task=[(int(a), int(b), float(w)) for a, b, w in d["job_task"]],
+            # `.get` with a default rather than `[...]`: a facts blob written before
+            # step 3 existed is still valid, it just has no opportunity in it.
+            actions=[
+                ActionFact(int(c), str(n), str(df), float(p), float(au), float(ag))
+                for c, n, df, p, au, ag in d.get("actions", [])
+            ],
+            task_opportunity={
+                int(k): (float(v[0]), float(v[1]))
+                for k, v in (d.get("task_opportunity") or {}).items()
+            },
+            job_opportunity={
+                int(k): (float(v[0]), float(v[1]), float(v[2]))
+                for k, v in (d.get("job_opportunity") or {}).items()
+            },
         )
 
     def leaf_counts(self) -> dict[str, int]:
         return {e: len(f.ancestry) for e, f in self.entities.items()}
+
+    def actions_by_cluster(self) -> dict[int, list[ActionFact]]:
+        out: dict[int, list[ActionFact]] = {}
+        for a in self.actions:
+            out.setdefault(a.task_cluster, []).append(a)
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +210,7 @@ def readiness(state: ProjectState) -> dict:
     }
 
 
-def _profile_headcount(state: ProjectState) -> dict[str, int]:
+def profile_headcount(state: ProjectState) -> dict[str, int]:
     """Headcount per job profile_key, rolled up through dedupe groups.
 
     Optional: an HRIS import without a headcount column leaves this empty, and node
@@ -215,7 +271,7 @@ def build(state: ProjectState, *, version: int = 1) -> Facts:
         entities={e: _entity_facts(state, e) for e in ENTITIES},
     )
 
-    headcount = _profile_headcount(state)
+    headcount = profile_headcount(state)
     key_of_cluster = {d.profile_cluster_id: d.profile_key for d in state.job_profiles}
     cluster_of_key = {v: k for k, v in key_of_cluster.items()}
 
@@ -264,6 +320,51 @@ def build(state: ProjectState, *, version: int = 1) -> Facts:
             jt[(jp, tc)] = jt.get((jp, tc), 0.0) + float(t.proportion)
     facts.job_task = [(a, b, round(w, 2)) for (a, b), w in sorted(jt.items())]
 
+    # ---- step 3: actions and opportunity -----------------------------------
+    # Only clusters that still exist are carried over. Re-clustering tasks changes
+    # the cluster ids, so an assessment of a cluster that is gone is stale, and
+    # showing it against whatever now holds that id would be worse than showing
+    # nothing at all.
+    live = set(tf.ancestry)
+    facts.actions = [
+        ActionFact(
+            task_cluster=a.task_cluster_id,
+            name=a.name,
+            definition=a.definition,
+            pct_of_task=a.pct_of_task,
+            automation_pct=a.automation_pct,
+            augmentation_pct=a.augmentation_pct,
+        )
+        for a in state.workforce.actions
+        if a.task_cluster_id in live
+    ]
+    facts.task_opportunity = {
+        o.task_cluster_id: (o.automation_pct, o.augmentation_pct)
+        for o in state.workforce.opportunity
+        if o.task_cluster_id in live
+    }
+
+    # A role's opportunity is the time-weighted mean of its task clusters', over the
+    # part of its time that has been assessed. The job_task edge weight is already
+    # that role's percentage on that cluster, so this is the roll-up in three lines.
+    if facts.task_opportunity:
+        by_job: dict[int, list[tuple[float, tuple[float, float]]]] = {}
+        totals: dict[int, float] = {}
+        for jp, tc, w in facts.job_task:
+            totals[jp] = totals.get(jp, 0.0) + w
+            score = facts.task_opportunity.get(tc)
+            if score:
+                by_job.setdefault(jp, []).append((w, score))
+        for jp, parts in by_job.items():
+            covered = sum(w for w, _ in parts)
+            if covered <= 0:
+                continue
+            facts.job_opportunity[jp] = (
+                round(sum(w * s[0] for w, s in parts) / covered, 1),
+                round(sum(w * s[1] for w, s in parts) / covered, 1),
+                round(100.0 * covered / totals[jp], 1) if totals.get(jp) else 0.0,
+            )
+
     return facts
 
 
@@ -311,6 +412,16 @@ def cut(
     titles = metric_titles(facts)
     nodes: dict[str, dict] = {}
     mapped: dict[str, dict[int, str]] = {e: {} for e in ENTITIES}
+    actions_by_cluster = facts.actions_by_cluster()
+
+    # Opportunity, per entity, keyed by leaf. Skills carry none: a capability is not
+    # automatable, the work done with it is, and inventing a skill-level score would
+    # be a number with nothing behind it.
+    scores: dict[str, dict[int, tuple[float, float]]] = {
+        "job": {k: (v[0], v[1]) for k, v in facts.job_opportunity.items()},
+        "skill": {},
+        "task": facts.task_opportunity,
+    }
 
     for entity in ENTITIES:
         ef = facts.entities[entity]
@@ -334,14 +445,34 @@ def cut(
                     "metric_title": titles[entity],
                     "members": 0,
                     "leaves": 0,
-                    # Only a node with something beneath it can be opened, so the UI
-                    # does not offer an expand affordance that would do nothing.
-                    "expandable": level != "profile",
+                    # A task cluster has no children in the hierarchy but does have
+                    # actions once step 3 has run, so at the finest level it stays
+                    # openable. Everything else: only a node with something beneath
+                    # it, so the UI never offers an expand that would do nothing.
+                    "expandable": level != "profile"
+                    or (entity == "task" and node_id in actions_by_cluster),
                     "expanded": key in expanded,
+                    # Weighted accumulators, resolved to percentages below.
+                    "_auto": 0.0,
+                    "_aug": 0.0,
+                    "_scored_weight": 0.0,
+                    "_weight": 0.0,
                 }
-            n["metric"] += ef.metrics.get(leaf, 0.0)
+            m = ef.metrics.get(leaf, 0.0)
+            n["metric"] += m
             n["members"] += ef.members.get(leaf, 0)
             n["leaves"] += 1
+            # Weight opportunity by the node's own metric — headcount for roles, time
+            # for tasks — so a big role's automation counts for more than a
+            # single-holder one, and fall back to equal weight where the metric is
+            # zero rather than silently dropping the leaf out of the average.
+            w = m if m > 0 else 1.0
+            n["_weight"] += w
+            score = scores[entity].get(leaf)
+            if score:
+                n["_auto"] += w * score[0]
+                n["_aug"] += w * score[1]
+                n["_scored_weight"] += w
 
     edges: dict[tuple[str, str], float] = {}
     for rel, pairs in (("skill", facts.job_skill), ("task", facts.job_task)):
@@ -352,6 +483,50 @@ def cut(
 
     for n in nodes.values():
         n["metric"] = round(n["metric"], 2)
+        sw = n.pop("_scored_weight")
+        total_w = n.pop("_weight")
+        auto, aug = n.pop("_auto"), n.pop("_aug")
+        # None, not zero. An unassessed node has unknown opportunity, and the
+        # difference matters the moment anything colours a graph by it.
+        n["automation"] = round(auto / sw, 1) if sw else None
+        n["augmentation"] = round(aug / sw, 1) if sw else None
+        n["opportunity_coverage"] = round(100.0 * sw / total_w, 1) if total_w else 0.0
+
+    # ---- action nodes ------------------------------------------------------
+    # Only for task clusters the user has explicitly opened. Adding them wholesale
+    # would put 2,000-3,000 nodes into a view that is deliberately a few hundred.
+    action_nodes: list[dict] = []
+    for key, n in list(nodes.items()):
+        if n["entity"] != "task" or n["level"] != "profile" or key not in expanded:
+            continue
+        for i, a in enumerate(actions_by_cluster.get(n["cluster_id"], [])):
+            aid = f"{ACTION_ENTITY}:{n['cluster_id']}:{i}"
+            action_nodes.append(
+                {
+                    "id": aid,
+                    "entity": ACTION_ENTITY,
+                    "level": "profile",
+                    "cluster_id": n["cluster_id"],
+                    "name": a.name,
+                    "level_title": "Action",
+                    # The action's share of the cluster's own metric, so an action
+                    # node's size is on the same scale as every other task node.
+                    "metric": round(n["metric"] * a.pct_of_task / 100.0, 2),
+                    "metric_title": titles["task"],
+                    "members": 0,
+                    "leaves": 1,
+                    "expandable": False,
+                    "expanded": False,
+                    "automation": a.automation_pct,
+                    "augmentation": a.augmentation_pct,
+                    "opportunity_coverage": 100.0,
+                    "pct_of_task": a.pct_of_task,
+                    "definition": a.definition,
+                }
+            )
+            edges[(key, aid)] = a.pct_of_task
+    for a in action_nodes:
+        nodes[a["id"]] = a
 
     return {
         "levels": {e: levels.get(e, "family") for e in ENTITIES},
@@ -362,9 +537,11 @@ def cut(
             for (a, b), w in sorted(edges.items(), key=lambda kv: -kv[1])
         ],
         "has_headcount": facts.has_headcount,
+        "has_opportunity": bool(facts.task_opportunity),
         "totals": {
             "nodes": len(nodes),
             "edges": len(edges),
+            "actions": len(action_nodes),
             "leaves": facts.leaf_counts(),
         },
     }
@@ -381,6 +558,12 @@ def node_detail(facts: Facts, node_id: str) -> dict:
         cid = int(raw)
     except ValueError:
         raise ValueError(f"malformed node id {node_id!r}") from None
+
+    # An action node's id carries its cluster and its ordinal rather than a level,
+    # because an action has no hierarchy of its own — it is one row of one cluster.
+    if entity == ACTION_ENTITY:
+        return _action_detail(facts, cluster=int(level), index=cid)
+
     if entity not in ENTITIES or level not in LEVELS:
         raise ValueError(f"unknown node {node_id!r}")
 
@@ -436,6 +619,52 @@ def node_detail(facts: Facts, node_id: str) -> dict:
                     hits[a] = hits.get(a, 0.0) + w
             related["job"] = _top(hits, facts.entities["job"])
 
+    # ---- step 3 ------------------------------------------------------------
+    # The modal grows as later steps run, per the instructions: a task cluster gains
+    # its actions and both scores, a role gains the opportunity its task mix implies.
+    scores = (
+        {k: (v[0], v[1]) for k, v in facts.job_opportunity.items()}
+        if entity == "job"
+        else facts.task_opportunity
+        if entity == "task"
+        else {}
+    )
+    weights = {x: (ef.metrics.get(x, 0.0) or 1.0) for x in leaves}
+    scored = sum(weights[x] for x in leaves if x in scores)
+    opportunity: dict | None = None
+    if scored:
+        opportunity = {
+            "automation": round(
+                sum(weights[x] * scores[x][0] for x in leaves if x in scores) / scored, 1
+            ),
+            "augmentation": round(
+                sum(weights[x] * scores[x][1] for x in leaves if x in scores) / scored, 1
+            ),
+            "coverage": round(100.0 * scored / sum(weights.values()), 1) if weights else 0.0,
+        }
+
+    actions: list[dict] = []
+    if entity == "task":
+        by_cluster = facts.actions_by_cluster()
+        # At a coarser level this is every action under the node, which is why they
+        # are ordered by contribution and the cluster is named on each one.
+        for leaf in leaves:
+            for a in by_cluster.get(leaf, []):
+                actions.append(
+                    {
+                        "name": a.name,
+                        "definition": a.definition,
+                        "cluster": ef.labels.get("profile", {}).get(leaf, str(leaf)),
+                        "pct_of_task": a.pct_of_task,
+                        "automation": a.automation_pct,
+                        "augmentation": a.augmentation_pct,
+                        # Effort share x cluster size: how much of the node's total
+                        # capacity this action accounts for.
+                        "weight": round(ef.metrics.get(leaf, 0.0) * a.pct_of_task / 100.0, 2),
+                    }
+                )
+        actions.sort(key=lambda a: -a["weight"])
+
     return {
         "id": node_id,
         "entity": entity,
@@ -449,6 +678,53 @@ def node_detail(facts: Facts, node_id: str) -> dict:
         "children_title": LEVEL_TITLES[entity][children_level] if children_level else None,
         "children": children[:60],
         "related": related,
+        "opportunity": opportunity,
+        "actions": actions[:40],
+    }
+
+
+def _action_detail(facts: Facts, *, cluster: int, index: int) -> dict:
+    """One action's modal. Its siblings come with it, since an action's percentage
+    only means something against the rest of the cluster."""
+    siblings = facts.actions_by_cluster().get(cluster, [])
+    if not 0 <= index < len(siblings):
+        raise ValueError(f"no action {index} on task cluster {cluster}")
+    a = siblings[index]
+    tf = facts.entities["task"]
+    cluster_name = tf.labels.get("profile", {}).get(cluster, str(cluster))
+    return {
+        "id": f"{ACTION_ENTITY}:{cluster}:{index}",
+        "entity": ACTION_ENTITY,
+        "level": "profile",
+        "level_title": "Action",
+        "name": a.name,
+        "definition": a.definition,
+        "metric": round(tf.metrics.get(cluster, 0.0) * a.pct_of_task / 100.0, 2),
+        "metric_title": metric_titles(facts)["task"],
+        "members": 0,
+        "leaves": 1,
+        "children_title": None,
+        "children": [],
+        "related": {},
+        "parent": {"id": f"task:profile:{cluster}", "name": cluster_name},
+        "opportunity": {
+            "automation": a.automation_pct,
+            "augmentation": a.augmentation_pct,
+            "coverage": 100.0,
+        },
+        "actions": [
+            {
+                "name": s.name,
+                "definition": s.definition,
+                "cluster": cluster_name,
+                "pct_of_task": s.pct_of_task,
+                "automation": s.automation_pct,
+                "augmentation": s.augmentation_pct,
+                "weight": round(tf.metrics.get(cluster, 0.0) * s.pct_of_task / 100.0, 2),
+                "current": i == index,
+            }
+            for i, s in enumerate(siblings)
+        ],
     }
 
 

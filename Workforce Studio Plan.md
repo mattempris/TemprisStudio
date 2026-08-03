@@ -331,8 +331,38 @@ Each phase is independently demoable and leaves the app working.
 the D3 renderer, tooltips and modals. Delivers Step 1 against existing JAStudio output with no new
 LLM spend.
 
-**Phase B — Opportunity.** Step 3: actions, both scores, roll-ups, the role-level report, action
-nodes in the graph. Unlocks Steps 5 and 6.
+**Phase B — Opportunity. BUILT.** Step 3: actions, both scores, roll-ups, the role-level report,
+action nodes in the graph. Unlocks Steps 5 and 6.
+
+Deviations from this plan, found while building:
+
+- **Percentage sums are normalised, not retried.** §5 said percentages that do not sum and scores
+  out of range are both rejected and retried. Only the scores are: task inference already learned
+  that a model asked for integers summing to 100 returns 97 or 103 often enough that retrying is
+  paying twice for the same near-miss, and the sum is a guarantee code can just provide. Raw sums
+  are recorded so the drift stays visible. Out-of-range scores *are* retried, with the violation
+  quoted back; a second failure clamps and flags rather than losing the cluster.
+- **Actions are an expansion, not a fourth level.** They appear only when a task cluster is opened
+  at the finest resolution, edged to their parent with a rigid short link. Putting them in the
+  resolution ladder would have added 2,000-3,000 nodes to a view that is deliberately a few hundred.
+- **Nodes carry `null` opportunity, not zero,** where nothing beneath them is assessed, and every
+  roll-up reports `coverage` — the share of a node's weight that has been assessed. Without it a
+  half-finished run reads as a low-opportunity workforce.
+- **The graph's opportunity ramp is stretched to the observed range,** not the absolute 0-80 used in
+  the tables. Real cluster automation spans about 20-40%, which on 0-80 is twenty-five degrees of
+  blue. The legend carries the actual endpoints, which is what makes the stretch honest.
+- **Cuts above ~600 nodes now warn.** "Finest" on this project is 1,870 nodes and 10,300 links; the
+  layout settles into a mass. The button stays, and says so. A real fix belongs in Phase E's pass
+  over graph growth.
+- **One BlobProjectStore per process.** Every request was building a fresh `ClientSecretCredential`,
+  costing ~0.9s on any endpoint that touches blob. Unrelated to step 3, found by measuring it.
+
+Verified on `banking-demo/full-ja`: 35 offline assertions on the arithmetic; a live calibration run
+over 8 hand-picked contrasting clusters and 10 through the HTTP path (54 actions), with automation
+spanning 21-38% against augmentation 32-55% — building client relationships at 5% automation
+against matching transaction records at 65%. Both reports, both graph colour modes, action nodes,
+and the action modal checked in the browser. The remaining 740 clusters (~$14) are left for the user
+to run.
 
 **Phase C — The two generators.** Step 5 (filter, ranked tasks, skill generation, `.md` download,
 modal attachment) and Step 6 (filter, FTE ranking, single and bulk agent generation, impact report,

@@ -320,6 +320,61 @@ class TasksState(BaseModel):
     audit: dict = Field(default_factory=dict)
 
 
+class TaskActionRecord(BaseModel):
+    """One action inside a task cluster — Workforce Studio step 3.
+
+    A task cluster says *what kind of work* this is; its actions say what a person
+    actually does within it, which is the level AI opportunity is real at. "Handling
+    Customer Complaints" is not automatable or not; the acknowledgement letter inside
+    it largely is, and the judgement call on redress is not.
+
+    `pct_of_task` values for one cluster are guaranteed by code to sum to 100.
+    """
+
+    id: str
+    task_cluster_id: int
+    name: str
+    definition: str
+    pct_of_task: float
+    # What AI can do unattended, and how much faster a person is with AI help. Two
+    # separate axes because they genuinely diverge: contract review automates badly
+    # (someone must own a missed clause) and augments well (the reading disappears).
+    # One score would rank step 5's prompt list by how replaceable each task is.
+    automation_pct: float
+    augmentation_pct: float
+
+
+class TaskOpportunityRecord(BaseModel):
+    """A task cluster's rolled-up opportunity. Derived from its actions in code,
+    never asked of the model — same precedent as JE aggregation and dedupe."""
+
+    task_cluster_id: int
+    cluster_name: str
+    automation_pct: float
+    augmentation_pct: float
+    n_actions: int
+    # What the model's percentages summed to before normalisation, and whether any
+    # score had to be pulled back into range. Kept so a run's calibration quality is
+    # inspectable rather than invisible.
+    raw_pct_sum: float = 100.0
+    clamped: bool = False
+    computed_at: datetime | None = None
+
+
+class WorkforceState(BaseModel):
+    """Workforce Studio's own state. Phase B populates actions and opportunity;
+    processes, agents, skills guidance and future roles arrive with their phases."""
+
+    actions: list[TaskActionRecord] = Field(default_factory=list)
+    opportunity: list[TaskOpportunityRecord] = Field(default_factory=list)
+    # Hours in a full-time week, used only to express released capacity in hours.
+    # Configurable because a 35-hour and a 40-hour week give materially different
+    # numbers and neither is a safe silent default.
+    hours_per_fte_week: float = 37.5
+    graph_version: int = 1
+    audit: dict = Field(default_factory=dict)
+
+
 class TaxonomyCandidateRecord(BaseModel):
     """One shortlisted specialization the reranker chose from. Kept in full so a
     challenged match can be re-argued against what was actually on the table."""
@@ -392,3 +447,5 @@ class ProjectState(BaseModel):
     skills: SkillsState = Field(default_factory=SkillsState)
     tasks: TasksState = Field(default_factory=TasksState)
     matching: MatchingState = Field(default_factory=MatchingState)
+    # Workforce Studio. Reads everything above; nothing above reads it.
+    workforce: WorkforceState = Field(default_factory=WorkforceState)

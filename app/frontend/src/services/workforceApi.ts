@@ -1,4 +1,13 @@
-import type { GraphCut, GraphLevel, JobHandleLike, NodeDetail, WorkforceStatus } from "../types/workforce";
+import type {
+  ClusterOpportunityReport,
+  GraphCut,
+  GraphLevel,
+  JobHandleLike,
+  NodeDetail,
+  OpportunityStatus,
+  RoleOpportunityReport,
+  WorkforceStatus,
+} from "../types/workforce";
 
 /** Workforce Studio client. Mirrors pipelineApi's shape and its `/api` prefixing. */
 
@@ -28,5 +37,15 @@ export function workforceApi(clientSlug: string, projectSlug: string) {
           (opts.expand.length ? `&expand=${encodeURIComponent(opts.expand.join(","))}` : ""),
       ),
     node: (nodeId: string) => request<NodeDetail>(`${base}/node/${encodeURIComponent(nodeId)}`),
+
+    /** Step 3. `status` is free and carries the cost preview; `assess` spends. */
+    opportunityStatus: () => request<OpportunityStatus>(`${base}/opportunity/status`),
+    assess: (body: { cluster_ids?: number[]; limit?: number; redo?: boolean }) =>
+      request<JobHandleLike>(`${base}/opportunity/assess`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    opportunityClusters: () => request<ClusterOpportunityReport>(`${base}/opportunity/clusters`),
+    opportunityRoles: () => request<RoleOpportunityReport>(`${base}/opportunity/roles`),
   };
 }

@@ -103,6 +103,21 @@ class ProjectService:
             return None
         return np.load(io.BytesIO(data), allow_pickle=False)
 
+    # ---- arbitrary derived JSON artefacts ----
+    # For things too large to belong in the state blob, which is read on nearly
+    # every request. `name` is a path relative to the project, so a caller can
+    # namespace its own subtree (e.g. "workforce/graph_facts").
+    def save_json(self, client_slug: str, project_slug: str, name: str, data: dict) -> str:
+        path = f"{project_slug}/{name}.json"
+        self.store.write_json(client_slug, path, data)
+        return path
+
+    def load_json(self, client_slug: str, path: str) -> dict | None:
+        return self.store.read_json(client_slug, path)
+
+    def json_exists(self, client_slug: str, path: str) -> bool:
+        return self.store.blob_exists(client_slug, path)
+
     def save_index(
         self,
         client_slug: str,

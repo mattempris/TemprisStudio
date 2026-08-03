@@ -2,12 +2,13 @@ import { useProjectStore } from "./stores/projectStore";
 import { ProjectSelectPage } from "./pages/ProjectSelectPage";
 import { PipelinePage } from "./pages/PipelinePage";
 import { PaletteSwitcher } from "./components/ui/PaletteSwitcher";
+import { WorkforcePage } from "./pages/WorkforcePage";
 
 const TEMPRIS_LOGO_URL =
   "https://temprispublicfiles.blob.core.windows.net/files/Tempris%20Logos/Clear%20background/Tempris_Logo_Red.png";
 
 function App() {
-  const { clientSlug, project, clear } = useProjectStore();
+  const { clientSlug, project, clear, studio } = useProjectStore();
 
   return (
     <div className="min-h-screen bg-canvas">
@@ -33,7 +34,16 @@ function App() {
 
       <main>
         {project && clientSlug ? (
-          <PipelinePage clientSlug={clientSlug} projectSlug={project.project_slug} />
+          studio === "workforce" ? (
+            <WorkforcePage
+              clientSlug={clientSlug}
+              projectSlug={project.project_slug}
+              // Re-reads the graph's colours from the tokens when the palette changes.
+              paletteKey={document.documentElement.dataset.palette ?? "light"}
+            />
+          ) : (
+            <PipelinePage clientSlug={clientSlug} projectSlug={project.project_slug} />
+          )
         ) : (
           <ProjectSelectPage />
         )}

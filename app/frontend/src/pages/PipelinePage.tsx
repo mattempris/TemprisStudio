@@ -23,6 +23,8 @@ import type {
 import { StageSection, type StageState } from "../components/wizard/StageSection";
 import { ProgressBar } from "../components/wizard/ProgressBar";
 import { JobPulse } from "../components/wizard/JobPulse";
+import { ProceedToWorkforce, StudioToggle } from "../components/wizard/StudioToggle";
+import { workforceApi } from "../services/workforceApi";
 import { DedupePanel } from "../components/pipeline/DedupePanel";
 import { JEResultsBrowser } from "../components/pipeline/JEResultsBrowser";
 import { EntityTaxonomyStage } from "../components/pipeline/EntityTaxonomyStage";
@@ -98,6 +100,13 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
   // Per entity, per tier. Three hierarchies now use the same per-tier flow, so
   // the wizard needs all nine statuses rather than just the job hierarchy's three.
   const [tiers, setTiers] = useState<EntityTiers>(EMPTY_TIERS);
+  // Whether Workforce Studio can be entered, and what is missing if not. Comes from
+  // the workforce side rather than being re-derived here, so one definition of "the
+  // architecture is complete" serves the toggle, the button and the studio itself.
+  const [wfGate, setWfGate] = useState<{ ready: boolean; missing: string[] }>({
+    ready: false,
+    missing: [],
+  });
   // Per-run embedding choices. null model means "use the server default".
   const [jobModel, setJobModel] = useState<string | null>(null);
   const [forceCpu, setForceCpu] = useState(false);
@@ -142,6 +151,10 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
         .catch(() => {});
       // Keeps the "loaded" badges honest after a run put a model in memory.
       void api.embeddingModels().then(setEmbedModels).catch(() => {});
+      void workforceApi(clientSlug, projectSlug)
+        .status()
+        .then((w) => setWfGate({ ready: w.ready, missing: w.missing }))
+        .catch(() => {});
       setBackendDown(false);
       return s;
     } catch (e) {
@@ -259,6 +272,9 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
     <div className="mx-auto flex max-w-6xl gap-8 px-6 py-8">
       {/* sticky step indicator */}
       <nav className="sticky top-24 hidden h-fit w-52 shrink-0 lg:block">
+        <div className="mb-3">
+          <StudioToggle ready={wfGate.ready} missing={wfGate.missing} />
+        </div>
         <p className="mb-3 text-[10px] font-extrabold uppercase tracking-wider text-text-muted">Process</p>
         <ol className="space-y-1">
           {STAGES.map((s, i) => {
@@ -402,6 +418,10 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
             </div>
           </section>
         )}
+
+        {/* The instructions put this at the foot of the screen: the architecture is
+            finished, so the next thing to do is take it into Workforce Studio. */}
+        <ProceedToWorkforce ready={wfGate.ready} missing={wfGate.missing} />
       </div>
     </div>
   );

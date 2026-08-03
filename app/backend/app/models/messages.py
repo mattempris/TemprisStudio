@@ -31,6 +31,7 @@ StageName = Literal[
     "skills",
     "tasks",
     "matching",
+    "workforce",
 ]
 
 STAGE_NAMES: frozenset[str] = frozenset(get_args(StageName))

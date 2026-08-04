@@ -175,10 +175,58 @@ def _check(entity: str, tier: str) -> tier_state.EntitySpec:
         raise HTTPException(422, str(e)) from e
 
 
+def _linkage_name(entity: str, tier: str) -> str:
+    return f"tier_{entity}_{tier}_linkage"
+
+
+def _has_persisted_tree(
+    svc: ProjectService, state: ProjectState, entity: str, tier: str
+) -> bool:
+    """Whether a saved tree exists that still matches what this tier would cluster.
+
+    Checks the stored id list against the ids the tier would build *now*, without
+    downloading the tree itself — an existence check that ignored the ids would report
+    "built" for a tree that is about to be rejected as stale, which is a worse lie than
+    reporting not-built.
+    """
+    name = _linkage_name(entity, tier)
+    client, project = state.meta.client_slug, state.meta.project_slug
+    stored = svc.load_index(client, f"{project}/artifacts/{name}_index.json")
+    if not stored:
+        return False
+    try:
+        return stored == tier_state.expected_item_ids(svc, state, entity, tier)
+    except tier_state.TierNotReady:
+        return False
+
+
+def _load_cached_tree(
+    svc: ProjectService, client: str, project: str, entity: str, tier: str, ids: list[str]
+) -> np.ndarray | None:
+    """A previously saved Ward tree, if it was built from exactly these items.
+
+    The guard is the point. A linkage tree encodes row positions, so one built from a
+    different set — or the same set in a different order — would cut clusters over the
+    wrong rows and produce a plausible, wrong hierarchy. The id list is stored beside the
+    tree and compared in full; a mismatch means recompute, not adapt.
+    """
+    name = _linkage_name(entity, tier)
+    stored_ids = svc.load_index(client, f"{project}/artifacts/{name}_index.json")
+    if stored_ids is None or stored_ids != ids:
+        return None
+    tree = svc.load_array(client, f"{project}/artifacts/{name}.npy")
+    # A tree over n items has n-1 merge rows. Cheap to check and it catches a truncated
+    # or half-written blob, which would otherwise fail much later inside fcluster.
+    if tree is None or tree.ndim != 2 or tree.shape[0] != len(ids) - 1:
+        return None
+    return tree
+
+
 def _items_and_tree(
     svc: ProjectService, state: ProjectState, entity: str, tier: str
 ) -> tuple[tier_engine.TierItems, np.ndarray]:
-    key = (state.meta.client_slug, state.meta.project_slug, entity, tier)
+    client, project = state.meta.client_slug, state.meta.project_slug
+    key = (client, project, entity, tier)
     if key in _TIER_CACHE:
         return _TIER_CACHE[key]
     try:
@@ -191,7 +239,13 @@ def _items_and_tree(
             f"only {len(items)} items at the {tier} tier — at least 3 are needed to cluster. "
             f"Choose more clusters at the tier below.",
         )
-    tree = bb.build_linkage_tree(items.embeddings)
+
+    tree = _load_cached_tree(svc, client, project, entity, tier, items.ids)
+    if tree is None:
+        tree = bb.build_linkage_tree(items.embeddings)
+        name = _linkage_name(entity, tier)
+        svc.save_array(client, project, name, tree)
+        svc.save_index(client, project, name, items.ids)
     _TIER_CACHE[key] = (items, tree)
     return items, tree
 
@@ -280,6 +334,9 @@ def _status_payload(
 ) -> dict:
     es = tier_state.spec(entity)
     key = (client_slug, project_slug, entity, tier)
+    # Cheap to construct — the blob client is process-wide — and only used for the small
+    # index blob that says whether the persisted tree still matches.
+    svc = ProjectService()
     rec = tier_state.tiers_of(state, entity).get(tier)
 
     n_items = _expected_item_count(state, entity, tier)
@@ -301,7 +358,12 @@ def _status_payload(
         "label_noun": _LABEL_NOUN[entity],
         "embeds": tier == "profile",
         "embedding_entity": es.embeddings_entity,
-        "built": key in _TIER_CACHE,
+        # In memory, or recoverable from the persisted tree without recomputing Ward.
+        # This used to be process memory alone, so after any restart a confirmed tier
+        # demanded a full rebuild — 21-23MB of vectors plus a Ward recompute over 5,193
+        # items — before its controls would even appear. That is why re-clustering read as
+        # unavailable rather than slow.
+        "built": key in _TIER_CACHE or _has_persisted_tree(svc, state, entity, tier),
         "analysed_k": _ANALYSIS_CACHE[key].k if key in _ANALYSIS_CACHE else None,
         "stability_inline": (n_items or 0) <= INLINE_STABILITY_LIMIT,
         "confirmed": bool(rec and rec.names),

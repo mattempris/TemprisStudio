@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Play } from "lucide-react";
+import { ChevronRight, Play } from "lucide-react";
 import type { InvalidationPreview } from "../wizard/RepeatConfirm";
 import type { JobHandle, TaxonomyNode, TierName, TierStatus } from "../../types/pipeline";
 import { TaxonomyBrowser, normalizeTaxonomy, type TaxonomyKind } from "./TaxonomyBrowser";
@@ -87,6 +87,11 @@ export function EntityTaxonomyStage({
   // Whether the running job is this step's inference, as opposed to one of the
   // tiers' own jobs — which report next to their own buttons.
   const [ranInfer, setRanInfer] = useState(false);
+  // Which tiers are expanded. A confirmed tier renders its whole cluster list — 750
+  // tiles on the task tier — so the settled ones collapse and the one still needing a
+  // decision stays open. `undefined` means "follow that default"; an explicit entry is
+  // the user having overridden it, which must survive a status refresh.
+  const [openTiers, setOpenTiers] = useState<Partial<Record<TierName, boolean>>>({});
 
   const refresh = useCallback(async () => {
     if (!named) return;
@@ -145,11 +150,34 @@ export function EntityTaxonomyStage({
           const below = i === 0 ? null : tiers[TIER_ORDER[i - 1]];
           if (!st.ready_to_run && !(below?.confirmed ?? true)) return null;
           const api = tierApi(tier);
+          // Open unless confirmed, so the tier you have to act on is the one showing.
+          const isOpen = openTiers[tier] ?? !st.confirmed;
           return (
-            <div key={tier} className="rounded-[10px] border border-border bg-panel px-4 py-3">
-              <p className="mb-2 text-[11px] font-extrabold uppercase tracking-wider text-text-muted">
-                {i + 1}. {st.title}
-              </p>
+            <div key={tier} className="overflow-hidden rounded-[10px] border border-border bg-panel">
+              <button
+                onClick={() => setOpenTiers((prev) => ({ ...prev, [tier]: !isOpen }))}
+                className="flex w-full items-center gap-2 px-4 py-2.5 text-left transition-colors hover:bg-card"
+              >
+                <ChevronRight
+                  size={12}
+                  className={`shrink-0 text-text-muted transition-transform ${isOpen ? "rotate-90" : ""}`}
+                />
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-text-muted">
+                  {i + 1}. {st.title}
+                </span>
+                {/* Collapsed, this line is the only thing describing the tier, so it
+                    carries what a reader would otherwise have to expand to find. */}
+                {st.confirmed ? (
+                  <span className="text-[11px] text-text-secondary">
+                    {st.k} {st.title.toLowerCase()}
+                    {st.n_moved ? ` · ${st.n_moved} moved by the model` : ""}
+                  </span>
+                ) : (
+                  <span className="text-[11px] font-semibold text-accent">needs a decision</span>
+                )}
+              </button>
+              {isOpen && (
+              <div className="px-4 pb-3">
               <TierClusterStage
                 status={st}
                 preview={api.preview}
@@ -170,6 +198,8 @@ export function EntityTaxonomyStage({
                 // per tier: only one tier can be running at a time anyway.
                 progress={null}
               />
+              </div>
+              )}
             </div>
           );
         })}

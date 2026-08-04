@@ -147,6 +147,37 @@ def is_confirmed(state: ProjectState, entity: str, tier: str) -> bool:
     return bool(t and t.names)
 
 
+def expected_item_ids(
+    svc: ProjectService, state: ProjectState, entity: str, tier: str
+) -> list[str]:
+    """The ids this tier would cluster, without loading any vectors.
+
+    Deliberately mirrors `build_items`' id construction, including the `sorted(prev.names)`
+    order and the skip for a cluster id beyond the centroid matrix — a cached linkage tree
+    is only valid for the exact id list in the exact order that produced it, so an
+    approximation here would either reject valid trees or, worse, accept stale ones.
+
+    The profile tier reads its index blob (small) rather than the vectors (23 MB).
+    """
+    client, project = state.meta.client_slug, state.meta.project_slug
+    es = spec(entity)
+
+    if tier == "profile":
+        ids = svc.load_index(client, f"{project}/artifacts/{es.array_name}_index.json")
+        if ids is None:
+            raise TierNotReady(f"the {tier_noun(entity, 'profile')} have not been embedded yet")
+        return list(ids)
+
+    below = CHILD_OF[tier]
+    prev = tiers_of(state, entity).get(below)
+    if prev is None or not prev.names:
+        raise TierNotReady(f"the {below} tier must be confirmed before the {tier} tier")
+    # Cluster count rather than the matrix: the centroid array's row count is what
+    # build_items skips against, and `k` is that count by construction.
+    limit = prev.k if prev.k else max(prev.names, default=-1) + 1
+    return [f"{below}:{cid}" for cid in sorted(prev.names) if cid < limit]
+
+
 def build_items(
     svc: ProjectService, state: ProjectState, entity: str, tier: str
 ) -> tier_engine.TierItems:

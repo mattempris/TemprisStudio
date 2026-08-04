@@ -156,6 +156,30 @@ def main() -> int:
     store.write_json(DST_CLIENT, f"{DST_PROJECT}/demo/seed-state.json", rewritten)
     print("  seed snapshot written to demo/seed-state.json for reset")
 
+    # The manifest is what makes reset able to tell demo-created blobs from seeded ones,
+    # and overwritten ones from untouched. It is also the guard: only a project with a
+    # manifest can be reset, so a real project cannot be, however it is addressed.
+    from datetime import datetime, timezone
+
+    base = f"{PREFIX}/{DST_PROJECT}/"
+    after = {
+        b.name[len(base):]: b.size
+        for b in dst_container.list_blobs(name_starts_with=base)
+        # Must match demo.EXCLUDE: state/ has demo/seed-state.json as its authority on
+        # reset, and lineage/ is audit history a reset neither restores nor removes.
+        if not b.name[len(base):].startswith(("demo/", "state/", "lineage/"))
+    }
+    store.write_json(
+        DST_CLIENT,
+        f"{DST_PROJECT}/demo/manifest.json",
+        {
+            "seeded_at": datetime.now(timezone.utc).isoformat(),
+            "seeded_from": {"client": SRC_CLIENT, "project": SRC_PROJECT},
+            "blobs": after,
+        },
+    )
+    print(f"  manifest written: {len(after)} blobs recorded as the pristine state")
+
     check = svc.load_state(DST_CLIENT, DST_PROJECT)
     print(f"\nverified: {check.meta.client_slug}/{check.meta.project_slug} "
           f"({check.meta.display_name})")

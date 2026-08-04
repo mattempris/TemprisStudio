@@ -10,6 +10,7 @@ import { ProgressBar } from "../components/wizard/ProgressBar";
 import { JobPulse } from "../components/wizard/JobPulse";
 import { StageSection } from "../components/wizard/StageSection";
 import { StudioToggle } from "../components/wizard/StudioToggle";
+import { DemoReset } from "../components/wizard/DemoReset";
 import { Button } from "../components/ui/Button";
 import { Modal } from "../components/ui/Modal";
 import { HEAT_GRADIENT, opportunityColor, opportunitySpan } from "../lib/heat";
@@ -204,8 +205,12 @@ export function WorkforcePage({
         {/* The way back. Without this the toggle exists only on the JAStudio nav, so
             entering Workforce Studio was a one-way door — you could reach it and then
             had no route back to the architecture that feeds it. */}
-        <div className="mb-3">
+        <div className="mb-3 space-y-1.5">
           <StudioToggle ready missing={[]} />
+          {/* Reachable from both halves: a demo that needs resetting is usually one that
+              just cascaded a Workforce step, and walking back to find the button is the
+              last thing anyone wants to do mid-meeting. */}
+          <DemoReset />
         </div>
         <p className="mb-3 text-[11px] font-extrabold uppercase tracking-wider text-text-muted">
           Workforce

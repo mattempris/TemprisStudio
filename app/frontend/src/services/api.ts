@@ -39,6 +39,31 @@ export const api = {
     }),
   getProject: (clientSlug: string, projectSlug: string) =>
     request<ProjectMeta>(`/projects/${clientSlug}/${projectSlug}`),
+
+  // `is_demo` is false for every real project, which is what keeps the reset control from
+  // rendering anywhere it could do damage.
+  demoStatus: (clientSlug: string, projectSlug: string) =>
+    request<DemoStatus>(`/projects/${clientSlug}/${projectSlug}/demo/status`),
+  demoReset: (clientSlug: string, projectSlug: string) =>
+    request<DemoResetResult>(`/projects/${clientSlug}/${projectSlug}/demo/reset`, {
+      method: "POST",
+    }),
 };
+
+export interface DemoStatus {
+  is_demo: boolean;
+  drifted: boolean;
+  seeded_at?: string;
+  seeded_from?: { client: string; project: string };
+  blobs_at_seed?: number;
+  blobs_now?: number;
+  counts?: { added: number; removed: number; changed: number };
+}
+
+export interface DemoResetResult {
+  counts: { delete: number; restore: number };
+  unrepairable?: string[];
+  warning?: string;
+}
 
 export { ApiError };

@@ -24,6 +24,7 @@ import { StageSection, type StageState } from "../components/wizard/StageSection
 import { ProgressBar } from "../components/wizard/ProgressBar";
 import { JobPulse } from "../components/wizard/JobPulse";
 import { ProceedToWorkforce, StudioToggle } from "../components/wizard/StudioToggle";
+import { DemoReset } from "../components/wizard/DemoReset";
 import { workforceApi } from "../services/workforceApi";
 import { DedupePanel } from "../components/pipeline/DedupePanel";
 import { JEResultsBrowser } from "../components/pipeline/JEResultsBrowser";
@@ -272,8 +273,10 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
     <div className="mx-auto flex max-w-6xl gap-8 px-6 py-8">
       {/* sticky step indicator */}
       <nav className="sticky top-24 hidden h-fit w-52 shrink-0 lg:block">
-        <div className="mb-3">
+        <div className="mb-3 space-y-1.5">
           <StudioToggle ready={wfGate.ready} missing={wfGate.missing} />
+          {/* Renders only on a seeded demo project — absent everywhere else. */}
+          <DemoReset />
         </div>
         <p className="mb-3 text-[10px] font-extrabold uppercase tracking-wider text-text-muted">Process</p>
         <ol className="space-y-1">

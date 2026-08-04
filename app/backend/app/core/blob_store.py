@@ -21,17 +21,12 @@ Layout within `client-<slug>/job-architecture/`:
         profiles/<profile_key>/...
         exports/<profile_key>/...
 
-New-client onboarding: the app's service principal has been observed to lack
-`Microsoft.Storage/storageAccounts/blobServices/containers/write` at the account
-scope (container creation fails with AuthorizationFailure) even though it can
-list and presumably read/write existing containers. Creating a brand-new
-`client-<slug>` container for a client that doesn't exist yet therefore requires
-an admin to either pre-create the container or grant the service principal the
-Storage Blob Data Contributor role at the **storage account** scope (not a
-per-container scope, since a not-yet-existing container can't be the scope
-target). `ensure_client_container()` below attempts creation and raises a clear,
-actionable `PermissionError` if that grant hasn't happened yet, rather than
-failing with an opaque Azure SDK exception.
+New-client onboarding: container creation **works** as of 2026-08-04 — verified by
+creating `client-fs-demo` from this service principal. It did not when this module was
+written, which is why `ensure_client_container()` still translates an AuthorizationFailure
+into an actionable PermissionError: the grant lives in Azure RBAC rather than in this repo,
+so it can be revoked without anything here changing, and an opaque SDK error at that point
+would be a poor way to find out.
 """
 from __future__ import annotations
 
@@ -210,6 +205,30 @@ class BlobProjectStore:
 
     def read_state(self, client_slug: str, project_slug: str) -> dict | None:
         return self.read_json(client_slug, f"{project_slug}/state/current.json")
+
+    def state_etag(self, client_slug: str, project_slug: str) -> str | None:
+        """The state blob's current ETag, without downloading it.
+
+        One metadata call against a 42.5 MB blob, which is what makes caching the parsed
+        state safe: another process writing is detected rather than assumed away.
+        """
+        path = self._app_path(f"{project_slug}/state/current.json")
+        try:
+            return self._container(client_slug).get_blob_client(path).get_blob_properties().etag
+        except ResourceNotFoundError:
+            return None
+
+    def read_state_with_etag(
+        self, client_slug: str, project_slug: str
+    ) -> tuple[dict | None, str | None]:
+        """State and the ETag it was read at, in one round trip."""
+        path = self._app_path(f"{project_slug}/state/current.json")
+        try:
+            stream = self._container(client_slug).get_blob_client(path).download_blob()
+        except ResourceNotFoundError:
+            return None, None
+        data = stream.readall()
+        return json.loads(data.decode("utf-8")), stream.properties.etag
 
     def write_project_meta(self, client_slug: str, project_slug: str, meta: dict) -> None:
         self.write_json(client_slug, f"{project_slug}/project.json", meta)

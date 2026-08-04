@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Play } from "lucide-react";
+import type { InvalidationPreview } from "../wizard/RepeatConfirm";
 import type { JobHandle, TaxonomyNode, TierName, TierStatus } from "../../types/pipeline";
 import { TaxonomyBrowser, normalizeTaxonomy, type TaxonomyKind } from "./TaxonomyBrowser";
 import { TierClusterStage } from "./TierClusterStage";
@@ -28,6 +29,8 @@ import { Button } from "../ui/Button";
 
 interface Props {
   kind: TaxonomyKind;
+  /** What re-confirming a tier would invalidate; forwarded to each tier. */
+  lineagePreview?: (step: string) => Promise<InvalidationPreview>;
   /** [family/domain, category, cluster] — used by the browser's tier headings. */
   tierLabels: [string, string, string];
   inferredCount: number;
@@ -63,6 +66,7 @@ const TIER_ORDER: TierName[] = ["profile", "category", "family"];
 
 export function EntityTaxonomyStage({
   kind,
+  lineagePreview,
   tierLabels,
   inferredCount,
   profilesCovered,
@@ -158,6 +162,8 @@ export function EntityTaxonomyStage({
                 onRename={api.rename}
                 onReassign={api.reassign}
                 runJob={runJob}
+                lineagePreview={lineagePreview}
+                lineageStep={`${kind}:${tier}`}
                 busy={busy}
                 activity={activity}
                 // One progress bar for the step, rendered above, rather than one

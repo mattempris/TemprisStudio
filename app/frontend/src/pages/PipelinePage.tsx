@@ -667,6 +667,8 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
               onRename={api_t.rename}
               onReassign={api_t.reassign}
               runJob={runJob}
+              lineagePreview={api.lineagePreview}
+              lineageStep={`job:${tier}`}
               busy={busy || job.running}
               progress={showProgress ? <ProgressBar job={job} /> : null}
               activity={showProgress ? <JobPulse job={job} /> : null}
@@ -749,6 +751,7 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
         return (
           <EntityTaxonomyStage
             kind="skill"
+            lineagePreview={api.lineagePreview}
             tierLabels={SKILL_LABELS.tiers}
             inferredCount={skills?.inferred_skills ?? 0}
             profilesCovered={skills?.profiles_covered ?? 0}
@@ -793,6 +796,7 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
         return (
           <EntityTaxonomyStage
             kind="task"
+            lineagePreview={api.lineagePreview}
             tierLabels={TASK_LABELS.tiers}
             inferredCount={tasks?.inferred_tasks ?? 0}
             profilesCovered={tasks?.profiles_covered ?? 0}

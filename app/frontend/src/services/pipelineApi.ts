@@ -1,3 +1,4 @@
+import type { InvalidationPreview } from "../components/wizard/RepeatConfirm";
 import type {
   Boilerplate,
   ClusterEntity,
@@ -67,6 +68,13 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
   const base = `/projects/${clientSlug}/${projectSlug}`;
   return {
     summary: () => request<StageSummary>(`${base}/summary`),
+
+    /** What re-running a step would invalidate. Drives the confirmation dialog, and is
+     *  computed by the same walk that performs the invalidation so the two agree. */
+    lineagePreview: (step: string) =>
+      request<InvalidationPreview>(
+        `${base}/lineage/preview?step=${encodeURIComponent(step)}`,
+      ),
 
     uploadFiles: (files: File[]) => {
       const form = new FormData();

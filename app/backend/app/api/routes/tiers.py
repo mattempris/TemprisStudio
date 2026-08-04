@@ -35,6 +35,7 @@ from app.services.clustering import tier as tier_engine
 from app.services.clustering import tier_state
 from app.services.embeddings import get_embedding_service
 from app.services.orchestrator import JobAlreadyRunning, ProgressReporter, get_registry, run_job
+from app.api.routes import lineage as lineage_routes
 from app.services.project_service import ProjectService
 
 router = APIRouter(
@@ -211,6 +212,12 @@ def _start_job(client_slug: str, project_slug: str, stage: str, work) -> dict:
 # tasks keep one wizard step each, with the three tier panels inside it, so all three
 # of their tiers report under the same stage.
 _JOB_STAGE = {"profile": "cluster", "category": "categories", "family": "families"}
+
+
+# The lineage key for an (entity, tier) pair. Mirrors the stage map above; kept next to
+# it so the two cannot drift apart unnoticed.
+def _lineage_step(entity: str, tier: str) -> str:
+    return f"{entity}:{tier}"
 
 
 def _stage(entity: str, tier: str) -> str:
@@ -592,8 +599,12 @@ async def tier_confirm(
         fresh = svc.load_state(client_slug, project_slug)
         dropped = [t for t in tier_state.ORDER[tier_state.ORDER.index(tier) + 1 :]
                    if t in tier_state.tiers_of(fresh, entity)]
+        # Before writing the new tier: everything downstream describes the old one.
+        # `save_tier` drops the coarser tiers inside this hierarchy; this covers the rest
+        # of the app, which previously kept profiles, taxonomies, matches, the opportunity
+        # assessment, agents and the graph all keyed to clusters that no longer existed.
+        invalidated = lineage_routes.cascade(svc, fresh, _lineage_step(entity, tier))
         tier_state.save_tier(svc, fresh, entity, tier, result, embedding_model=model_name)
-        _invalidate_downstream(fresh, entity, tier)
         svc.save_state(
             fresh,
             action=f"confirm-{entity}-{tier}-tier",
@@ -601,6 +612,7 @@ async def tier_confirm(
                 "entity": entity, "tier": tier, "k": req.k, "gate": req.gate,
                 "n_routed": result.n_routed, "n_moved": result.n_moved,
                 "tiers_invalidated": dropped,
+                "invalidated": [i["step"] for i in invalidated],
             },
         )
         # The tier above now clusters different things, so its cached tree is stale.
@@ -616,6 +628,7 @@ async def tier_confirm(
             "routed": result.n_routed, "moved_by_model": result.n_moved,
             "low_confidence": result.low_confidence, "multi_home": result.multi_home,
             "tiers_invalidated": len(dropped),
+            "invalidated": invalidated,
         }
         if len(result.names) < req.k:
             summary["emptied_by_routing"] = req.k - len(result.names)
@@ -854,14 +867,7 @@ def tier_rename(
     }
 
 
-def _invalidate_downstream(state: ProjectState, entity: str, tier: str) -> None:
-    """Drop work keyed to the clusters this tier just replaced.
-
-    Skill proficiency criteria are written per skill cluster and each job's assigned
-    level points at one, so re-clustering skills leaves both describing clusters that
-    no longer exist. Dropping them is the honest outcome; the alternative is a
-    proficiency map that silently refers to an older taxonomy.
-    """
-    if entity == "skill":
-        state.skills.cluster_proficiencies = []
-        state.skills.profile_requirements = []
+# `_invalidate_downstream` lived here and dropped skill proficiency when the skill
+# taxonomy was re-cut. It is gone: proficiency is now a declared descendant of
+# skill:family in services/lineage.py, so it is invalidated by the same walk that handles
+# everything else, and the special case cannot fall out of step with the general rule.

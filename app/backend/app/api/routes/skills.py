@@ -22,6 +22,7 @@ from app.models.project_state import (
 )
 from app.services import llm
 from app.services.orchestrator import JobAlreadyRunning, ProgressReporter, get_registry, run_job
+from app.api.routes import lineage as lineage_routes
 from app.services.project_service import ProjectService
 from app.services.skills import inference, proficiency
 
@@ -129,9 +130,10 @@ async def infer_skills(
         ]
         fresh.skills.audit = audit.summary()
         # re-inferring invalidates the taxonomy built from the previous skill set
-        fresh.skills.clustering = None
-        fresh.skills.cluster_proficiencies = []
-        fresh.skills.profile_requirements = []
+        # The taxonomy, the proficiency map and everything downstream are all declared
+        # descendants of this step, so the cascade owns clearing them. Doing it by hand
+        # first would zero the counts before they were reported.
+        invalidated = lineage_routes.cascade(svc, fresh, "skills:infer")
         svc.save_state(
             fresh,
             action="infer-skills",
@@ -139,6 +141,7 @@ async def infer_skills(
         )
 
         summary = {
+            "invalidated": invalidated,
             "skills": len(flat),
             "profiles": len(payload),
             "mean_per_profile": round(len(flat) / max(1, len(payload)), 1),

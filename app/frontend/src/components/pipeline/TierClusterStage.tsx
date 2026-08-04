@@ -10,6 +10,10 @@ import type {
 } from "../../types/pipeline";
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
+import {
+  useRepeatConfirm,
+  type InvalidationPreview,
+} from "../wizard/RepeatConfirm";
 import { Collapsible } from "../ui/Collapsible";
 import { Tooltip, TitleListTooltip } from "../ui/Tooltip";
 import { Modal } from "../ui/Modal";
@@ -59,6 +63,11 @@ interface Props {
   onRename: (clusterId: number, name: string) => Promise<unknown>;
   onReassign: (itemId: string, clusterId: number) => Promise<unknown>;
   runJob: (start: () => Promise<JobHandle>) => void;
+  /** What re-confirming this tier would invalidate. Omitted on tiers that cannot yet
+   *  have anything built on them. */
+  lineagePreview?: (step: string) => Promise<InvalidationPreview>;
+  /** Lineage key for this tier, e.g. "task:category". */
+  lineageStep?: string;
   busy: boolean;
   progress: React.ReactNode;
   /** Inline spinner + heartbeat, shown beside whichever button is running. */
@@ -78,6 +87,8 @@ export function TierClusterStage({
   onRename,
   onReassign,
   runJob,
+  lineagePreview,
+  lineageStep,
   busy,
   progress,
   activity,
@@ -91,6 +102,18 @@ export function TierClusterStage({
   // Which button started the job, so its progress renders next to that button
   // rather than at the bottom of a step that can be several screens tall.
   const [ran, setRan] = useState<"build" | "analyse" | "confirm" | null>(null);
+  // Re-confirming a confirmed tier invalidates everything built on the old one, so it
+  // asks first. A first confirmation has nothing to lose and goes straight through.
+  const repeat = useRepeatConfirm(
+    lineagePreview ?? (async () => ({
+      step: "",
+      title: "",
+      affected: [],
+      clears: [],
+      marks_stale: [],
+      needs_confirmation: false,
+    })),
+  );
   const [opened, setOpened] = useState<number | null>(null);
   const requestId = useRef(0);
 
@@ -184,6 +207,7 @@ export function TierClusterStage({
 
   return (
     <div className="space-y-4">
+      {repeat.dialog}
       {!status.built ? (
         <div className="space-y-2">
           {/* `built` means the Ward tree is in the server's memory, which it is not
@@ -395,7 +419,11 @@ export function TierClusterStage({
           <div className="flex flex-wrap items-center gap-3">
             <Button
               variant="primary"
-              onClick={() => start("confirm", () => onConfirm(k, gate))}
+              onClick={() => {
+                const go = () => start("confirm", () => onConfirm(k, gate));
+                if (status.confirmed && lineageStep) repeat.ask(lineageStep, go);
+                else go();
+              }}
               disabled={busy || !!error || !k}
             >
               <span className="flex items-center gap-1.5">

@@ -57,6 +57,7 @@ from app.services.orchestrator import (
     get_registry,
     run_job,
 )
+from app.api.routes import lineage as lineage_routes
 from app.services.project_service import ProjectService, framework_hash
 
 router = APIRouter(prefix="/api/projects/{client_slug}/{project_slug}", tags=["pipeline"])
@@ -760,33 +761,18 @@ def confirm_dedupe(client_slug: str, project_slug: str, req: ConfirmDedupeReques
     state.dedupe_threshold = req.threshold
     state.dedupe_groups = final
     state.meta.current_stage = StageName.dedupe
-    # changing dedupe invalidates everything downstream of it
-    _invalidate_from(state, "dedupe")
+    invalidated = lineage_routes.cascade(svc, state, "dedupe")
     svc.save_state(
         state,
         action="confirm-dedupe",
-        lineage_payload={"threshold": req.threshold, "groups": len(final), "manual": req.groups is not None},
+        lineage_payload={
+            "threshold": req.threshold,
+            "groups": len(final),
+            "manual": req.groups is not None,
+            "invalidated": [i["step"] for i in invalidated],
+        },
     )
-    return {"groups": len(final), "threshold": req.threshold}
-
-
-def _invalidate_from(state: ProjectState, stage: str) -> None:
-    """Cascade staleness when an upstream stage is re-run.
-
-    Downstream artifacts are marked stale rather than deleted — lineage keeps
-    everything, and the user gets told what was invalidated instead of silently
-    losing work.
-    """
-    order = ["dedupe", "normalize", "cluster", "profiles"]
-    idx = order.index(stage)
-    if idx < order.index("normalize"):
-        state.normalized_profiles = []
-    if idx < order.index("cluster"):
-        state.clustering = None
-    for p in state.job_profiles:
-        p.stale = True
-    for r in state.je_results:
-        r.stale = True
+    return {"groups": len(final), "threshold": req.threshold, "invalidated": invalidated}
 
 
 # ===========================================================================

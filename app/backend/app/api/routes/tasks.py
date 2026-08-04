@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from app.models.project_state import InferredTaskRecord, ProjectState
 from app.services import llm
 from app.services.orchestrator import JobAlreadyRunning, ProgressReporter, get_registry, run_job
+from app.api.routes import lineage as lineage_routes
 from app.services.project_service import ProjectService
 from app.services.tasks import inference
 
@@ -109,7 +110,9 @@ async def infer_tasks(
             for t in flat
         ]
         fresh.tasks.audit = audit.summary()
-        fresh.tasks.clustering = None  # re-inferring invalidates the old taxonomy
+        # The taxonomy and everything downstream of it are declared descendants of this
+        # step, so the cascade owns clearing them — and counts them before it does.
+        invalidated = lineage_routes.cascade(svc, fresh, "tasks:infer")
         svc.save_state(
             fresh,
             action="infer-tasks",
@@ -117,6 +120,7 @@ async def infer_tasks(
         )
 
         summary = {
+            "invalidated": invalidated,
             "tasks": len(flat),
             "profiles": len(payload),
             "mean_per_profile": round(len(flat) / max(1, len(payload)), 1),

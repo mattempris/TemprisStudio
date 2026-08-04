@@ -23,6 +23,8 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import threading
+from collections import OrderedDict
 from datetime import datetime, timezone
 
 import numpy as np
@@ -35,21 +37,66 @@ class ProjectNotFound(LookupError):
     pass
 
 
+# Parsed state per (client, project), with the ETag it was read at. Shared across every
+# ProjectService instance because they are constructed per request and the point is to not
+# re-download per request.
+#
+# Bounded to a handful of projects: a session works on one, and an unbounded cache of
+# 42 MB objects is a memory leak with extra steps.
+_STATE_CACHE: "OrderedDict[tuple[str, str], tuple[str, ProjectState]]" = OrderedDict()
+_STATE_CACHE_MAX = 4
+_STATE_LOCK = threading.Lock()
+
+
+def invalidate_state_cache(client_slug: str | None = None, project_slug: str | None = None) -> None:
+    """Drop cached state. Called after a write, and available to tests."""
+    with _STATE_LOCK:
+        if client_slug is None or project_slug is None:
+            _STATE_CACHE.clear()
+        else:
+            _STATE_CACHE.pop((client_slug, project_slug), None)
+
+
 class ProjectService:
     def __init__(self, store: BlobProjectStore | None = None):
         self.store = store or BlobProjectStore()
 
     # ---- state ----
     def load_state(self, client_slug: str, project_slug: str) -> ProjectState:
-        raw = self.store.read_state(client_slug, project_slug)
+        """The project's state, from cache when the blob has not changed.
+
+        Returns a deep copy, always. Callers mutate what they get back — every stage does
+        `fresh = load_state(...)`, edits it and saves — and handing out the cached object
+        would let one request's half-finished edits leak into the next one's read.
+        """
+        key = (client_slug, project_slug)
+        with _STATE_LOCK:
+            cached = _STATE_CACHE.get(key)
+        if cached is not None:
+            etag, state = cached
+            if self.store.state_etag(client_slug, project_slug) == etag:
+                with _STATE_LOCK:
+                    _STATE_CACHE.move_to_end(key)
+                return state.model_copy(deep=True)
+
+        raw, etag = self.store.read_state_with_etag(client_slug, project_slug)
         if raw is None:
             # No state yet (project just created) — synthesize an empty state
-            # around the meta so callers always get a usable object.
+            # around the meta so callers always get a usable object. Not cached: there is
+            # no ETag to revalidate against.
             meta_raw = self.store.read_project_meta(client_slug, project_slug)
             if meta_raw is None:
                 raise ProjectNotFound(f"{client_slug}/{project_slug}")
             return ProjectState(meta=ProjectMeta.model_validate(meta_raw))
-        return ProjectState.model_validate(raw)
+
+        state = ProjectState.model_validate(raw)
+        if etag:
+            with _STATE_LOCK:
+                _STATE_CACHE[key] = (etag, state)
+                _STATE_CACHE.move_to_end(key)
+                while len(_STATE_CACHE) > _STATE_CACHE_MAX:
+                    _STATE_CACHE.popitem(last=False)
+        return state.model_copy(deep=True)
 
     def save_state(
         self,
@@ -69,6 +116,9 @@ class ProjectService:
 
         payload = state.model_dump(mode="json")
         self.store.write_state(client, project, payload)
+        # The blob's ETag has changed, so the next read would re-download anyway. Dropping
+        # it here means the very next reader does not pay for a stale-cache round trip.
+        invalidate_state_cache(client, project)
         self.store.write_project_meta(client, project, state.meta.model_dump(mode="json"))
         self.store.write_lineage_entry(client, project, action, lineage_payload or {})
 

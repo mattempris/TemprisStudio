@@ -477,7 +477,11 @@ export function WorkforcePage({
                         {colorMode === "opportunity" && cut.has_opportunity ? (
                           <OpportunityLegend span={span} />
                         ) : (
-                          <Legend hasActions={cut.totals.actions > 0} />
+                          <Legend
+                            hasActions={cut.totals.actions > 0}
+                            hasProcesses={cut.totals.processes > 0}
+                            hasUnmapped={cut.totals.unmapped_steps > 0}
+                          />
                         )}
                       </div>
 
@@ -533,6 +537,15 @@ export function WorkforcePage({
                         card; link thickness is the strength of the relationship.
                         {cut.has_opportunity &&
                           " Opening a task cluster at the finest resolution shows the actions inside it."}
+                        {cut.totals.processes > 0 &&
+                          (cut.totals.processes === 1
+                            ? " One uploaded process sits on the right, linked to the task clusters its steps map to"
+                            : ` ${cut.totals.processes} uploaded processes sit on the right, linked to the task clusters their steps map to`) +
+                            (cut.totals.unmapped_steps > 0
+                              ? `, with ${cut.totals.unmapped_steps} step${
+                                  cut.totals.unmapped_steps === 1 ? "" : "s"
+                                } that matched no task cluster.`
+                              : ".")}
                       </p>
                     </>
                   )}
@@ -611,12 +624,22 @@ function FilterGroup({
   );
 }
 
-function Legend({ hasActions = false }: { hasActions?: boolean }) {
+function Legend({
+  hasActions = false,
+  hasProcesses = false,
+  hasUnmapped = false,
+}: {
+  hasActions?: boolean;
+  hasProcesses?: boolean;
+  hasUnmapped?: boolean;
+}) {
   const items = [
     ["job", "Jobs", "bg-accent"],
     ["skill", "Skills", "bg-teal"],
     ["task", "Tasks", "bg-purple"],
     ...(hasActions ? ([["action", "Actions", "bg-orange"]] as const) : []),
+    ...(hasProcesses ? ([["process", "Processes", "bg-brand"]] as const) : []),
+    ...(hasUnmapped ? ([["unmapped", "No matching task", "bg-warning"]] as const) : []),
   ] as const;
   return (
     <span className="flex items-center gap-3">

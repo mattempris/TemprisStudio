@@ -84,6 +84,15 @@ export function OpportunityStage({
     }
   };
 
+  // Actions are per task cluster, so one lookup serves every role that does that work.
+  // The cluster report is already loaded for the other view; this reuses it rather than
+  // repeating 3,800 action rows once per role in the roles payload.
+  const actionsByCluster = useMemo(() => {
+    const map = new Map<number, ClusterOpportunity["actions"]>();
+    for (const c of clusters?.clusters ?? []) map.set(c.cluster_id, c.actions);
+    return map;
+  }, [clusters]);
+
   if (!status) return <p className="text-[12px] text-text-muted">Loading…</p>;
 
   const { remaining, assessed, task_clusters } = status;
@@ -186,7 +195,9 @@ export function OpportunityStage({
             )}
           </div>
 
-          {view === "roles" && roles && <RoleReport report={roles} heat={heat} />}
+          {view === "roles" && roles && (
+            <RoleReport report={roles} heat={heat} actionsByCluster={actionsByCluster} />
+          )}
           {view === "clusters" && clusters && <ClusterReport report={clusters} heat={heat} />}
         </>
       )}
@@ -278,7 +289,15 @@ function Pct({ value, heat }: { value: number | null; heat: boolean }) {
 // ---------------------------------------------------------------------------
 // By role — instructions step 3, demo section 6
 // ---------------------------------------------------------------------------
-function RoleReport({ report, heat }: { report: RoleOpportunityReport; heat: boolean }) {
+function RoleReport({
+  report,
+  heat,
+  actionsByCluster,
+}: {
+  report: RoleOpportunityReport;
+  heat: boolean;
+  actionsByCluster: Map<number, ClusterOpportunity["actions"]>;
+}) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState<string | null>(null);
   const t = report.totals;
@@ -338,6 +357,7 @@ function RoleReport({ report, heat }: { report: RoleOpportunityReport; heat: boo
             key={r.profile_key}
             role={r}
             heat={heat}
+            actionsByCluster={actionsByCluster}
             hasHeadcount={report.has_headcount}
             open={open === r.profile_key}
             onToggle={() => setOpen(open === r.profile_key ? null : r.profile_key)}
@@ -359,16 +379,21 @@ function RoleReport({ report, heat }: { report: RoleOpportunityReport; heat: boo
 function RoleRow({
   role,
   heat,
+  actionsByCluster,
   hasHeadcount,
   open,
   onToggle,
 }: {
   role: RoleOpportunity;
   heat: boolean;
+  actionsByCluster: Map<number, ClusterOpportunity["actions"]>;
   hasHeadcount: boolean;
   open: boolean;
   onToggle: () => void;
 }) {
+  // Which task within this role has its actions showing. One at a time: the actions are
+  // four or five rows each, and several open at once turns the role back into a wall.
+  const [openTask, setOpenTask] = useState<number | null>(null);
   return (
     <div className="border-b border-border last:border-0">
       <button
@@ -409,31 +434,89 @@ function RoleRow({
       {open && (
         <div className="bg-panel px-3 pb-2.5 pt-1">
           <div className="flex items-center gap-3 py-1 text-[10px] font-extrabold uppercase tracking-wider text-text-muted">
+            <span className="w-[10px] shrink-0" />
             <span className="min-w-0 flex-1">Task</span>
             <span className="w-14 text-right">% of role</span>
             <span className="w-16 text-right">Automate</span>
             <span className="w-16 text-right">Augment</span>
           </div>
-          {role.tasks.map((t, i) => (
-            <div
-              key={`${t.cluster_id}-${i}`}
-              className="flex items-center gap-3 border-t border-border py-1"
-            >
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[11.5px] text-text">{t.name}</span>
-                <span className="block truncate text-[10.5px] text-text-muted">{t.cluster}</span>
-              </span>
-              <span className="w-14 text-right text-[11.5px] tabular-nums text-text-secondary">
-                {t.proportion.toFixed(1)}
-              </span>
-              <span className="w-16 text-right">
-                <Pct value={t.automation} heat={heat} />
-              </span>
-              <span className="w-16 text-right">
-                <Pct value={t.augmentation} heat={heat} />
-              </span>
-            </div>
-          ))}
+          {role.tasks.map((t, i) => {
+            const actions = actionsByCluster.get(t.cluster_id) ?? [];
+            const isOpen = openTask === t.cluster_id;
+            return (
+              <div key={`${t.cluster_id}-${i}`} className="border-t border-border">
+                <button
+                  onClick={() => setOpenTask(isOpen ? null : t.cluster_id)}
+                  disabled={actions.length === 0}
+                  className="flex w-full items-center gap-3 py-1 text-left transition-colors hover:bg-card disabled:cursor-default disabled:hover:bg-transparent"
+                >
+                  <ChevronRight
+                    size={10}
+                    className={`shrink-0 transition-transform ${
+                      isOpen ? "rotate-90 text-text-secondary" : "text-text-muted"
+                    } ${actions.length === 0 ? "invisible" : ""}`}
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[11.5px] text-text">{t.name}</span>
+                    <span className="block truncate text-[10.5px] text-text-muted">
+                      {t.cluster}
+                      {actions.length > 0 && ` · ${actions.length} actions`}
+                    </span>
+                  </span>
+                  <span className="w-14 text-right text-[11.5px] tabular-nums text-text-secondary">
+                    {t.proportion.toFixed(1)}
+                  </span>
+                  <span className="w-16 text-right">
+                    <Pct value={t.automation} heat={heat} />
+                  </span>
+                  <span className="w-16 text-right">
+                    <Pct value={t.augmentation} heat={heat} />
+                  </span>
+                </button>
+
+                {isOpen && (
+                  <div className="mb-1 ml-[22px] rounded-[6px] border border-border bg-card px-2.5 py-1.5">
+                    <div className="flex items-center gap-3 pb-1 text-[9.5px] font-extrabold uppercase tracking-wider text-text-muted">
+                      <span className="min-w-0 flex-1">Action within this task</span>
+                      <span className="w-14 text-right">% of task</span>
+                      <span className="w-16 text-right">Automate</span>
+                      <span className="w-16 text-right">Augment</span>
+                    </div>
+                    {actions.map((a) => (
+                      <div
+                        key={a.name}
+                        className="flex items-start gap-3 border-t border-border py-1"
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-[11px] font-semibold text-text">
+                            {a.name}
+                          </span>
+                          <span className="block text-[10.5px] leading-snug text-text-secondary">
+                            {a.definition}
+                          </span>
+                        </span>
+                        <span className="w-14 shrink-0 text-right text-[11px] tabular-nums text-text-secondary">
+                          {a.pct_of_task.toFixed(0)}
+                        </span>
+                        <span className="w-16 shrink-0 text-right">
+                          <Pct value={a.automation} heat={heat} />
+                        </span>
+                        <span className="w-16 shrink-0 text-right">
+                          <Pct value={a.augmentation} heat={heat} />
+                        </span>
+                      </div>
+                    ))}
+                    {/* The task's own score is the effort-weighted mean of these, so the
+                        rows above should reconcile to the chip on the task line. */}
+                    <p className="border-t border-border pt-1 text-[10px] text-text-muted">
+                      The task's {t.automation?.toFixed(0)}% automatable is these actions
+                      weighted by their share of the task.
+                    </p>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

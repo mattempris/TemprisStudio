@@ -39,7 +39,11 @@ ENTITIES: tuple[str, str, str] = ("job", "skill", "task")
 # question worth drawing. Kept out of ENTITIES so the roll-up code never has to
 # special-case a hierarchy that has one level.
 ACTION_ENTITY = "action"
-GRAPH_ENTITIES: tuple[str, ...] = ENTITIES + (ACTION_ENTITY,)
+# Processes are not a hierarchy either: one node per uploaded document, plus one per step
+# that matched no task cluster.
+PROCESS_ENTITY = "process"
+UNMAPPED_ENTITY = "unmapped"
+GRAPH_ENTITIES: tuple[str, ...] = ENTITIES + (ACTION_ENTITY, PROCESS_ENTITY, UNMAPPED_ENTITY)
 
 LEVEL_TITLES: dict[str, dict[str, str]] = {
     "job": {"family": "Job family", "category": "Job category", "profile": "Job profile"},
@@ -113,6 +117,21 @@ class ActionFact:
 
 
 @dataclass
+class ProcessFact:
+    """One uploaded process, and how its steps landed on the task taxonomy."""
+
+    process_id: str
+    name: str
+    steps: int
+    mapped_steps: int
+    ordering_confidence: str
+    # (task cluster, number of steps landing there)
+    task_links: list[tuple[int, int]] = field(default_factory=list)
+    # Steps that matched nothing: (step name, actor). The interesting output of step 2.
+    unmapped: list[tuple[str, str]] = field(default_factory=list)
+
+
+@dataclass
 class Facts:
     """The whole graph at leaf resolution. Serialised to one blob."""
 
@@ -134,6 +153,8 @@ class Facts:
     # `coverage_pct` is how much of the role's time sits in an assessed cluster —
     # without it, a half-assessed role reads as a low-opportunity one.
     job_opportunity: dict[int, tuple[float, float, float]] = field(default_factory=dict)
+    # Step 2. Empty until a process has been uploaded and mapped.
+    processes: list[ProcessFact] = field(default_factory=list)
 
     def to_json(self) -> dict:
         return {
@@ -157,6 +178,18 @@ class Facts:
             ],
             "task_opportunity": {str(k): list(v) for k, v in self.task_opportunity.items()},
             "job_opportunity": {str(k): list(v) for k, v in self.job_opportunity.items()},
+            "processes": [
+                {
+                    "process_id": p.process_id,
+                    "name": p.name,
+                    "steps": p.steps,
+                    "mapped_steps": p.mapped_steps,
+                    "ordering_confidence": p.ordering_confidence,
+                    "task_links": [list(x) for x in p.task_links],
+                    "unmapped": [list(x) for x in p.unmapped],
+                }
+                for p in self.processes
+            ],
         }
 
     @staticmethod
@@ -190,6 +223,18 @@ class Facts:
                 int(k): (float(v[0]), float(v[1]), float(v[2]))
                 for k, v in (d.get("job_opportunity") or {}).items()
             },
+            processes=[
+                ProcessFact(
+                    process_id=str(x["process_id"]),
+                    name=str(x["name"]),
+                    steps=int(x["steps"]),
+                    mapped_steps=int(x["mapped_steps"]),
+                    ordering_confidence=str(x.get("ordering_confidence", "low")),
+                    task_links=[(int(a), int(b)) for a, b in x.get("task_links", [])],
+                    unmapped=[(str(a), str(b)) for a, b in x.get("unmapped", [])],
+                )
+                for x in d.get("processes", [])
+            ],
         )
 
     def leaf_counts(self) -> dict[str, int]:
@@ -379,6 +424,30 @@ def build(state: ProjectState, *, version: int = 1) -> Facts:
                 round(sum(w * s[1] for w, s in parts) / covered, 1),
                 round(100.0 * covered / totals[jp], 1) if totals.get(jp) else 0.0,
             )
+
+    # ---- step 2: uploaded processes ----------------------------------------
+    for pr in state.workforce.processes:
+        counts: dict[int, int] = {}
+        unmapped: list[tuple[str, str]] = []
+        for st in pr.steps:
+            if st.task_cluster_id is not None and st.task_cluster_id in live:
+                counts[st.task_cluster_id] = counts.get(st.task_cluster_id, 0) + 1
+            elif pr.mapped_at:
+                # Only a *mapped* process can say a step matched nothing. Before mapping
+                # every step is unmatched, and drawing them all as gaps would invent a
+                # finding out of work not yet done.
+                unmapped.append((st.name, st.actor))
+        facts.processes.append(
+            ProcessFact(
+                process_id=pr.id,
+                name=pr.process_name,
+                steps=len(pr.steps),
+                mapped_steps=sum(1 for x in pr.steps if x.task_cluster_id is not None),
+                ordering_confidence=pr.ordering_confidence,
+                task_links=sorted(counts.items()),
+                unmapped=unmapped,
+            )
+        )
 
     return facts
 
@@ -584,6 +653,61 @@ def cut(
     for a in action_nodes:
         nodes[a["id"]] = a
 
+    # ---- process nodes -----------------------------------------------------
+    # Always drawn when they exist: there are a handful at most, they were uploaded
+    # deliberately, and a process missing from the one unifying view is the whole reason
+    # this was added. Their edges roll up with whatever task resolution is showing.
+    for pr in facts.processes:
+        pid = f"{PROCESS_ENTITY}:0:{pr.process_id}"
+        nodes[pid] = {
+            "id": pid,
+            "entity": PROCESS_ENTITY,
+            "level": "profile",
+            "cluster_id": 0,
+            "name": pr.name,
+            "level_title": "Process",
+            "metric": float(pr.steps),
+            "metric_title": "steps",
+            "members": pr.steps,
+            "leaves": 1,
+            "expandable": False,
+            "expanded": False,
+            "automation": None,
+            "augmentation": None,
+            "opportunity_coverage": 0.0,
+            "mapped_steps": pr.mapped_steps,
+            "unmapped_steps": len(pr.unmapped),
+            "ordering_confidence": pr.ordering_confidence,
+        }
+        for cluster, count in pr.task_links:
+            target = mapped["task"].get(cluster)
+            if target:
+                edges[(pid, target)] = edges.get((pid, target), 0.0) + count
+        for i, (step_name, actor) in enumerate(pr.unmapped):
+            uid = f"{UNMAPPED_ENTITY}:0:{pr.process_id}-{i}"
+            nodes[uid] = {
+                "id": uid,
+                "entity": UNMAPPED_ENTITY,
+                "level": "profile",
+                "cluster_id": 0,
+                "name": step_name,
+                "level_title": "Step with no matching task",
+                "metric": 1.0,
+                "metric_title": "step",
+                "members": 1,
+                "leaves": 1,
+                "expandable": False,
+                "expanded": False,
+                "automation": None,
+                "augmentation": None,
+                "opportunity_coverage": 0.0,
+                "definition": (
+                    f"Performed by {actor}. No task cluster matched, so this is work "
+                    "the job descriptions never described."
+                ),
+            }
+            edges[(pid, uid)] = 1.0
+
     return {
         "levels": {e: levels.get(e, "family") for e in ENTITIES},
         "shown": list(show),
@@ -599,6 +723,8 @@ def cut(
             "nodes": len(nodes),
             "edges": len(edges),
             "actions": len(action_nodes),
+            "processes": len(facts.processes),
+            "unmapped_steps": sum(len(p.unmapped) for p in facts.processes),
             "leaves": facts.leaf_counts(),
         },
     }
@@ -650,6 +776,11 @@ def node_detail(facts: Facts, node_id: str) -> dict:
     Later steps extend this rather than replacing it: a job profile gains its AI
     opportunity, its generated skills and its future design as those are produced.
     """
+    # Process and unmapped-step ids carry a string tail rather than an integer, so they
+    # are matched before the integer parse below rather than crashing it.
+    if node_id.startswith((f"{PROCESS_ENTITY}:", f"{UNMAPPED_ENTITY}:")):
+        return _process_detail(facts, node_id)
+
     try:
         entity, level, raw = node_id.split(":")
         cid = int(raw)
@@ -777,6 +908,78 @@ def node_detail(facts: Facts, node_id: str) -> dict:
         "related": related,
         "opportunity": opportunity,
         "actions": actions[:40],
+    }
+
+
+def _process_detail(facts: Facts, node_id: str) -> dict:
+    """A process node's modal, or one unmapped step's."""
+    entity, _lvl, tail = node_id.split(":", 2)
+    if entity == UNMAPPED_ENTITY:
+        process_id, _, idx = tail.rpartition("-")
+        pr = next((p for p in facts.processes if p.process_id == process_id), None)
+        if pr is None or not idx.isdigit() or int(idx) >= len(pr.unmapped):
+            raise ValueError(f"no unmapped step {node_id!r}")
+        name, actor = pr.unmapped[int(idx)]
+        return {
+            "id": node_id,
+            "entity": UNMAPPED_ENTITY,
+            "level": "profile",
+            "level_title": "Step with no matching task",
+            "name": name,
+            "definition": (
+                f"Performed by {actor}. No task cluster matched this step, so it is work "
+                "that exists in the process but that no job description described."
+            ),
+            "metric": 1,
+            "metric_title": "step",
+            "members": 1,
+            "leaves": 1,
+            "children_title": None,
+            "children": [],
+            "related": {},
+            "opportunity": None,
+            "actions": [],
+            "parent": {"id": f"{PROCESS_ENTITY}:0:{pr.process_id}", "name": pr.name},
+        }
+
+    pr = next((p for p in facts.processes if p.process_id == tail), None)
+    if pr is None:
+        raise ValueError(f"no process {node_id!r}")
+    tf = facts.entities["task"]
+    children = sorted(
+        (
+            {
+                "id": f"task:profile:{cluster}",
+                "name": label_of(tf, "profile", cluster),
+                "metric": count,
+                "members": count,
+            }
+            for cluster, count in pr.task_links
+        ),
+        key=lambda c: -c["metric"],
+    )
+    return {
+        "id": node_id,
+        "entity": PROCESS_ENTITY,
+        "level": "profile",
+        "level_title": "Process",
+        "name": pr.name,
+        "definition": (
+            f"{pr.steps} steps, {pr.mapped_steps} mapped onto the task taxonomy, "
+            f"{len(pr.unmapped)} matching nothing. Ordering confidence: "
+            f"{pr.ordering_confidence}."
+        ),
+        "metric": pr.steps,
+        "metric_title": "steps",
+        "members": pr.steps,
+        "leaves": 1,
+        "children_title": "Task cluster" if children else None,
+        "children": children,
+        "related": {
+            "unmapped": [{"name": n, "weight": 1} for n, _actor in pr.unmapped],
+        },
+        "opportunity": None,
+        "actions": [],
     }
 
 

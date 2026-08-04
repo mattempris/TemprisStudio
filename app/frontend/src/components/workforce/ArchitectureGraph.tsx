@@ -31,12 +31,14 @@ const ENTITY_TOKEN: Record<string, string> = {
   skill: "--color-teal",
   task: "--color-purple",
   action: "--color-orange",
+  process: "--color-brand",
+  unmapped: "--color-warning",
 };
 
 /** Which radius scale a node belongs to. Actions share the task scale: an action's
  *  metric is a slice of its cluster's, and on its own scale the largest action of a
  *  tiny cluster would draw the same size as the largest task in the project. */
-const SCALE_OF: Record<string, string> = { action: "task" };
+const SCALE_OF: Record<string, string> = { action: "task", unmapped: "process" };
 
 /** How the fill is chosen. "opportunity" answers "where in this architecture is the
  *  AI opportunity", which is the whole reason step 3's scores reach the graph. */
@@ -55,10 +57,17 @@ function token(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || "#888";
 }
 
-/** A link endpoint is an id before the simulation resolves it and a node after. */
-function isAction(endpoint: unknown): boolean {
-  if (typeof endpoint === "string") return endpoint.startsWith("action:");
-  return (endpoint as GraphNode | undefined)?.entity === "action";
+/** Whether a link endpoint is a node that belongs *inside* another rather than merely
+ *  relating to it — an action within its task cluster, an unmapped step within its
+ *  process. Those links are short and rigid; relationship links are weighted.
+ *
+ *  An endpoint is an id before the simulation resolves it and a node object after, so
+ *  both forms are handled. */
+function isStructural(endpoint: unknown): boolean {
+  if (typeof endpoint === "string")
+    return endpoint.startsWith("action:") || endpoint.startsWith("unmapped:");
+  const e = (endpoint as GraphNode | undefined)?.entity;
+  return e === "action" || e === "unmapped";
 }
 
 interface Simulated extends GraphNode {
@@ -337,12 +346,14 @@ export function ArchitectureGraph({
           // An action-to-cluster link is structural, not a weighted relationship: the
           // action *is* part of that cluster. Short and rigid so opening a cluster reads
           // as its contents rather than as unrelated nodes appearing.
-          .distance((l) => (isAction(l.target) ? 18 : 70))
+          .distance((l) => (isStructural(l.target) ? 18 : 70))
           // Capped well below 1. These cuts are dense — 36 nodes can carry 250 edges —
           // and at full strength every link pulls the whole thing into a single knot
           // that uses a fifth of the canvas. Weak links plus real repulsion is what
           // makes the clustering visible instead of collapsing it.
-          .strength((l) => (isAction(l.target) ? 1 : Math.min(0.5, l.weight / maxWeight + 0.04))),
+          .strength((l) =>
+            isStructural(l.target) ? 1 : Math.min(0.5, l.weight / maxWeight + 0.04),
+          ),
       )
       .force("charge", d3.forceManyBody().strength(-170).distanceMax(420))
       // Full strength, deliberately: this is what keeps the drawing in the middle of the
@@ -358,8 +369,12 @@ export function ArchitectureGraph({
       .force(
         "x",
         d3
-          .forceX<Simulated>((n) => (n.entity === "job" ? width * 0.34 : width * 0.64))
-          .strength((n) => (n.entity === "action" ? 0 : 0.08)),
+          .forceX<Simulated>((n) =>
+            n.entity === "job" ? width * 0.34 : n.entity === "process" ? width * 0.86 : width * 0.62,
+          )
+          // Actions and unmapped steps get no column: their place is beside the thing
+          // they belong to, which the structural link above already says.
+          .strength((n) => (n.entity === "action" || n.entity === "unmapped" ? 0 : 0.08)),
       )
       .on("tick", () => {
         link

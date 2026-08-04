@@ -2,7 +2,7 @@
 
 /** "action" is not a fourth hierarchy — it has one level and hangs off a single task
  *  cluster, appearing only when that cluster is opened. */
-export type GraphEntity = "job" | "skill" | "task" | "action";
+export type GraphEntity = "job" | "skill" | "task" | "action" | "process" | "unmapped";
 /** Coarse to fine. What each level is *called* differs per entity and comes from
  *  the server in `level_title`, since a task's finest level is a cluster and a
  *  job's is a profile. */
@@ -65,6 +65,9 @@ export interface GraphCut {
     nodes: number;
     edges: number;
     actions: number;
+    processes: number;
+    /** Steps that matched no task cluster — work no job description described. */
+    unmapped_steps: number;
     leaves: Record<string, number>;
   };
 }

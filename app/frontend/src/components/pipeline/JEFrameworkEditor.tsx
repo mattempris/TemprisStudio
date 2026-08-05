@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { AlertTriangle, ChevronRight, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
+import { AlertTriangle, ChevronRight, Plus, RotateCcw, Save, Sparkles, Trash2 } from "lucide-react";
 import type { JEFramework } from "../../types/pipeline";
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
@@ -27,13 +27,38 @@ interface Props {
   saving: boolean;
   /** True once evaluations exist — editing then invalidates them. */
   hasResults: boolean;
+  /** Asks the model to name the bands on screen for this client. Suggests only. */
+  onSuggestLevels?: (framework: JEFramework) => Promise<LevelSuggestion>;
 }
 
-export function JEFrameworkEditor({ framework, onSave, onReset, saving, hasResults }: Props) {
+export interface LevelSuggestion {
+  levels: {
+    min_score: number;
+    max_score: number;
+    current_name: string;
+    suggested_name: string;
+    rationale: string;
+    changed: boolean;
+  }[];
+  ladder_note: string;
+  changed: number;
+}
+
+export function JEFrameworkEditor({
+  framework,
+  onSave,
+  onReset,
+  saving,
+  hasResults,
+  onSuggestLevels,
+}: Props) {
   const [draft, setDraft] = useState<JEFramework>(framework);
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [dirty, setDirty] = useState(false);
   const [serverProblems, setServerProblems] = useState<string[]>([]);
+  const [suggestion, setSuggestion] = useState<LevelSuggestion | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestError, setSuggestError] = useState<string | null>(null);
 
   const toggle = (k: string) => setOpen((o) => ({ ...o, [k]: !o[k] }));
 
@@ -270,6 +295,125 @@ export function JEFrameworkEditor({ framework, onSave, onReset, saving, hasResul
           A profile's weighted score (0-100) falls into one of these bands. Bands must be
           contiguous — a gap leaves some scores with no level.
         </p>
+
+        {onSuggestLevels && (
+          <div className="mb-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                onClick={async () => {
+                  setSuggesting(true);
+                  setSuggestError(null);
+                  try {
+                    setSuggestion(await onSuggestLevels(draft));
+                  } catch (e) {
+                    setSuggestError(e instanceof Error ? e.message : "suggestion failed");
+                  } finally {
+                    setSuggesting(false);
+                  }
+                }}
+                disabled={suggesting || draft.level_bands.length === 0}
+              >
+                <span className="flex items-center gap-1.5">
+                  <Sparkles size={12} />
+                  {suggesting ? "Reading the architecture…" : "Suggest titles for this client"}
+                </span>
+              </Button>
+              <span className="text-[11px] text-text-muted">
+                Names only — the score boundaries are left alone.
+              </span>
+            </div>
+            {suggestError && (
+              <p className="mt-1.5 text-[11.5px] text-brand">{suggestError}</p>
+            )}
+          </div>
+        )}
+
+        {suggestion && (
+          <div className="mb-3 rounded-[10px] border border-accent-border bg-accent-bg px-3 py-2.5">
+            <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+              <p className="text-[11.5px] font-bold text-accent">
+                {suggestion.changed === 0
+                  ? "No changes suggested — the current names already fit"
+                  : `${suggestion.changed} of ${suggestion.levels.length} titles suggested`}
+              </p>
+              <div className="flex items-center gap-2">
+                {suggestion.changed > 0 && (
+                  <button
+                    onClick={() => {
+                      edit((d) => {
+                        // Matched on the band boundaries rather than list position: the
+                        // user may have added or reordered a band while the call was in
+                        // flight, and applying by index would rename the wrong rungs.
+                        for (const s of suggestion.levels) {
+                          const band = d.level_bands.find(
+                            (b) =>
+                              Math.abs(b.min_score - s.min_score) < 0.01 &&
+                              Math.abs(b.max_score - s.max_score) < 0.01,
+                          );
+                          if (band) band.name = s.suggested_name;
+                        }
+                      });
+                      setSuggestion(null);
+                    }}
+                    className="text-[11.5px] font-bold text-accent hover:underline"
+                  >
+                    Apply all
+                  </button>
+                )}
+                <button
+                  onClick={() => setSuggestion(null)}
+                  className="text-[11.5px] font-semibold text-text-secondary hover:text-text"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+            {suggestion.ladder_note && (
+              <p className="mb-2 flex gap-1.5 text-[11.5px] leading-snug text-warning">
+                <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                {suggestion.ladder_note}
+              </p>
+            )}
+            <ul className="space-y-1.5">
+              {suggestion.levels.map((s, i) => (
+                <li key={i} className="text-[11.5px] leading-snug">
+                  <div className="flex flex-wrap items-baseline gap-1.5">
+                    <span className="tabular-nums text-text-muted">
+                      {round(s.min_score)}–{round(s.max_score)}
+                    </span>
+                    {s.changed ? (
+                      <>
+                        <span className="text-text-muted line-through">{s.current_name}</span>
+                        <span className="text-text-muted">→</span>
+                        <span className="font-bold text-text">{s.suggested_name}</span>
+                        {/* Per-band apply, because the useful outcome is usually most of
+                            the ladder plus one name the client words differently. */}
+                        <button
+                          onClick={() =>
+                            edit((d) => {
+                              const band = d.level_bands.find(
+                                (b) =>
+                                  Math.abs(b.min_score - s.min_score) < 0.01 &&
+                                  Math.abs(b.max_score - s.max_score) < 0.01,
+                              );
+                              if (band) band.name = s.suggested_name;
+                            })
+                          }
+                          className="font-semibold text-accent hover:underline"
+                        >
+                          apply
+                        </button>
+                      </>
+                    ) : (
+                      <span className="text-text">{s.current_name} · unchanged</span>
+                    )}
+                  </div>
+                  <p className="text-[10.5px] text-text-secondary">{s.rationale}</p>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <ul className="space-y-1">
           {draft.level_bands.map((band, bi) => (
             <li key={bi} className="flex items-center gap-2">

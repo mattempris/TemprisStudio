@@ -99,6 +99,12 @@ def strip_one(raw_text: str, *, job_title: str | None = None) -> StripResult:
         json_schema=STRIP_SCHEMA,
         effort="low",
         max_tokens=16000,
+        # The only stage that opts out of the British-English house style. This one is
+        # strictly extractive — it may only return text that already exists in the source
+        # — and respelling a client's own job description would both break that guarantee
+        # and fail the fidelity check below. Anglicisation belongs downstream, where the
+        # app is writing its own prose rather than quoting theirs.
+        house_style=False,
     )
 
     stripped = result["stripped_text"].strip()

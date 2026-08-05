@@ -146,13 +146,36 @@ def is_cacheable(text: str | None) -> bool:
     return bool(text) and len(text) // _CHARS_PER_TOKEN >= MIN_CACHEABLE_TOKENS
 
 
-def _system_param(system: str | None, cache_prefix: str | None):
+# Applied to every generating call. Tempris is a UK consultancy and every artefact this
+# app produces is client-facing, so American spelling in a job profile or a cluster name
+# is a visible defect. Nothing used to say so, and "Normalize"/"organization"/"prioritize"
+# duly appeared in generated content — the model's default register is American unless
+# told otherwise.
+#
+# Injected centrally rather than pasted into a dozen prompts so a new stage inherits it
+# instead of having to remember it. Stages that must not alter wording opt out via
+# `house_style=False` (see `stripping`, which is strictly extractive).
+HOUSE_STYLE = (
+    "Write in British English throughout: -ise/-isation not -ize/-ization "
+    "(organisation, prioritise, normalise, specialised), -yse not -yze (analyse), "
+    "licence/practice as nouns, programme except for computer programs, and British "
+    "vocabulary (adviser not advisor, whilst-free plain English). This applies to every "
+    "string you return, including names, titles and short labels."
+)
+
+
+def _system_param(system: str | None, cache_prefix: str | None, house_style: bool = True):
     """Build the `system` argument, with a cache breakpoint after the shared part.
 
     A breakpoint caches everything *before and including* the block it sits on, so
     the ordering here matters: the short per-stage instructions come first and the
     large shared context second, and one marker on the second block covers both.
+
+    The house style rides along with the per-stage instructions rather than in its own
+    block, so it costs no extra block and stays inside whatever gets cached.
     """
+    if house_style:
+        system = f"{system}\n\n{HOUSE_STYLE}" if system else HOUSE_STYLE
     if not cache_prefix:
         return system
     blocks: list[dict] = []
@@ -288,6 +311,7 @@ def complete(
     effort: str = "medium",
     thinking: str = "adaptive",
     cache_prefix: str | None = None,
+    house_style: bool = True,
 ) -> str:
     # NOTE: temperature/top_p/top_k are NOT accepted by claude-sonnet-5 (or the
     # rest of the 4.6+ model family) — sending them returns a 400. Determinism
@@ -307,7 +331,7 @@ def complete(
     client = get_client()
 
     kwargs: dict = dict(model=model, max_tokens=max_tokens, thinking={"type": thinking})
-    system_param = _system_param(system, cache_prefix)
+    system_param = _system_param(system, cache_prefix, house_style)
     if system_param:
         kwargs["system"] = system_param
     if json_schema is not None:
@@ -384,6 +408,7 @@ def complete_json(
     effort: str = "medium",
     thinking: str = "adaptive",
     cache_prefix: str | None = None,
+    house_style: bool = True,
 ) -> Any:
     # One shared retry budget covering BOTH failure modes, since either can be
     # transient. Previously this passed retries=1 into complete() and only caught
@@ -405,6 +430,7 @@ def complete_json(
                 effort=effort,
                 thinking=thinking,
                 cache_prefix=cache_prefix,
+                house_style=house_style,
             )
             return parse_json(text)
         except LLMRequestError:
@@ -533,6 +559,7 @@ async def acomplete_json(
     retries: int = 4,
     thinking: str = "adaptive",
     cache_prefix: str | None = None,
+    house_style: bool = True,
 ) -> Any:
     """Async counterpart to complete_json, with the same retry semantics —
     non-retryable request errors fail fast; transient errors and parse failures
@@ -542,7 +569,7 @@ async def acomplete_json(
     client = get_async_client()
 
     kwargs: dict = dict(model=model, max_tokens=max_tokens, thinking={"type": thinking})
-    system_param = _system_param(system, cache_prefix)
+    system_param = _system_param(system, cache_prefix, house_style)
     if system_param:
         kwargs["system"] = system_param
     if json_schema is not None:

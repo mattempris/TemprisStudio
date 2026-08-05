@@ -1,3 +1,4 @@
+import type { LevelSuggestion } from "../components/pipeline/JEFrameworkEditor";
 import type { InvalidationPreview } from "../components/wizard/RepeatConfirm";
 import type {
   Boilerplate,
@@ -228,13 +229,24 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
         method: "PUT",
         body: JSON.stringify(framework),
       }),
+    /** Level band names proposed from the client's context and its own architecture.
+     *  Suggests only — nothing is saved until the user applies and saves the framework. */
+    suggestLevelTitles: (framework: JEFramework) =>
+      request<LevelSuggestion>(`${base}/je-framework/suggest-levels`, {
+        method: "POST",
+        body: JSON.stringify(framework),
+      }),
 
     startProfileGeneration: (workers?: number) =>
       request<JobHandle>(`${base}/profiles/generate${qs({ workers })}`, { method: "POST" }),
     // Its own call, not a flag on generation: editing the framework and
     // re-levelling must not mean rewriting every document.
-    startJobEvaluation: (workers?: number) =>
-      request<JobHandle>(`${base}/evaluation/run${qs({ workers })}`, { method: "POST" }),
+    /** `profileKeys` narrows the run to a selection; omit it to evaluate every profile. */
+    startJobEvaluation: (workers?: number, profileKeys?: string[]) =>
+      request<JobHandle>(`${base}/evaluation/run${qs({ workers })}`, {
+        method: "POST",
+        body: JSON.stringify({ profile_keys: profileKeys ?? null }),
+      }),
     listProfiles: () => request<{ profiles: ProfileRow[]; count: number }>(`${base}/profiles`),
     getProfile: (key: string) =>
       request<{ profile_key: string; title: string; content: Record<string, unknown>; html: string }>(

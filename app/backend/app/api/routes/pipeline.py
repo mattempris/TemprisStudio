@@ -45,6 +45,7 @@ from app.services.clustering import naming, rollup, routing
 from app.services import embeddings
 from app.services.embeddings import get_embedding_service
 from app.services.evaluation import job_evaluation as je
+from app.services.evaluation import level_titles
 from app.services.ingestion.column_mapping import suggest_mapping
 from app.services.ingestion.hris import load_spreadsheet
 from app.services.ingestion import parsers
@@ -1201,6 +1202,47 @@ def put_je_framework(client_slug: str, project_slug: str, framework: JEFramework
     return {"status": "saved", "invalidated_je_results": len(state.je_results)}
 
 
+@router.post("/je-framework/suggest-levels")
+def suggest_level_titles(
+    client_slug: str, project_slug: str, framework: JEFrameworkConfig | None = None
+) -> dict:
+    """Propose level band names that fit this client rather than the shipped defaults.
+
+    Suggests only — it returns a proposal and saves nothing. The editor shows it next to
+    the current names so the user applies it deliberately, because renaming a level band
+    changes what every evaluated profile is called.
+
+    Takes the framework from the request body when one is sent, so the editor can ask about
+    the bands currently on screen rather than the last-saved set.
+    """
+    _, state = _load(client_slug, project_slug)
+    fw = framework or (
+        state.je_framework if state.je_framework.level_bands else je.load_default_framework()
+    )
+    if not fw.level_bands:
+        raise HTTPException(400, "the framework has no level bands to name")
+    try:
+        bands, rationales, note = level_titles.suggest_level_titles(state, fw)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    current = sorted(fw.level_bands, key=lambda b: b.min_score)
+    return {
+        "levels": [
+            {
+                "min_score": b.min_score,
+                "max_score": b.max_score,
+                "current_name": current[i].name,
+                "suggested_name": b.name,
+                "rationale": rationales[i],
+                "changed": b.name != current[i].name,
+            }
+            for i, b in enumerate(bands)
+        ],
+        "ladder_note": note,
+        "changed": sum(1 for i, b in enumerate(bands) if b.name != current[i].name),
+    }
+
+
 @router.post("/profiles/generate")
 async def start_profile_generation(
     client_slug: str, project_slug: str, workers: int | None = None
@@ -1322,9 +1364,18 @@ async def start_profile_generation(
     return _start_job(client_slug, project_slug, "profiles", work)
 
 
+class EvaluationRequest(BaseModel):
+    """Which profiles to evaluate. Absent or empty means all of them."""
+
+    profile_keys: list[str] | None = None
+
+
 @router.post("/evaluation/run")
 async def start_job_evaluation(
-    client_slug: str, project_slug: str, workers: int | None = None
+    client_slug: str,
+    project_slug: str,
+    workers: int | None = None,
+    req: EvaluationRequest | None = None,
 ) -> dict:
     """Score the generated profile documents against the JE framework.
 
@@ -1333,11 +1384,29 @@ async def start_job_evaluation(
     is about the framework and the level bands — and the framework is routinely
     edited and the evaluation re-run against documents that have not changed. Bolted
     together, re-levelling meant regenerating every document first.
+
+    **`profile_keys` narrows the run to a selection.** All-or-nothing was the wrong
+    granularity on a real project: 565 profiles is an expensive ensemble run, and the
+    thing people actually want is to re-level the handful they disagree with, or to try
+    the framework on one profile before committing to the whole set. A narrowed run
+    merges into the existing results rather than replacing them, and re-renders only the
+    documents whose level it changed.
     """
     svc, state = _load(client_slug, project_slug)
     _workers = llm.resolve_workers(workers)
     if not state.job_profiles:
         raise HTTPException(400, "no job profile documents yet — generate the profiles first")
+
+    wanted = list(dict.fromkeys(req.profile_keys)) if req and req.profile_keys else None
+    if wanted is not None:
+        known = {d.profile_key for d in state.job_profiles}
+        unknown = [k for k in wanted if k not in known]
+        if unknown:
+            raise HTTPException(
+                404,
+                f"{len(unknown)} of {len(wanted)} profile keys do not exist in this "
+                f"project: {unknown[:5]}",
+            )
 
     framework = state.je_framework if state.je_framework.domains else je.load_default_framework()
     problems = je.validate_framework(framework)
@@ -1353,11 +1422,14 @@ async def start_job_evaluation(
     diversity = state.meta.diversity_statement
     sections = _resolve_sections(state)
     section_headings = tpl.headings(sections)
-    docs = list(state.job_profiles)
+    docs = [d for d in state.job_profiles if wanted is None or d.profile_key in set(wanted)]
+    if not docs:
+        raise HTTPException(400, "the selection matched no profile documents")
 
     def work(reporter: ProgressReporter) -> dict:
         llm.reset_cache_stats()
-        reporter.stage_start(len(docs), f"Job evaluation ensemble across {len(docs)} profiles")
+        scope = "profiles" if wanted is None else "selected profiles"
+        reporter.stage_start(len(docs), f"Job evaluation ensemble across {len(docs)} {scope}")
         je_inputs = [(d.profile_key, d.title, d.content) for d in docs]
         results = je.evaluate_many(
             je_inputs, framework, workers=_workers, progress=reporter.pmap_callback()
@@ -1369,21 +1441,34 @@ async def start_job_evaluation(
         failed = [d.profile_key for d, r in zip(docs, results) if r is None]
 
         fresh = svc.load_state(client_slug, project_slug)
-        fresh.je_results = [
-            JEEvaluationResult(
-                profile_key=r.profile_key,
-                clustering_version=fresh.meta.clustering_version,
-                framework_version_hash=fw_hash,
-                personas=r.personas,
-                aggregate_score=r.aggregate_score,
-                level_name=r.level_name,
-                computed_at=datetime.now(timezone.utc),
-            )
-            for r in evaluated
-        ]
-        # re-render each profile HTML now that its evaluated level is known
+        # Merged by key rather than assigned. A full run rewrites every entry anyway, so
+        # this only changes behaviour for a narrowed one — where replacing the list would
+        # silently discard the other 560 evaluations the user did not ask to touch.
+        merged = {r.profile_key: r for r in fresh.je_results}
+        merged.update(
+            {
+                r.profile_key: JEEvaluationResult(
+                    profile_key=r.profile_key,
+                    clustering_version=fresh.meta.clustering_version,
+                    framework_version_hash=fw_hash,
+                    personas=r.personas,
+                    aggregate_score=r.aggregate_score,
+                    level_name=r.level_name,
+                    computed_at=datetime.now(timezone.utc),
+                )
+                for r in evaluated
+            }
+        )
+        # Kept in document order so the results list is stable across partial runs
+        # instead of drifting towards most-recently-evaluated-first.
+        order = {d.profile_key: i for i, d in enumerate(fresh.job_profiles)}
+        fresh.je_results = sorted(merged.values(), key=lambda r: order.get(r.profile_key, 1 << 30))
+
+        # Re-render only what was evaluated. A narrowed run must not touch the other
+        # documents: their HTML already carries their own level, and re-rendering all 565
+        # was the bulk of this stage's wall-clock even when nothing about them changed.
         level_by_key = {r.profile_key: r.level_name for r in evaluated}
-        for doc in fresh.job_profiles:
+        for doc in [d for d in fresh.job_profiles if d.profile_key in level_by_key]:
             doc.html = generator.render_html(
                 doc.content,
                 accent_color=accent,
@@ -1398,12 +1483,22 @@ async def start_job_evaluation(
         svc.save_state(
             fresh,
             action="run-je-evaluation",
-            lineage_payload={"evaluated": len(evaluated), "failed": failed},
+            lineage_payload={
+                "evaluated": len(evaluated),
+                "failed": failed,
+                # Recorded so the audit trail distinguishes "levelled the whole
+                # architecture" from "re-levelled four profiles someone challenged".
+                "scope": "all" if wanted is None else "selection",
+                "selected": len(docs),
+                "total_profiles": len(fresh.job_profiles),
+            },
         )
 
         cache = llm.cache_stats()
         summary: dict = {
             "je_evaluated": len(evaluated),
+            "je_total": len(fresh.je_results),
+            "scope": "all" if wanted is None else "selection",
             "llm_calls": cache.calls,
             "cache_hit_pct": round(100 * cache.saved_fraction),
             "levels": sorted({r.level_name for r in evaluated}),

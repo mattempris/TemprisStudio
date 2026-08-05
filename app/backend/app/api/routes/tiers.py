@@ -67,7 +67,7 @@ _ANALYSIS_CACHE: dict[tuple[str, str, str, str], tier_engine.TierAnalysis] = {}
 TOOLTIP_TITLES = 12
 
 
-# What the tooltip's list is called, per entity.
+# What the tooltip's list is called at the finest tier, where it lists source records.
 _LABEL_NOUN = {
     "job": "source job titles",
     "skill": "skills",
@@ -75,13 +75,26 @@ _LABEL_NOUN = {
 }
 
 
+def _label_noun(entity: str, tier: str) -> str:
+    """What the tooltip is listing, which is not the same at every tier.
+
+    At the finest tier it lists source records. Above it, it lists the child clusters —
+    and `tier_noun` already names exactly those, since what a tier groups is the tier
+    below it. Without this the family tooltip would announce "source job titles" over a
+    list of category names.
+    """
+    if tier == tier_state.ORDER[0]:
+        return _LABEL_NOUN[entity]
+    return tier_state.tier_noun(entity, tier)
+
+
 def _title_map(state: ProjectState, entity: str) -> dict[str, list[str]]:
     """The real underlying names beneath every item id, at every tier.
 
-    Hovering a cluster has to answer "what is actually in here?", and at the category
-    and family tiers that means resolving all the way down rather than listing the
-    child clusters' names — a family called "Finance" containing three categories
-    tells you nothing you did not already know.
+    Used at the finest tier, where the source titles are the thing the user recognises
+    and there are no child clusters to name. Coarser tiers use `_child_view` instead —
+    see the note there on why resolving all the way down was the wrong answer above the
+    finest tier.
 
     Built in tier order so each tier reuses the tier below's resolution. For jobs the
     base resolution goes one step further and expands a dedupe group back to every
@@ -128,10 +141,77 @@ def _title_sample(titles: list[str]) -> dict:
     }
 
 
+def _child_view(
+    state: ProjectState, entity: str, tier: str
+) -> tuple[dict[str, str], dict[str, int], str] | None:
+    """What each item being clustered is called, and how much sits beneath it.
+
+    Above the finest tier the items being clustered *are* clusters — grouping categories
+    into families means the items are `category:57` — so the honest answer to "what is in
+    this family?" is the names of its categories, not several hundred source job titles
+    resolved from the bottom.
+
+    This reverses an earlier decision here, which resolved every tier down to source
+    titles on the grounds that "a family called Finance containing three categories tells
+    you nothing". That held when a family had three categories; with 90 categories under
+    14 families it does not. Three hundred raw job titles is not a description of a
+    family, and the titles that fit in a tooltip are an arbitrary twelve of them. The
+    category names, each carrying the count of profiles beneath it, are.
+
+    Returns (label per item id, count beneath per item id, noun for that count), or None
+    at the finest tier, where there is no child tier to read and the source titles are
+    the right answer.
+    """
+    i = tier_state.ORDER.index(tier)
+    if i == 0:
+        return None
+    child = tier_state.ORDER[i - 1]
+    crec = tier_state.tiers_of(state, entity).get(child)
+    if crec is None or not crec.names:
+        return None  # the tier below is unconfirmed, so nothing above it can be previewed
+
+    # The child tier's own members are the level below that, so counting them per child
+    # cluster gives exactly "profiles beneath this category" for a family tile.
+    beneath: dict[int, int] = {}
+    for m in crec.members:
+        beneath[m.final_cluster_id] = beneath.get(m.final_cluster_id, 0) + 1
+
+    labels = {f"{child}:{cid}": name for cid, name in crec.names.items()}
+    counts = {f"{child}:{cid}": beneath.get(cid, 0) for cid in crec.names}
+    return labels, counts, tier_state.tier_noun(entity, child)
+
+
+def _child_sample(children: list[tuple[str, int]], noun: str) -> dict:
+    """A readable sample of a coarse cluster's child clusters.
+
+    Ordered biggest-first rather than alphabetically: when the list is capped, the
+    categories that define the family are the ones that should survive the cap.
+    """
+    ordered = sorted(children, key=lambda kv: (-kv[1], kv[0]))
+    shown = ordered[:TOOLTIP_TITLES]
+    return {
+        "titles": [f"{name} · {n} {noun}" if n else name for name, n in shown],
+        "title_count": len(ordered),
+        "titles_omitted": len(ordered) - len(shown),
+    }
+
+
 def _titles_by_cluster(
-    items: tier_engine.TierItems, labels: np.ndarray, k: int, state: ProjectState, entity: str
+    items: tier_engine.TierItems, labels: np.ndarray, k: int, state: ProjectState, entity: str,
+    tier: str,
 ) -> list[dict]:
-    """Per-cluster title samples, aligned with the size array."""
+    """Per-cluster tooltip samples, aligned with the size array.
+
+    Child cluster names above the finest tier, source titles at it.
+    """
+    child = _child_view(state, entity, tier)
+    if child is not None:
+        names, counts, noun = child
+        kids: list[list[tuple[str, int]]] = [[] for _ in range(k)]
+        for i, item_id in enumerate(items.ids):
+            kids[int(labels[i])].append((names.get(item_id, item_id), counts.get(item_id, 0)))
+        return [_child_sample(b, noun) for b in kids]
+
     resolved = _title_map(state, entity)
     buckets: list[list[str]] = [[] for _ in range(k)]
     for i, item_id in enumerate(items.ids):
@@ -355,7 +435,7 @@ def _status_payload(
         ),
         "item_count": n_items,
         "item_noun": tier_state.tier_noun(entity, tier),
-        "label_noun": _LABEL_NOUN[entity],
+        "label_noun": _label_noun(entity, tier),
         "embeds": tier == "profile",
         "embedding_entity": es.embeddings_entity,
         # In memory, or recoverable from the persisted tree without recomputing Ward.
@@ -495,7 +575,7 @@ def tier_preview(client_slug: str, project_slug: str, entity: str, tier: str, k:
 
     labels = bb.cut_tree(tree, k)
     sizes = np.bincount(labels, minlength=int(labels.max()) + 1).tolist()
-    samples = _titles_by_cluster(items, labels, len(sizes), state, entity)
+    samples = _titles_by_cluster(items, labels, len(sizes), state, entity, tier)
     out: dict = {
         "entity": entity,
         "tier": tier,
@@ -710,10 +790,25 @@ def tier_clusters(client_slug: str, project_slug: str, entity: str, tier: str) -
         raise HTTPException(409, f"the {tier} tier has not been confirmed yet")
 
     label_for = _member_labeller(state, entity, tier)
-    resolved = _title_map(state, entity)
-    titles_for: dict[int, list[str]] = {}
-    for m in rec.members:
-        titles_for.setdefault(m.final_cluster_id, []).extend(resolved.get(m.item_id, []))
+    # Same rule as the preview tiles: child cluster names above the finest tier, source
+    # titles at it. Built here from the confirmed membership rather than a label array.
+    child = _child_view(state, entity, tier)
+    sample_for: dict[int, dict] = {}
+    if child is not None:
+        names, counts, noun = child
+        kids: dict[int, list[tuple[str, int]]] = {}
+        for m in rec.members:
+            kids.setdefault(m.final_cluster_id, []).append(
+                (names.get(m.item_id, m.item_id), counts.get(m.item_id, 0))
+            )
+        sample_for = {cid: _child_sample(v, noun) for cid, v in kids.items()}
+    else:
+        resolved = _title_map(state, entity)
+        titles_for: dict[int, list[str]] = {}
+        for m in rec.members:
+            titles_for.setdefault(m.final_cluster_id, []).extend(resolved.get(m.item_id, []))
+        sample_for = {cid: _title_sample(v) for cid, v in titles_for.items()}
+    empty = _child_sample([], "") if child is not None else _title_sample([])
 
     by_cluster: dict[int, list[dict]] = {}
     for m in rec.members:
@@ -737,10 +832,9 @@ def tier_clusters(client_slug: str, project_slug: str, entity: str, tier: str) -
             "name": rec.names.get(cid, "?"),
             "members": sorted(by_cluster.get(cid, []), key=lambda x: x["label"]),
             "size": len(by_cluster.get(cid, [])),
-            # The underlying source job titles, for the hover tooltip. At the profile
-            # tier these expand a member's dedupe group; above it they resolve through
-            # every tier below.
-            **_title_sample(titles_for.get(cid, [])),
+            # For the hover tooltip: at the profile tier the member's dedupe group
+            # expanded to source titles, above it the child clusters by name.
+            **sample_for.get(cid, empty),
         }
         for cid in sorted(rec.names)
     ]
@@ -811,29 +905,40 @@ def tier_cluster_members(
     if not (0 <= cluster <= int(labels.max())):
         raise HTTPException(404, f"no cluster {cluster} at k={k}")
 
-    resolved = _title_map(state, entity)
     member_ids = [items.ids[i] for i in range(len(items)) if int(labels[i]) == cluster]
-    names: list[str] = []
-    for item_id in member_ids:
-        names.extend(resolved.get(item_id, [item_id]))
 
-    counts: dict[str, int] = {}
-    for n in names:
-        counts[n] = counts.get(n, 0) + 1
+    # Same rule as the tile it opens from. Listing 300 source titles under a heading that
+    # says "7 job categories" would contradict the tooltip that led here, and the count
+    # column is more useful holding "profiles in this category" than a repeat multiplier.
+    child = _child_view(state, entity, tier)
+    if child is not None:
+        child_names, child_counts, _ = child
+        counts = {child_names.get(i, i): child_counts.get(i, 0) for i in member_ids}
+        total = sum(counts.values())
+    else:
+        resolved = _title_map(state, entity)
+        names: list[str] = []
+        for item_id in member_ids:
+            names.extend(resolved.get(item_id, [item_id]))
+        counts = {}
+        for n in names:
+            counts[n] = counts.get(n, 0) + 1
+        total = len(names)
     return {
         "entity": entity,
         "tier": tier,
         "k": k,
         "cluster": cluster,
         "size": len(member_ids),
-        "label_noun": _LABEL_NOUN[entity],
+        "label_noun": _label_noun(entity, tier),
         # Grouped rather than repeated: a dedupe group of 18 identically-titled
-        # branch roles is one row with a count, not 18 rows.
+        # branch roles is one row with a count, not 18 rows. Above the finest tier the
+        # count is instead how many sit beneath that child cluster.
         "members": [
             {"label": label, "count": n}
             for label, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
         ],
-        "total": len(names),
+        "total": total,
     }
 
 

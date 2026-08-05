@@ -28,6 +28,7 @@ import { DemoReset } from "../components/wizard/DemoReset";
 import { workforceApi } from "../services/workforceApi";
 import { DedupePanel } from "../components/pipeline/DedupePanel";
 import { JEResultsBrowser } from "../components/pipeline/JEResultsBrowser";
+import { ProfileSelect } from "../components/pipeline/ProfileSelect";
 import { EntityTaxonomyStage } from "../components/pipeline/EntityTaxonomyStage";
 import { EmbeddingOptions } from "../components/pipeline/EmbeddingOptions";
 import { TierClusterStage } from "../components/pipeline/TierClusterStage";
@@ -35,7 +36,7 @@ import { MatchingPanel } from "../components/pipeline/MatchingPanel";
 import { OverviewBrowser } from "../components/pipeline/OverviewBrowser";
 import { ExportBar } from "../components/pipeline/ExportBar";
 import { HrisMappingPanel } from "../components/pipeline/HrisMappingPanel";
-import { JEFrameworkEditor } from "../components/pipeline/JEFrameworkEditor";
+import { JEFrameworkEditor, type LevelSuggestion } from "../components/pipeline/JEFrameworkEditor";
 import { ProfileTemplateEditor } from "../components/pipeline/ProfileTemplateEditor";
 import { BoilerplateEditor } from "../components/pipeline/BoilerplateEditor";
 import { ProficiencyTemplateEditor } from "../components/pipeline/ProficiencyTemplateEditor";
@@ -79,6 +80,10 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
   const [expanded, setExpanded] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<ProfileRow[]>([]);
+  // Which profiles the next evaluation run covers. Empty means all of them, so the
+  // default behaviour is unchanged and selecting nothing is not a way to run nothing.
+  const [jeSelection, setJeSelection] = useState<Set<string>>(new Set());
+  const [jePicker, setJePicker] = useState(false);
   const [caps, setCaps] = useState({ html: true, docx: true, pdf: false });
   const [busy, setBusy] = useState(false);
   const [skills, setSkills] = useState<SkillsSummary | null>(null);
@@ -482,6 +487,7 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
           load={() => api.getJeFramework()}
           loadDefaults={() => api.getJeFramework(true)}
           save={api.putJeFramework}
+          suggestLevels={api.suggestLevelTitles}
           hasResults={summary!.je_results > 0}
         />
       </Collapsible>
@@ -719,22 +725,57 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
         return (
           <div className="space-y-4">
             <div className="space-y-3">
-              <Button
-                variant="primary"
-                onClick={() => runJob(() => api.startJobEvaluation(workers))}
-                disabled={busy || job.running || summary!.job_profiles === 0}
-              >
-                <span className="flex items-center gap-1.5">
-                  <Play size={12} />
-                  {summary!.je_results > 0
-                    ? "Re-evaluate " + summary!.job_profiles + " profiles"
-                    : "Evaluate " + summary!.job_profiles + " profiles"}
-                </span>
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="primary"
+                  onClick={() =>
+                    runJob(() =>
+                      api.startJobEvaluation(
+                        workers,
+                        jeSelection.size > 0 ? [...jeSelection] : undefined,
+                      ),
+                    )
+                  }
+                  disabled={busy || job.running || summary!.job_profiles === 0}
+                >
+                  <span className="flex items-center gap-1.5">
+                    <Play size={12} />
+                    {jeSelection.size > 0
+                      ? `Evaluate ${jeSelection.size} selected`
+                      : summary!.je_results > 0
+                        ? "Re-evaluate all " + summary!.job_profiles + " profiles"
+                        : "Evaluate all " + summary!.job_profiles + " profiles"}
+                  </span>
+                </Button>
+                <Button
+                  onClick={() => setJePicker((v) => !v)}
+                  disabled={profiles.length === 0}
+                >
+                  {jePicker ? "Hide selection" : "Choose profiles"}
+                </Button>
+                {jeSelection.size > 0 && (
+                  <button
+                    onClick={() => setJeSelection(new Set())}
+                    className="text-[11.5px] font-semibold text-accent hover:underline"
+                  >
+                    Clear {jeSelection.size}
+                  </button>
+                )}
+              </div>
               <p className="text-[11.5px] leading-snug text-text-secondary">
                 Three scoring perspectives per profile, aggregated to one level and one
                 spread. Re-running against an edited framework leaves the documents alone.
+                {jeSelection.size > 0
+                  ? " A narrowed run keeps every other profile's existing evaluation."
+                  : ""}
               </p>
+              {jePicker && profiles.length > 0 && (
+                <ProfileSelect
+                  profiles={profiles}
+                  selected={jeSelection}
+                  onChange={setJeSelection}
+                />
+              )}
               {showProgress && <ProgressBar job={job} />}
             </div>
 
@@ -949,11 +990,13 @@ function LazyJEFramework({
   load,
   loadDefaults,
   save,
+  suggestLevels,
   hasResults,
 }: {
   load: () => Promise<JEFramework>;
   loadDefaults: () => Promise<JEFramework>;
   save: (f: JEFramework) => Promise<unknown>;
+  suggestLevels: (f: JEFramework) => Promise<LevelSuggestion>;
   hasResults: boolean;
 }) {
   const [framework, setFramework] = useState<JEFramework | null>(null);
@@ -976,6 +1019,7 @@ function LazyJEFramework({
       saving={saving}
       hasResults={hasResults}
       onReset={loadDefaults}
+      onSuggestLevels={suggestLevels}
       onSave={async (f) => {
         setSaving(true);
         try {

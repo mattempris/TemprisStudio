@@ -15,7 +15,8 @@ import { cn } from "../../lib/cn";
  *
  * Two views, because they answer different questions:
  *   Structure — the client's profiles arranged under the external taxonomy's own
- *     Family › Sub-family › Specialization tree. This is the deliverable: where
+ *     Family › Sub-family › Specialisation tree — the vendor spells its own tier
+ *     "Specialization"; our copy does not. This is the deliverable: where
  *     the organisation sits in the market structure.
  *   Review — only the matches the pipeline is unsure about, with the shortlist
  *     it chose from and an override control. Ordered worst-first.
@@ -356,7 +357,7 @@ const REASON_TEXT: Record<string, string> = {
   low_confidence: "The reranker was not confident",
   weak_shortlist: "Nothing in the taxonomy is semantically close",
   low_level_confidence: "The career level is uncertain",
-  invalid_level: "The model returned a level this specialization does not offer",
+  invalid_level: "The model returned a level this specialisation does not offer",
 };
 
 function ReviewView({
@@ -411,7 +412,7 @@ function ReviewCard({
       setHits([]);
       return;
     }
-    // Debounced so typing a specialization name doesn't fire a request per key.
+    // Debounced so typing a specialisation name doesn't fire a request per key.
     const t = setTimeout(() => {
       void search(q).then((r) => setHits(r.results)).catch(() => setHits([]));
     }, 250);
@@ -509,7 +510,7 @@ function ReviewCard({
                 autoFocus
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                placeholder="Search specializations and typical titles…"
+                placeholder="Search specialisations and typical titles…"
                 className="w-full rounded-[8px] border border-border bg-card px-3 py-1.5 text-[12px] text-text outline-none focus:border-accent"
               />
               {hits.length > 0 && !chosen && (

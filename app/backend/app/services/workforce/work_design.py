@@ -91,6 +91,252 @@ def readiness(state: ProjectState, *, graph_built: bool) -> dict:
     }
 
 
+class Facets:
+    """A resolved filter selection. Empty means everything, per the app's convention."""
+
+    __slots__ = (
+        "job_family_ids",
+        "job_category_ids",
+        "task_family_ids",
+        "task_category_ids",
+        "business_level_1",
+        "business_level_2",
+        "business_level_3",
+    )
+
+    def __init__(
+        self,
+        *,
+        job_family_ids: list[int] | None = None,
+        job_category_ids: list[int] | None = None,
+        task_family_ids: list[int] | None = None,
+        task_category_ids: list[int] | None = None,
+        business_level_1: list[str] | None = None,
+        business_level_2: list[str] | None = None,
+        business_level_3: list[str] | None = None,
+    ) -> None:
+        self.job_family_ids = set(job_family_ids or [])
+        self.job_category_ids = set(job_category_ids or [])
+        self.task_family_ids = set(task_family_ids or [])
+        self.task_category_ids = set(task_category_ids or [])
+        self.business_level_1 = set(business_level_1 or [])
+        self.business_level_2 = set(business_level_2 or [])
+        self.business_level_3 = set(business_level_3 or [])
+
+    @property
+    def has_business(self) -> bool:
+        return bool(self.business_level_1 or self.business_level_2 or self.business_level_3)
+
+    def to_json(self) -> dict:
+        return {
+            "job_family_ids": sorted(self.job_family_ids),
+            "job_category_ids": sorted(self.job_category_ids),
+            "task_family_ids": sorted(self.task_family_ids),
+            "task_category_ids": sorted(self.task_category_ids),
+            "business_level_1": sorted(self.business_level_1),
+            "business_level_2": sorted(self.business_level_2),
+            "business_level_3": sorted(self.business_level_3),
+        }
+
+
+def _job_sample(facts: wf.Facts, f: Facets) -> tuple[dict[int, float], int]:
+    """The job profile clusters matching the facets, and how many people each contributes.
+
+    Returns (cluster -> heads, count of profiles whose headcount was only partly included).
+
+    The partial case is the whole reason `business_units` is a cross-tab. A job profile spans
+    departments, so filtering by department includes *some* of its people — reporting the
+    profile's full headcount would overstate the sample, and excluding the profile entirely
+    would understate it. Both are wrong in ways nobody would notice.
+    """
+    jf = facts.entities.get("job")
+    if jf is None:
+        return {}, 0
+
+    matched: dict[int, float] = {}
+    partial = 0
+    # Pre-index the cross-tab so a departmental filter is one pass rather than a scan per job.
+    by_cluster: dict[int, list[wf.BusinessUnitFact]] = {}
+    for b in facts.business_units:
+        by_cluster.setdefault(b.job_cluster, []).append(b)
+
+    for leaf, (cat, fam) in jf.ancestry.items():
+        if f.job_family_ids and fam not in f.job_family_ids:
+            continue
+        if f.job_category_ids and cat not in f.job_category_ids:
+            continue
+
+        full = float(jf.metrics.get(leaf, 0.0))
+        if not f.has_business:
+            matched[leaf] = full
+            continue
+
+        rows = by_cluster.get(leaf, [])
+        if not rows:
+            # A business-framework filter is on and this profile has no framework data at
+            # all, so it cannot be said to be inside or outside the selection. Excluded,
+            # and counted in the sample's `unmapped_profiles` so the omission is visible.
+            continue
+        share = sum(
+            b.headcount
+            for b in rows
+            if (not f.business_level_1 or b.level_1 in f.business_level_1)
+            and (not f.business_level_2 or b.level_2 in f.business_level_2)
+            and (not f.business_level_3 or b.level_3 in f.business_level_3)
+        )
+        if share <= 0:
+            continue
+        total = sum(b.headcount for b in rows) or 1
+        if share < total:
+            partial += 1
+        # Scaled to the metric the graph uses, so a project with no headcount column still
+        # gets a sensible fraction of its notional one-per-job measure.
+        matched[leaf] = full * (share / total) if total else full
+    return matched, partial
+
+
+def _task_in_scope(facts: wf.Facts, f: Facets) -> set[int]:
+    """Task clusters surviving the task facets."""
+    tf = facts.entities.get("task")
+    if tf is None:
+        return set()
+    if not (f.task_family_ids or f.task_category_ids):
+        return set(tf.ancestry)
+    out = set()
+    for leaf, (cat, fam) in tf.ancestry.items():
+        if f.task_family_ids and fam not in f.task_family_ids:
+            continue
+        if f.task_category_ids and cat not in f.task_category_ids:
+            continue
+        out.add(leaf)
+    return out
+
+
+def pool(facts: wf.Facts, f: Facets, *, hours_per_fte_week: float) -> dict:
+    """The as-is work of the filtered sample, per task cluster, in hours per week.
+
+    Headcount-weighted, not an unweighted mean of proportions. Three reasons, in order of
+    force: the middle panel's capacity is in hours, so mixing units makes a drag
+    meaningless; an unweighted mean ranks a cluster taking 60% of two people's week above
+    one taking 5% of four hundred people's, which is the same argument `_agent_inputs`
+    makes for ranking by absorbable rather than by automation_pct; and `graph.build`
+    already weights task metrics by headcount, so a third differently-weighted view of one
+    quantity would be the defect.
+
+    Degrades exactly as the rest of the app does. With no headcount column the job metric is
+    already a count of distinct jobs, so the arithmetic is byte-identical and only the unit
+    label changes — never both units, never a synthesised headcount.
+    """
+    heads, partial = _job_sample(facts, f)
+    scope = _task_in_scope(facts, f)
+    tf = facts.entities.get("task")
+    hpw = hours_per_fte_week
+
+    # cluster -> hours, and the roles behind it so a line can later be carved along a real
+    # boundary in the data rather than by an arbitrary percentage.
+    hours: dict[int, float] = {}
+    roles: dict[int, dict[int, float]] = {}
+    assigned_in_scope = 0.0
+    for jp, tc, share_pct in facts.job_task:
+        h = heads.get(jp)
+        if h is None:
+            continue
+        contribution = (share_pct / 100.0) * h * hpw
+        assigned_in_scope += contribution
+        if tc not in scope:
+            continue
+        hours[tc] = hours.get(tc, 0.0) + contribution
+        roles.setdefault(tc, {})[jp] = roles.setdefault(tc, {}).get(jp, 0.0) + contribution
+
+    sample_heads = sum(heads.values())
+    shown = sum(hours.values())
+    clusters = []
+    for tc, h in sorted(hours.items(), key=lambda kv: -kv[1]):
+        cat, fam = (tf.ancestry.get(tc, (-1, -1)) if tf else (-1, -1))
+        opp = facts.task_opportunity.get(tc)
+        clusters.append(
+            {
+                "cluster_id": tc,
+                "name": wf.label_of(tf, "profile", tc) if tf else str(tc),
+                "category_id": cat,
+                "category": wf.label_of(tf, "category", cat) if tf else "",
+                "domain_id": fam,
+                "domain": wf.label_of(tf, "family", fam) if tf else "",
+                "hours_per_week": round(h, 2),
+                "fte": round(h / hpw, 2) if hpw else None,
+                "share_pct": round(100.0 * h / shown, 2) if shown else 0.0,
+                # The rate a drop uses: one typical holder's time on this work. Supplied here
+                # rather than derived client-side so the two panels cannot end up in
+                # different units — the single most likely place for that to happen.
+                "hours_per_holder_week": round(h / sample_heads, 3) if sample_heads else 0.0,
+                # None, never 0. An unassessed cluster has unknown opportunity, and the
+                # difference matters the moment anything colours a treemap by it.
+                "assessed": opp is not None,
+                "automation": opp[0] if opp else None,
+                "augmentation": opp[1] if opp else None,
+                "n_roles": len(roles.get(tc, {})),
+                "roles": [
+                    {
+                        "job_cluster": jp,
+                        "profile_key": facts.job_profile_keys.get(jp, ("", ""))[0],
+                        "title": facts.job_profile_keys.get(jp, ("", ""))[1],
+                        "hours_per_week": round(v, 2),
+                    }
+                    for jp, v in sorted(roles.get(tc, {}).items(), key=lambda kv: -kv[1])
+                ],
+            }
+        )
+
+    unassessed_hours = sum(c["hours_per_week"] for c in clusters if not c["assessed"])
+    n_unassessed = sum(1 for c in clusters if not c["assessed"])
+    warnings: list[str] = []
+    if n_unassessed:
+        warnings.append(
+            f"{n_unassessed} of {len(clusters)} task clusters in this sample have not been "
+            f"assessed ({unassessed_hours:,.0f} hours a week). Their hours are shown, but no "
+            f"agent or augmentation can act on them."
+        )
+    if partial:
+        warnings.append(
+            f"{partial} job profiles contributed only part of their headcount, because the "
+            f"business-framework filter matched some of their records and not others."
+        )
+    # Task facets remove part of every job's week, so the shown total stops being the
+    # sample's whole week. Said out loud, because a 12% cluster would otherwise look like 30%.
+    if shown < assigned_in_scope - 0.5:
+        warnings.append(
+            f"Showing {100.0 * shown / assigned_in_scope:.0f}% of the sample's week — the task "
+            f"filter excludes the rest."
+        )
+
+    return {
+        "facets": f.to_json(),
+        "unit": "FTE" if facts.has_headcount else "role-weeks",
+        "has_headcount": facts.has_headcount,
+        "hours_per_fte_week": hpw,
+        "basis": (
+            "Headcount from the HRIS"
+            if facts.has_headcount
+            else "No headcount column was mapped, so each distinct job profile counts as one "
+            "notional holder"
+        ),
+        "sample": {
+            "job_profiles": len(heads),
+            "headcount": round(sample_heads, 2),
+            "capacity_hours_per_week": round(sample_heads * hpw, 2),
+            "shown_hours_per_week": round(shown, 2),
+            "sample_hours_per_week": round(assigned_in_scope, 2),
+            "shown_pct_of_week": round(100.0 * shown / assigned_in_scope, 1) if assigned_in_scope else 0.0,
+            "task_clusters": len(clusters),
+            "assessed_clusters": len(clusters) - n_unassessed,
+            "unassessed_hours_per_week": round(unassessed_hours, 2),
+            "partial_profiles": partial,
+        },
+        "clusters": clusters,
+        "warnings": warnings,
+    }
+
+
 def facet_options(facts: wf.Facts) -> dict:
     """The filter options, with a count of matching job profiles against each.
 

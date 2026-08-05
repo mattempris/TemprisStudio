@@ -61,3 +61,58 @@ def work_design_facets(client_slug: str, project_slug: str) -> dict:
     """Filter options for the work pool, with match counts."""
     svc, _ = _load(client_slug, project_slug)
     return wd.facet_options(_facts(svc, client_slug, project_slug))
+
+
+def _ints(value: str | None) -> list[int]:
+    """Comma-separated ids from a query string, ignoring anything unparseable.
+
+    Lenient rather than 422: a filter is a view, and rejecting the whole request because one
+    id in a list was malformed would break the screen over something with no consequence.
+    """
+    out: list[int] = []
+    for part in (value or "").split(","):
+        part = part.strip()
+        if part:
+            try:
+                out.append(int(part))
+            except ValueError:
+                continue
+    return out
+
+
+def _strs(value: str | None) -> list[str]:
+    return [p.strip() for p in (value or "").split(",") if p.strip()]
+
+
+@router.get("/pool")
+def work_design_pool(
+    client_slug: str,
+    project_slug: str,
+    job_family: str | None = None,
+    job_category: str | None = None,
+    task_family: str | None = None,
+    task_category: str | None = None,
+    bf1: str | None = None,
+    bf2: str | None = None,
+    bf3: str | None = None,
+) -> dict:
+    """The as-is work of the filtered sample, per task cluster, in hours per week.
+
+    This is the studio's starting position — the work stack to be re-allocated. Levers and
+    allocations are applied on top of it by later endpoints; nothing here is persisted.
+    """
+    svc, state = _load(client_slug, project_slug)
+    facets = wd.Facets(
+        job_family_ids=_ints(job_family),
+        job_category_ids=_ints(job_category),
+        task_family_ids=_ints(task_family),
+        task_category_ids=_ints(task_category),
+        business_level_1=_strs(bf1),
+        business_level_2=_strs(bf2),
+        business_level_3=_strs(bf3),
+    )
+    return wd.pool(
+        _facts(svc, client_slug, project_slug),
+        facets,
+        hours_per_fte_week=state.workforce.hours_per_fte_week,
+    )

@@ -10,6 +10,7 @@ import { ProgressBar } from "../components/wizard/ProgressBar";
 import { JobPulse } from "../components/wizard/JobPulse";
 import { StageSection } from "../components/wizard/StageSection";
 import { StudioToggle } from "../components/wizard/StudioToggle";
+import { useSectionScroll } from "../hooks/useSectionScroll";
 import { DemoReset } from "../components/wizard/DemoReset";
 import { Button } from "../components/ui/Button";
 import { Modal } from "../components/ui/Modal";
@@ -89,6 +90,9 @@ export function WorkforcePage({
   const [detail, setDetail] = useState<NodeDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string>("architecture");
+  // Same accordion, same problem as the JAStudio wizard — the graph and opportunity steps
+  // are the tall ones here. See useSectionScroll.
+  const { hold, reveal } = useSectionScroll(open);
   const [colorMode, setColorMode] = useState<ColorMode>("entity");
   // Skills and tasks answer different questions about the same jobs — what a role needs
   // to know against what it spends its week doing. Drawing both triples the edges for a
@@ -219,7 +223,10 @@ export function WorkforcePage({
           {STEPS.map((s, i) => (
             <button
               key={s.id}
-              onClick={() => setOpen(s.id)}
+              onClick={() => {
+                setOpen(s.id);
+                reveal(s.id);
+              }}
               className={`flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12px] transition-colors ${
                 open === s.id ? "bg-accent-bg font-bold text-accent" : "text-text-secondary hover:bg-panel"
               }`}
@@ -303,7 +310,10 @@ export function WorkforcePage({
                     : undefined
               }
               expanded={open === s.id}
-              onToggle={() => setOpen(open === s.id ? "" : s.id)}
+              onToggle={() => {
+                hold(s.id);
+                setOpen(open === s.id ? "" : s.id);
+              }}
             >
               {isOpportunity && status?.ready && (
                 <OpportunityStage

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Play } from "lucide-react";
 import { pipelineApi, taxonomyApi } from "../services/pipelineApi";
 import { useJobStream } from "../hooks/useJobStream";
+import { useSectionScroll } from "../hooks/useSectionScroll";
 import type {
   HrisPreview,
   JEFramework,
@@ -78,6 +79,9 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
   const api = useMemo(() => pipelineApi(clientSlug, projectSlug), [clientSlug, projectSlug]);
   const [summary, setSummary] = useState<StageSummary | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  // Toggling the accordion changes the document height, which used to leave the browser
+  // clamping scrollTop to the page bottom. See useSectionScroll.
+  const { hold, reveal } = useSectionScroll(expanded);
   const [error, setError] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<ProfileRow[]>([]);
   // Which profiles the next evaluation run covers. Empty means all of them, so the
@@ -291,7 +295,13 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
               <li key={s.id}>
                 <a
                   href={`#${s.id}`}
-                  onClick={() => st !== "locked" && setExpanded(s.id)}
+                  onClick={(e) => {
+                    // The default hash jump uses the pre-render layout, so it lands
+                    // somewhere that stops existing the moment the accordion moves.
+                    e.preventDefault();
+                    if (st !== "locked") setExpanded(s.id);
+                    reveal(s.id);
+                  }}
                   className={cn(
                     "flex items-center gap-2 rounded-[10px] px-2.5 py-1.5 text-[11.5px] font-semibold transition-colors",
                     st === "locked" ? "text-text-muted opacity-60" : "text-text hover:bg-panel",
@@ -392,7 +402,10 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
                     : undefined
               }
               expanded={expanded === s.id}
-              onToggle={() => setExpanded(expanded === s.id ? null : s.id)}
+              onToggle={() => {
+                hold(s.id);
+                setExpanded(expanded === s.id ? null : s.id);
+              }}
             >
               {renderStage(s.id)}
             </StageSection>

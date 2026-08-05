@@ -576,6 +576,129 @@ class WorkforceState(BaseModel):
     audit: dict = Field(default_factory=dict)
 
 
+class WorkDesignFacets(BaseModel):
+    """The filter that produced a designed job's view of the work.
+
+    Stored with the job rather than only held in the UI, because the pool it was designed
+    against is meaningless without knowing which slice of the workforce that was. Reopening
+    a job restores the workspace it was made in.
+    """
+
+    job_family_ids: list[int] = Field(default_factory=list)
+    job_category_ids: list[int] = Field(default_factory=list)
+    task_family_ids: list[int] = Field(default_factory=list)
+    task_category_ids: list[int] = Field(default_factory=list)
+    # Business-framework values rather than ids: these are free text from the client's own
+    # sheet and have no cluster identity of their own.
+    business_level_1: list[str] = Field(default_factory=list)
+    business_level_2: list[str] = Field(default_factory=list)
+    business_level_3: list[str] = Field(default_factory=list)
+
+
+class DesignedTaskLine(BaseModel):
+    """One line of work inside a designed job.
+
+    `hours_per_week` is the only quantity. A designed job's capacity is
+    `headcount x hours_per_fte_week`, so a line has to be in the same unit or the two cannot
+    be compared — a percentage would need a second, invisible scaling the moment headcount is
+    anything other than one.
+
+    `cluster_name` is snapshotted rather than looked up. Re-clustering tasks changes cluster
+    ids, and a design whose upstream taxonomy moved must still read as "Handling Customer
+    Complaints, 24 h/wk" rather than "cluster 812" — the job is badged stale, but the line
+    still says what the work was.
+    """
+
+    id: str
+    # None for a line a person typed in that has no home in the taxonomy. A real outcome,
+    # and the same reasoning as ProcessStepRecord.task_cluster_id being optional.
+    task_cluster_id: int | None = None
+    cluster_name: str = ""
+    name: str
+    description: str = ""
+    # "as_is" | "agent_oversight" | "manual". A job profile document that cannot tell a task
+    # the agent created from one the organisation already did is not reviewable.
+    origin: str = "as_is"
+    hours_per_week: float = 0.0
+    # Set on origin="agent_oversight". Resolved against the agent list on read, so an agent
+    # deleted since is reported rather than silently dropped.
+    agent_id: str | None = None
+    source_profile_key: str | None = None
+    # The real inferred task names this line stands for. The tooltip and the profile-document
+    # prompt both need the actual work, not just the cluster label.
+    contributing_tasks: list[str] = Field(default_factory=list)
+    # The levers in force when these hours were set. Without it, "the pool says 1,204 and
+    # this line says 812" is unanswerable.
+    lever_ids: list[str] = Field(default_factory=list)
+    automation_pct: float | None = None
+    augmentation_pct: float | None = None
+
+
+class DesignedJobProfileDoc(BaseModel):
+    """The generated job profile document for a designed job.
+
+    Only `content` is persisted. JobProfileDoc also keeps its rendered `html` in state, which
+    predates the state blob reaching 42.5 MB; re-rendering is a Jinja pass over a small dict.
+    Keeping one representation also means the HTML can never disagree with the content it came
+    from.
+    """
+
+    title: str
+    content: dict
+    generated_at: datetime
+    stale: bool = False
+
+
+class DesignedJobRecord(BaseModel):
+    """A job designed in Work Design Studio.
+
+    The only artefact in any of the three studios a *person* authored rather than a model,
+    which is why lineage marks it stale rather than clearing it: a title, a headcount and an
+    arrangement of work someone argued about in a workshop cannot be regenerated.
+    """
+
+    id: str
+    title: str
+    # Fractional deliberately: a design that needs 2.5 people is a real answer, and rounding
+    # it up is how an over-capacity design stops being visible.
+    headcount: float = 1.0
+    facets: WorkDesignFacets = Field(default_factory=WorkDesignFacets)
+    selected_agent_ids: list[str] = Field(default_factory=list)
+    selected_skill_ids: list[str] = Field(default_factory=list)
+    imported_from_profile_key: str | None = None
+    tasks: list[DesignedTaskLine] = Field(default_factory=list)
+    notes: str = ""
+    profile_doc: DesignedJobProfileDoc | None = None
+    # task_cluster_id -> fingerprint of the assessment this line was designed against.
+    # Compared on read so re-assessing one cluster flags only the designs that touch it,
+    # instead of a blanket cascade marking every job stale.
+    basis: dict[int, str] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+    stale: bool = False
+    stale_reason: str = ""
+
+
+class WorkDesignState(BaseModel):
+    """Work Design Studio's own state.
+
+    Reads the workforce assessment and the levers; nothing upstream reads it back. A designed
+    job is a few kB, so fifty of them are well under 1% of the state blob and all of it lives
+    here. If `profile_doc.content` ever totals more than about a megabyte, move it to a side
+    blob and keep the title and timestamp here — the same split TaskSkillRecord and
+    AgentDefinitionRecord already use.
+    """
+
+    jobs: list[DesignedJobRecord] = Field(default_factory=list)
+    # How much of the augmentation potential a project assumes is realised.
+    # `augmentation_pct` means "share of this task where AI help applies", not "time saved",
+    # so turning one into the other needs an assumption. Held in state rather than as a module
+    # constant so a project can change it, the change is versioned in lineage, and every
+    # number derived from it can say what it used.
+    augmentation_uplift: float = 0.5
+    audit: dict = Field(default_factory=dict)
+
+
 class TaxonomyCandidateRecord(BaseModel):
     """One shortlisted specialization the reranker chose from. Kept in full so a
     challenged match can be re-argued against what was actually on the table."""
@@ -650,3 +773,5 @@ class ProjectState(BaseModel):
     matching: MatchingState = Field(default_factory=MatchingState)
     # Work Architecture Studio. Reads everything above; nothing above reads it.
     workforce: WorkforceState = Field(default_factory=WorkforceState)
+    # Work Design Studio. Reads the assessment and the levers; nothing upstream reads it.
+    work_design: WorkDesignState = Field(default_factory=WorkDesignState)

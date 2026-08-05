@@ -132,6 +132,59 @@ class ProcessFact:
 
 
 @dataclass
+class BusinessUnitFact:
+    """One (job profile cluster, business-framework path) with the headcount behind it.
+
+    Aggregated at build time rather than kept per record, but *not* collapsed to one path
+    per profile: a job profile spans departments, so filtering by department has to yield
+    that department's share of the profile's headcount. Storing the cross-tab is what makes
+    a partial answer possible instead of an all-or-nothing one.
+    """
+
+    job_cluster: int
+    level_1: str
+    level_2: str
+    level_3: str
+    headcount: int
+
+
+@dataclass
+class AgentFact:
+    """One specified agent, as Work Design selects it.
+
+    Carried in the graph blob so the lever list can be built without reading the 42.5 MB
+    state blob on a control that fires on every checkbox.
+    """
+
+    agent_id: str
+    name: str
+    task_cluster: int
+    automation_pct: float
+    human_in_the_loop: bool
+    # Share of absorbed time that supervising it costs back, and whether that came from the
+    # agent's own specification or from the project's assumption.
+    oversight_fraction: float
+    oversight_source: str
+    oversight_tasks: list[tuple[str, str, float]] = field(default_factory=list)
+
+
+@dataclass
+class AugmentationFact:
+    """One generated augmentation skill, scoped to the (role, cluster) it was written for.
+
+    Both keys matter: applying a skill written for one role to every role in the cluster
+    would overstate the saving, so the pair is what the arithmetic filters on.
+    """
+
+    skill_id: str
+    name: str
+    profile_key: str
+    role_title: str
+    task_cluster: int
+    rank_score: float
+
+
+@dataclass
 class Facts:
     """The whole graph at leaf resolution. Serialised to one blob."""
 
@@ -155,6 +208,16 @@ class Facts:
     job_opportunity: dict[int, tuple[float, float, float]] = field(default_factory=dict)
     # Step 2. Empty until a process has been uploaded and mapped.
     processes: list[ProcessFact] = field(default_factory=list)
+    # Work Design Studio. All three are additive and all three read through `.get` below,
+    # so a graph blob written before this studio existed still loads.
+    #
+    # job profile cluster -> (profile_key, title). The graph is keyed by cluster id while
+    # everything outside it joins on profile_key, and Work Design needs both.
+    job_profile_keys: dict[int, tuple[str, str]] = field(default_factory=dict)
+    business_units: list[BusinessUnitFact] = field(default_factory=list)
+    agents: list[AgentFact] = field(default_factory=list)
+    augmentations: list[AugmentationFact] = field(default_factory=list)
+    has_business_framework: bool = False
 
     def to_json(self) -> dict:
         return {
@@ -178,6 +241,29 @@ class Facts:
             ],
             "task_opportunity": {str(k): list(v) for k, v in self.task_opportunity.items()},
             "job_opportunity": {str(k): list(v) for k, v in self.job_opportunity.items()},
+            "job_profile_keys": {str(k): list(v) for k, v in self.job_profile_keys.items()},
+            "has_business_framework": self.has_business_framework,
+            "business_units": [
+                [b.job_cluster, b.level_1, b.level_2, b.level_3, b.headcount]
+                for b in self.business_units
+            ],
+            "agents": [
+                {
+                    "agent_id": a.agent_id,
+                    "name": a.name,
+                    "task_cluster": a.task_cluster,
+                    "automation_pct": a.automation_pct,
+                    "human_in_the_loop": a.human_in_the_loop,
+                    "oversight_fraction": a.oversight_fraction,
+                    "oversight_source": a.oversight_source,
+                    "oversight_tasks": [list(t) for t in a.oversight_tasks],
+                }
+                for a in self.agents
+            ],
+            "augmentations": [
+                [g.skill_id, g.name, g.profile_key, g.role_title, g.task_cluster, g.rank_score]
+                for g in self.augmentations
+            ],
             "processes": [
                 {
                     "process_id": p.process_id,
@@ -234,6 +320,34 @@ class Facts:
                     unmapped=[(str(a), str(b)) for a, b in x.get("unmapped", [])],
                 )
                 for x in d.get("processes", [])
+            ],
+            job_profile_keys={
+                int(k): (str(v[0]), str(v[1]))
+                for k, v in (d.get("job_profile_keys") or {}).items()
+            },
+            has_business_framework=bool(d.get("has_business_framework")),
+            business_units=[
+                BusinessUnitFact(int(c), str(a), str(b), str(cc), int(h))
+                for c, a, b, cc, h in d.get("business_units", [])
+            ],
+            agents=[
+                AgentFact(
+                    agent_id=str(x["agent_id"]),
+                    name=str(x["name"]),
+                    task_cluster=int(x["task_cluster"]),
+                    automation_pct=float(x["automation_pct"]),
+                    human_in_the_loop=bool(x["human_in_the_loop"]),
+                    oversight_fraction=float(x.get("oversight_fraction", 0.0)),
+                    oversight_source=str(x.get("oversight_source", "fallback")),
+                    oversight_tasks=[
+                        (str(t[0]), str(t[1]), float(t[2])) for t in x.get("oversight_tasks", [])
+                    ],
+                )
+                for x in d.get("agents", [])
+            ],
+            augmentations=[
+                AugmentationFact(str(i), str(n), str(pk), str(rt), int(tc), float(rs))
+                for i, n, pk, rt, tc, rs in d.get("augmentations", [])
             ],
         )
 
@@ -405,6 +519,56 @@ def build(state: ProjectState, *, version: int = 1) -> Facts:
         key = key_of_cluster.get(pid)
         heads = headcount.get(key, 0) if key else 0
         jf.metrics[pid] = float(heads) if facts.has_headcount else float(jf.members.get(pid, 0))
+
+    # ---- Work Design Studio ------------------------------------------------
+    # Carried in the graph blob rather than read from state on demand, because the studio's
+    # facets and lever list are controls that fire on every interaction, and reading the
+    # 42.5 MB state blob per keystroke is the mistake the graph route already documents.
+    titles = {d.profile_cluster_id: d.title for d in state.job_profiles}
+    facts.job_profile_keys = {
+        cid: (key, titles.get(cid, "")) for cid, key in key_of_cluster.items()
+    }
+
+    facts.has_business_framework = has_business_framework(state)
+    for key, paths in profile_business_units(state).items():
+        cid = cluster_of_key.get(key)
+        if cid is None:
+            continue
+        for (l1, l2, l3), heads in paths.items():
+            facts.business_units.append(BusinessUnitFact(cid, l1, l2, l3, heads))
+
+    from app.services.workforce import agents as ag  # local: avoids a module cycle
+
+    for a in state.workforce.agents:
+        fraction, source = ag.oversight_fraction(
+            pct_total=a.oversight_pct_total, human_in_the_loop=a.human_in_the_loop
+        )
+        facts.agents.append(
+            AgentFact(
+                agent_id=a.id,
+                name=a.name,
+                task_cluster=a.task_cluster_id,
+                automation_pct=a.automation_pct,
+                human_in_the_loop=a.human_in_the_loop,
+                oversight_fraction=fraction,
+                oversight_source=source,
+                oversight_tasks=[
+                    (t.name, t.definition, t.pct_of_absorbed_time) for t in a.oversight_tasks
+                ],
+            )
+        )
+
+    facts.augmentations = [
+        AugmentationFact(
+            skill_id=s.id,
+            name=s.name,
+            profile_key=s.profile_key,
+            role_title=s.role_title,
+            task_cluster=s.task_cluster_id,
+            rank_score=s.rank_score,
+        )
+        for s in state.workforce.skills_guidance
+    ]
 
     # ---- job profile <-> skill cluster ------------------------------------
     # Weight is how many of this profile's skills fall in that cluster: the strength

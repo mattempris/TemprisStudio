@@ -34,6 +34,51 @@ from datetime import datetime, timezone
 
 from app.services import llm
 
+# The line between an action an agent absorbs and one it must not attempt. Stated once:
+# the prompt tells the model where the line is, the spec records which side each action
+# fell on, and Work Design removes time on the same basis. It was written twice before
+# adding a third reader, which is how a spec and the arithmetic behind it start to
+# disagree about the same agent.
+ABSORPTION_THRESHOLD = 40.0
+
+# Total oversight cost is clamped here rather than retried. A near-miss on a sum is
+# something code can simply provide — the same reasoning as _normalise_pcts in the
+# opportunity assessment — and one stubborn agent should not cost a bulk run. Above this,
+# the model is describing an agent that costs more to supervise than it saves; that is a
+# real finding, so it is clamped and flagged rather than silently accepted.
+OVERSIGHT_CEILING = 60.0
+
+# What to assume when a specification carries no oversight tasks of its own. Two cases,
+# and both are permanent rather than a migration aid: every agent written before the field
+# existed is in this state, and a future one can land here too — per-agent failure is
+# tolerated in a bulk run, and a malformed list can validate down to nothing.
+#
+# An empty list must therefore degrade to a labelled assumption rather than to zero.
+# Contributing zero oversight would silently flatter every design that used the agent,
+# which is the one failure mode worse than being approximately wrong.
+OVERSIGHT_FALLBACK_SUPERVISED = 0.15
+OVERSIGHT_FALLBACK_UNSUPERVISED = 0.05
+
+
+def oversight_fraction(
+    *,
+    pct_total: float,
+    human_in_the_loop: bool,
+    supervised: float = OVERSIGHT_FALLBACK_SUPERVISED,
+    unsupervised: float = OVERSIGHT_FALLBACK_UNSUPERVISED,
+) -> tuple[float, str]:
+    """The share of absorbed time that supervising an agent costs back.
+
+    Returns (fraction, source) where source is "specification" or "fallback". Callers are
+    expected to surface the source: a number the model judged for this specific agent and
+    a house assumption applied to all of them are different claims, and the app's habit is
+    to say which it is rather than to present both as measurement.
+    """
+    if pct_total > 0:
+        return pct_total / 100.0, "specification"
+    return (supervised if human_in_the_loop else unsupervised), "fallback"
+
+
 # Deliberately flat: two levels of nesting at most, and the innermost arrays hold
 # strings rather than objects. Acceptance criteria as "Given… when… then…" strings lose
 # nothing — they are rendered as text either way.
@@ -127,6 +172,25 @@ AGENT_SCHEMA = {
         "trigger": {"type": "string"},
         "completion_definition": {"type": "string"},
         "retained_by_people": {"type": "array", "items": {"type": "string"}},
+        # Work a person must do BECAUSE the agent exists. Produced in the same call that
+        # decides what the agent absorbs, so the two are one judgement rather than a
+        # ratio applied afterwards. Deliberately the cheapest possible array-of-objects
+        # — three scalars, no nesting — because grammar budget is the binding constraint
+        # here; see the note above AGENT_SCHEMA. No minimum/maximum on the integer: this
+        # API rejects range keywords outright, so the range is enforced in code.
+        "oversight_tasks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "definition": {"type": "string"},
+                    "pct_of_absorbed_time": {"type": "integer"},
+                },
+                "required": ["name", "definition", "pct_of_absorbed_time"],
+                "additionalProperties": False,
+            },
+        },
         "user_personas": {
             "type": "array",
             "items": {
@@ -210,6 +274,7 @@ AGENT_SCHEMA = {
         "trigger",
         "completion_definition",
         "retained_by_people",
+        "oversight_tasks",
         "user_personas",
         "knowledge_sources",
         "tools",
@@ -247,6 +312,13 @@ BUSINESS_KEYS = (
     "success_criteria",
     "capabilities",
     "retained_by_people",
+    # In the business half, not the ops half. This call already holds the "what does the
+    # agent take, what stays with people" frame — its prompt contrasts absorbed against
+    # must-stay-human actions — so oversight is the third face of the same question. The
+    # ops call is told to produce only operational content and would have to re-derive
+    # the split from scratch. Business is also the smaller half, which matters when the
+    # constraint is grammar budget.
+    "oversight_tasks",
 )
 OPS_KEYS = (
     "workflow_steps",
@@ -279,6 +351,15 @@ SYSTEM = (
     "Scope it honestly. An action scored low for automation is work the agent must NOT "
     "attempt — put it in `retained_by_people` and reflect it in the handoff. An agent "
     "specified as doing the judgement is an agent that will not pass review.\n\n"
+    "oversight_tasks: 1-3 tasks a person must now do BECAUSE this agent exists — "
+    "checking its output, handling what it escalates, correcting what it gets wrong. "
+    "Name them as work, in the voice of a task in a job description ('Reviewing drafted "
+    "acknowledgement letters'), not as a process step. `pct_of_absorbed_time` is each "
+    "task's cost as a share of the time the agent takes off people: 5-25% in total is "
+    "typical, and above that only where a person must check every single output before it "
+    "has any effect. An agent whose oversight costs more than half of what it saves is "
+    "one that should not be built, and saying so is more useful than a flattering "
+    "number.\n\n"
     "goals: 2-3, with metrics in TIME or QUALITY terms only. Never money — a cost "
     "saving is a consequence someone else will calculate, and inventing one here is "
     "the fastest way to lose the reader's trust.\n\n"
@@ -327,7 +408,7 @@ class AgentInput:
     unit: str = "role-weeks"
     client_name: str = ""
 
-    def prompt(self, *, threshold: float = 40.0) -> str:
+    def prompt(self, *, threshold: float = ABSORPTION_THRESHOLD) -> str:
         automatable = [a for a in self.actions if a[2] >= threshold]
         manual = [a for a in self.actions if a[2] < threshold]
         lines = [
@@ -365,10 +446,52 @@ class AgentSpec:
     spec: dict
     human_in_the_loop: bool
     n_capabilities: int
+    # Carried on the return value rather than dug back out of `spec`, so the route
+    # persisting the record does not have to know the blob's internal shape.
+    oversight_tasks: list[dict] = field(default_factory=list)
+    oversight_pct_total: float = 0.0
+    oversight_clamped: bool = False
 
 
 class AgentError(RuntimeError):
     pass
+
+
+def _oversight_tasks(value) -> tuple[list[dict], float, bool]:
+    """Parse, validate and clamp the model's oversight tasks.
+
+    Returns (tasks, total pct, clamped). A task with no name or a non-positive share is
+    dropped: an unnamed line cannot appear in a job description, and a zero-cost oversight
+    task is a claim that supervising something is free.
+    """
+    out: list[dict] = []
+    for raw in value or []:
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name", "")).strip()
+        try:
+            pct = float(raw.get("pct_of_absorbed_time") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not name or pct <= 0:
+            continue
+        out.append(
+            {
+                "name": name,
+                "definition": str(raw.get("definition", "")).strip(),
+                "pct_of_absorbed_time": pct,
+            }
+        )
+    total = sum(t["pct_of_absorbed_time"] for t in out)
+    clamped = total > OVERSIGHT_CEILING
+    if clamped and total > 0:
+        # Scaled proportionally rather than truncated, so the relative weight the model
+        # gave each task survives.
+        scale = OVERSIGHT_CEILING / total
+        for t in out:
+            t["pct_of_absorbed_time"] = round(t["pct_of_absorbed_time"] * scale, 1)
+        total = OVERSIGHT_CEILING
+    return out, round(total, 1), clamped
 
 
 def _strings(value) -> list[str]:
@@ -400,6 +523,7 @@ def build_spec(inp: AgentInput, d: dict, *, client_slug: str) -> AgentSpec:
     host = f"{slugify(client_slug)}.example"
     name = f"{inp.cluster_name} Agent"
     hitl = bool(d.get("human_in_the_loop", True))
+    oversight, oversight_total, oversight_clamped = _oversight_tasks(d.get("oversight_tasks"))
     now = datetime.now(timezone.utc).isoformat()
     frameworks = _strings(d.get("compliance_frameworks")) or ["UK GDPR"]
 
@@ -458,6 +582,9 @@ def build_spec(inp: AgentInput, d: dict, *, client_slug: str) -> AgentSpec:
         slug=slug,
         purpose=str(d.get("purpose", "")),
         human_in_the_loop=hitl,
+        oversight_tasks=oversight,
+        oversight_pct_total=oversight_total,
+        oversight_clamped=oversight_clamped,
         n_capabilities=len(capabilities),
         spec={
             "meta": {
@@ -511,8 +638,17 @@ def build_spec(inp: AgentInput, d: dict, *, client_slug: str) -> AgentSpec:
                     "SC",
                 ),
                 "scope": {
-                    "absorbed_actions": [a[0] for a in inp.actions if a[2] >= 40.0],
+                    "absorbed_actions": [
+                        a[0] for a in inp.actions if a[2] >= ABSORPTION_THRESHOLD
+                    ],
                     "retained_by_people": _strings(d.get("retained_by_people")),
+                    # The fourth face of "what moves and what does not": absorbed_actions
+                    # is what leaves, retained_by_people is what never moved, and this is
+                    # what the move creates. In the spec as well as in state because the
+                    # spec is a client deliverable and should be complete on its own.
+                    "oversight_tasks": oversight,
+                    "oversight_pct_of_absorbed_time": oversight_total,
+                    "oversight_clamped": oversight_clamped,
                     "roles_affected": [r[0] for r in sorted(inp.roles, key=lambda r: -r[1])],
                 },
             },

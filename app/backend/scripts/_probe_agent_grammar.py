@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import copy
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -58,6 +59,25 @@ BUSINESS = [
     "purpose", "problem_statement", "goals", "non_goals", "assumptions",
     "constraints", "success_criteria", "capabilities", "retained_by_people",
 ]
+# Read from the module rather than restated, so the probe cannot drift from what is
+# actually sent — the whole point of _half() deriving the halves from one union.
+from app.services.workforce.agents import BUSINESS_KEYS, OPS_KEYS  # noqa: E402
+
+# The grammar-cheapest fallback shape for oversight tasks: three parallel arrays of
+# scalars, zipped in code. Ugly, and only reached if the array-of-objects will not fit.
+FLAT_OVERSIGHT = {
+    "oversight_task_names": {"type": "array", "items": {"type": "string"}},
+    "oversight_task_definitions": {"type": "array", "items": {"type": "string"}},
+    "oversight_task_pcts": {"type": "array", "items": {"type": "integer"}},
+}
+
+
+def with_flat_oversight(keys) -> dict:
+    """A half with the object-shaped oversight field swapped for three flat arrays."""
+    s = subset([k for k in keys if k != "oversight_tasks"])
+    s["properties"].update(FLAT_OVERSIGHT)
+    s["required"] = list(s["properties"])
+    return s
 OPS = [
     "workflow_steps", "trigger", "completion_definition", "user_personas",
     "knowledge_sources", "tools", "risks", "kpis",
@@ -66,9 +86,30 @@ OPS = [
 ]
 
 
-def compiles(label: str, schema: dict) -> bool:
-    """True if the API accepted the grammar. Truncation counts as acceptance."""
+def compiles(label: str, schema: dict, *, retries_on_529: int = 2) -> bool:
+    """True if the API accepted the grammar. Truncation counts as acceptance.
+
+    A 529 is retried rather than reported, because this project already knows that a
+    grammar that will not compile can come back as `overloaded_error` instead of a
+    grammar error. A schema that 529s every time while a strictly smaller sibling passed
+    in the same run is almost certainly too large, and reporting that as a transient
+    server problem would send someone down the wrong path for an afternoon.
+    """
     size = len(str(schema))
+    for attempt in range(retries_on_529 + 1):
+        try:
+            return _one(label, schema, size)
+        except anthropic.InternalServerError as e:
+            if attempt < retries_on_529:
+                time.sleep(3)
+                continue
+            print(f"  529 x{retries_on_529 + 1}  {label}  ({size:,} chars) — treat as TOO LARGE "
+                  f"if a smaller variant passed above: {str(e)[:70]}")
+            return False
+    return False
+
+
+def _one(label: str, schema: dict, size: int) -> bool:
     try:
         llm.complete(
             PROMPT,
@@ -107,8 +148,20 @@ def main() -> int:
         "neither": compiles(
             "neither", strip_required(strip_additional(copy.deepcopy(AGENT_SCHEMA)), top_only=False)
         ),
-        "business half": compiles("business half", subset(BUSINESS)),
-        "ops half": compiles("ops half", subset(OPS)),
+        # Controls first, deliberately: the halves as they were before oversight_tasks
+        # existed. Without a baseline in the same run, a failure below cannot be told
+        # apart from the API simply being unhappy today.
+        "business half (control)": compiles("business half (control)", subset(BUSINESS)),
+        "ops half (control)": compiles("ops half (control)", subset(OPS)),
+        # The candidate, and its fallbacks in order of preference.
+        "business + oversight": compiles("business + oversight", subset(list(BUSINESS_KEYS))),
+        "ops + oversight": compiles("ops + oversight", subset(list(OPS_KEYS) + ["oversight_tasks"])),
+        "business + flat oversight": compiles(
+            "business + flat oversight", with_flat_oversight(BUSINESS_KEYS)
+        ),
+        "oversight alone (third call)": compiles(
+            "oversight alone (third call)", subset(["oversight_tasks"])
+        ),
     }
     print()
     winners = [k for k, v in results.items() if v]

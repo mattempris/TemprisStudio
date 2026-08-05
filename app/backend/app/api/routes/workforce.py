@@ -31,6 +31,7 @@ from fastapi import UploadFile
 
 from app.models.project_state import (
     AgentDefinitionRecord,
+    AgentOversightTask,
     ContextDocRecord,
     FutureRoleRecord,
     ProcessAssessmentRecord,
@@ -1081,6 +1082,13 @@ def list_agents(client_slug: str, project_slug: str, threshold: float = 0.0) -> 
         if inp.absorbable < threshold:
             continue
         a = existing.get(inp.task_cluster_id)
+        ov_fraction, ov_source = (
+            ag.oversight_fraction(
+                pct_total=a.oversight_pct_total, human_in_the_loop=a.human_in_the_loop
+            )
+            if a
+            else (0.0, "none")
+        )
         rows.append(
             {
                 "cluster_id": inp.task_cluster_id,
@@ -1100,6 +1108,16 @@ def list_agents(client_slug: str, project_slug: str, threshold: float = 0.0) -> 
                         "purpose": a.purpose,
                         "n_capabilities": a.n_capabilities,
                         "human_in_the_loop": a.human_in_the_loop,
+                        # On the list, not only on the detail. Work Design recomputes the
+                        # task profile every time an agent is ticked, and reading these
+                        # from a per-agent call would be one request per checkbox.
+                        "oversight_tasks": [t.model_dump() for t in a.oversight_tasks],
+                        "oversight_pct_total": a.oversight_pct_total,
+                        "oversight_clamped": a.oversight_clamped,
+                        # Resolved here so every reader agrees on the number and on whether
+                        # it was judged for this agent or assumed for all of them.
+                        "oversight_fraction": ov_fraction,
+                        "oversight_source": ov_source,
                     }
                     if a
                     else None
@@ -1193,6 +1211,9 @@ async def generate_agents(
                     automation_pct=src.automation_pct if src else 0.0,
                     n_capabilities=r.n_capabilities,
                     human_in_the_loop=r.human_in_the_loop,
+                    oversight_tasks=[AgentOversightTask(**t) for t in r.oversight_tasks],
+                    oversight_pct_total=r.oversight_pct_total,
+                    oversight_clamped=r.oversight_clamped,
                     generated_at=now,
                 )
             )

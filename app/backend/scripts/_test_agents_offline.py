@@ -24,6 +24,10 @@ def check(label: str, condition: bool, detail: str = "") -> None:
     print(f"  {'OK  ' if condition else 'FAIL'}  {label}{f' — {detail}' if detail else ''}")
 
 
+def close(a: float, b: float, tol: float = 0.05) -> bool:
+    return abs(a - b) <= tol
+
+
 def count_params(node) -> int:
     """Properties at every level.
 
@@ -45,9 +49,14 @@ def count_params(node) -> int:
     return n
 
 
-# Sizes as probed on 2026-08-03: business 22 and ops 32 both compile, full 54 does not.
+# Sizes as probed on 2026-08-05: business 26 and ops 32 both compile, full 58 does not.
 # A half that grows past its recorded size needs the probe re-run before it is trusted.
-PROBED_SIZES = {"business": 22, "ops": 32}
+#
+# Business went 22 -> 26 when `oversight_tasks` was added. The probe was re-run and both
+# halves still compile, along with `ops + oversight` and a flat three-array fallback — so
+# there is headroom, not just a pass. This guard is the reason that happened before the
+# field was relied on rather than after a bulk run failed.
+PROBED_SIZES = {"business": 26, "ops": 32}
 
 
 MODEL_OUTPUT = {
@@ -196,6 +205,63 @@ def main() -> int:
           bare.spec["non_functional_requirements"]["security_privacy"]["compliance"]["frameworks"] == ["UK GDPR"])
 
     check("slugify handles punctuation", ag.slugify("Handling  Customer/Complaints!") == "handling-customer-complaints")
+
+    # ---- oversight tasks ----
+    # Work Design multiplies these percentages by the time an agent absorbs, so a bad one
+    # produces a plausible number rather than an error. Every case below is a way that
+    # could happen quietly.
+    print("\nOversight tasks — the cost an agent creates, not the work it takes")
+    tasks, total, clamped = ag._oversight_tasks(
+        [
+            {"name": "Reviewing drafted letters", "definition": "d", "pct_of_absorbed_time": 18},
+            {"name": "Handling escalations", "definition": "e", "pct_of_absorbed_time": 7},
+        ]
+    )
+    check("both tasks survive", len(tasks) == 2)
+    check("the total is their sum", close(total, 25.0), f"{total}")
+    check("and is not flagged as clamped", clamped is False)
+
+    tasks, total, clamped = ag._oversight_tasks(
+        [{"name": "A", "pct_of_absorbed_time": 70}, {"name": "B", "pct_of_absorbed_time": 30}]
+    )
+    check("a total above the ceiling is clamped", clamped is True and close(total, ag.OVERSIGHT_CEILING))
+    check(
+        "and scaled proportionally, keeping the model's relative weighting",
+        close(tasks[0]["pct_of_absorbed_time"], 42.0) and close(tasks[1]["pct_of_absorbed_time"], 18.0),
+        str([t["pct_of_absorbed_time"] for t in tasks]),
+    )
+
+    check(
+        "an unnamed task is dropped — it could not appear in a job description",
+        ag._oversight_tasks([{"name": "  ", "pct_of_absorbed_time": 5}])[0] == [],
+    )
+    check(
+        "a zero-cost task is dropped — supervising something is never free",
+        ag._oversight_tasks([{"name": "A", "pct_of_absorbed_time": 0}])[0] == [],
+    )
+    check(
+        "a missing list is empty rather than an error",
+        ag._oversight_tasks(None) == ([], 0, False),
+    )
+
+    spec = ag.build_spec(INPUT, MODEL_OUTPUT, client_slug="x")
+    scope = spec.spec["business_context"]["scope"]
+    check("the spec carries them beside what the agent absorbs", "oversight_tasks" in scope)
+    check(
+        "the spec records the total and whether it was clamped",
+        "oversight_pct_of_absorbed_time" in scope and "oversight_clamped" in scope,
+    )
+    check(
+        "and they are on the returned spec, so the route need not read the blob",
+        isinstance(spec.oversight_tasks, list) and spec.oversight_pct_total >= 0,
+    )
+
+    # A specification written before this field existed. It must degrade, not fail — every
+    # agent on every existing project is in this state.
+    legacy = ag.build_spec(INPUT, {k: v for k, v in MODEL_OUTPUT.items() if k != "oversight_tasks"},
+                           client_slug="x")
+    check("a specification with no oversight tasks still builds", legacy.oversight_pct_total == 0)
+    check("and reports an empty list rather than inventing one", legacy.oversight_tasks == [])
 
     print("\n" + ("PASS" if ok else "FAIL"))
     return 0 if ok else 1

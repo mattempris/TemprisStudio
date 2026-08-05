@@ -385,6 +385,23 @@ class TaskSkillRecord(BaseModel):
     generated_at: datetime | None = None
 
 
+class AgentOversightTask(BaseModel):
+    """Work a person must do because an agent exists.
+
+    Produced in the same model call that decides what the agent absorbs, so the two are
+    one judgement rather than a ratio applied afterwards. Kept in state as well as in the
+    spec blob because Work Design reads it on every lever recompute, and a 50 KB blob read
+    per agent per checkbox is the latency mistake the graph route already documents.
+    """
+
+    name: str
+    definition: str = ""
+    # Share of the time this agent takes off people that supervising it costs back.
+    # Scale-free deliberately: one specification is read against every different job
+    # sample in Work Design, and hours would bake in whichever one it was written for.
+    pct_of_absorbed_time: float
+
+
 class AgentDefinitionRecord(BaseModel):
     """A generated agent specification — step 6.
 
@@ -405,6 +422,12 @@ class AgentDefinitionRecord(BaseModel):
     automation_pct: float = 0.0
     n_capabilities: int = 0
     human_in_the_loop: bool = True
+    oversight_tasks: list[AgentOversightTask] = Field(default_factory=list)
+    # Sum of the above after clamping, cached so agents can be ranked by net effect
+    # without walking their children. Zero means the specification predates this field —
+    # readers fall back to a house assumption and say that they have.
+    oversight_pct_total: float = 0.0
+    oversight_clamped: bool = False
     generated_at: datetime | None = None
 
 

@@ -275,12 +275,27 @@ export interface SkillDetail extends SkillSummary {
 // ---------------------------------------------------------------------------
 // Step 6 — agent definitions
 // ---------------------------------------------------------------------------
+export interface AgentOversightTask {
+  name: string;
+  definition: string;
+  /** Share of the time this agent absorbs that supervising it costs back. */
+  pct_of_absorbed_time: number;
+}
+
 export interface AgentSummary {
   id: string;
   name: string;
   purpose: string;
   n_capabilities: number;
   human_in_the_loop: boolean;
+  /** Empty on a specification written before oversight tasks existed. */
+  oversight_tasks: AgentOversightTask[];
+  oversight_pct_total: number;
+  oversight_clamped: boolean;
+  /** The fraction to use, resolved server-side. `oversight_source` says whether it was
+   *  judged for this agent or is the project's assumption — show the difference. */
+  oversight_fraction: number;
+  oversight_source: "specification" | "fallback";
 }
 
 export interface AgentCandidate {

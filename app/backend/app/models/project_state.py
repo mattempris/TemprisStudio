@@ -58,6 +58,12 @@ class ColumnMapping(BaseModel):
     job_description_col: str | None = None
     job_level_col: str | None = None
     headcount_col: str | None = None
+    # The organisation's own reporting cascade, broadest first — e.g. "Corporate
+    # Functions" / "Finance" / "Procurement". Optional, and only present on sheets that
+    # carry it; Work Design offers them as a facet and hides the control when absent.
+    business_level_1_col: str | None = None
+    business_level_2_col: str | None = None
+    business_level_3_col: str | None = None
     confidence: dict[str, float] = Field(default_factory=dict)
     reasoning: dict[str, str] = Field(default_factory=dict)
     user_confirmed: bool = False
@@ -71,6 +77,17 @@ class JobRecordRaw(BaseModel):
     raw_text: str
     level_raw: str | None = None
     headcount: int | None = None
+    # Copied onto the record at ingest, as `headcount` is, rather than looked up from the
+    # sheet later. `source_row_index` is recorded but nothing reads it, so there is no
+    # working path back to the original cell.
+    #
+    # Note the contrast with `level_raw` above, which is written here and read NOWHERE in
+    # the app — a field that exists without surfacing. These three are only useful if the
+    # roll-up and the `has_business_framework` flag are built with them, which is why both
+    # ship in the same change rather than being left for later.
+    business_level_1: str | None = None
+    business_level_2: str | None = None
+    business_level_3: str | None = None
 
 
 class JobRecordStripped(BaseModel):

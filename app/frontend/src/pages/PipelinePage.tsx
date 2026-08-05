@@ -530,6 +530,9 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
                     job_description_col: mapping.job_description_col,
                     job_level_col: mapping.job_level_col,
                     headcount_col: mapping.headcount_col,
+                    business_level_1_col: mapping.business_level_1_col,
+                    business_level_2_col: mapping.business_level_2_col,
+                    business_level_3_col: mapping.business_level_3_col,
                     limit,
                   });
                   setHrisPreview(null);

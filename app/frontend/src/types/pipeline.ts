@@ -23,13 +23,19 @@ export type HrisMappingField =
   | "job_title_col"
   | "job_description_col"
   | "job_level_col"
-  | "headcount_col";
+  | "headcount_col"
+  | "business_level_1_col"
+  | "business_level_2_col"
+  | "business_level_3_col";
 
 export interface HrisSuggestedMapping {
   job_title_col: string | null;
   job_description_col: string | null;
   job_level_col: string | null;
   headcount_col: string | null;
+  business_level_1_col: string | null;
+  business_level_2_col: string | null;
+  business_level_3_col: string | null;
   /** Keyed by the same `*_col` names as the fields above. */
   confidence: Partial<Record<HrisMappingField, number>>;
   reasoning: Partial<Record<HrisMappingField, string>>;

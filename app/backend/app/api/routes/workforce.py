@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from fastapi import UploadFile
 
@@ -273,6 +273,48 @@ def opportunity_status(client_slug: str, project_slug: str) -> dict:
         "estimate_remaining": opp.cost_estimate(remaining),
         "estimate_all": opp.cost_estimate(total),
     }
+
+
+class SettingsRequest(BaseModel):
+    """Project-level workforce settings. Only what a user can legitimately change."""
+
+    hours_per_fte_week: float = Field(gt=0, le=168)
+
+
+@router.get("/settings")
+def get_workforce_settings(client_slug: str, project_slug: str) -> dict:
+    _, state = _load(client_slug, project_slug)
+    return {
+        "hours_per_fte_week": state.workforce.hours_per_fte_week,
+        "has_headcount": bool(_profile_headcount(state)),
+        "has_business_framework": wf.has_business_framework(state),
+    }
+
+
+@router.put("/settings")
+def put_workforce_settings(client_slug: str, project_slug: str, req: SettingsRequest) -> dict:
+    """Set the length of a full-time week.
+
+    This existed as a model field with a comment saying it was "configurable because a
+    35-hour and a 40-hour week give materially different numbers and neither is a safe
+    silent default" — and then no route ever wrote it, so it sat pinned at 37.5 on every
+    project. Every capacity figure and every released-hours figure divides by it, so a
+    client on a 40-hour week was reading numbers 6.7% wrong with no way to correct them.
+
+    Deliberately not a job: it changes no stored result. Everything derived from it —
+    released hours, capacity, required headcount — is computed on read, so the next
+    request simply reports different numbers. Nothing to invalidate, which is why this
+    does not touch lineage.
+    """
+    svc, state = _load(client_slug, project_slug)
+    before = state.workforce.hours_per_fte_week
+    state.workforce.hours_per_fte_week = req.hours_per_fte_week
+    svc.save_state(
+        state,
+        action="set-workforce-settings",
+        lineage_payload={"hours_per_fte_week": [before, req.hours_per_fte_week]},
+    )
+    return {"hours_per_fte_week": state.workforce.hours_per_fte_week, "was": before}
 
 
 class AssessRequest(BaseModel):

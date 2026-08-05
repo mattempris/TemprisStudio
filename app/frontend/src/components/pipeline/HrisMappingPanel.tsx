@@ -38,6 +38,24 @@ const FIELDS: {
     label: "Headcount",
     hint: "People per role. The only source of headcount analytics later.",
   },
+  // The organisation's own reporting cascade, broadest first. Optional throughout — most
+  // sheets carry one or two of these and plenty carry none. They become a filter in Work
+  // Design Studio, which hides the control entirely when nothing was mapped.
+  {
+    key: "business_level_1_col",
+    label: "Business level 1",
+    hint: "Broadest tier of the organisation's own structure, e.g. Corporate Functions",
+  },
+  {
+    key: "business_level_2_col",
+    label: "Business level 2",
+    hint: "Next tier down, e.g. Finance",
+  },
+  {
+    key: "business_level_3_col",
+    label: "Business level 3",
+    hint: "Finest tier, e.g. Procurement",
+  },
 ];
 
 interface Props {
@@ -54,6 +72,9 @@ export function HrisMappingPanel({ preview, onConfirm, onCancel, busy }: Props) 
     job_description_col: suggestion.job_description_col,
     job_level_col: suggestion.job_level_col,
     headcount_col: suggestion.headcount_col,
+    business_level_1_col: suggestion.business_level_1_col,
+    business_level_2_col: suggestion.business_level_2_col,
+    business_level_3_col: suggestion.business_level_3_col,
   });
   const [limitAll, setLimitAll] = useState(true);
   const [limit, setLimit] = useState(Math.min(100, preview.row_count));

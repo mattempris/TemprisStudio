@@ -104,6 +104,9 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
       job_description_col?: string | null;
       job_level_col?: string | null;
       headcount_col?: string | null;
+      business_level_1_col?: string | null;
+      business_level_2_col?: string | null;
+      business_level_3_col?: string | null;
       header_row?: number;
       limit?: number | null;
     }) =>

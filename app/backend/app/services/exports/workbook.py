@@ -151,6 +151,11 @@ def input_jobs_dataset(state: ProjectState) -> Dataset:
     """
     cols = [
         "Source job title", "Record ID", "Headcount", "Duplicate group",
+        # The organisation's own structure, beside the architecture the app derived. Having
+        # both on one row is what lets someone reconcile a job profile against the org
+        # chart they already know — the two hierarchies do not nest, so a profile can span
+        # several business units and this sheet is where that becomes visible.
+        "Business level 1", "Business level 2", "Business level 3",
         "Job family", "Job category", "Job profile",
         "Stability score", "Routed by model", "Route confidence", "Moved by model",
         "Backbone profile", "Secondary profile",
@@ -161,6 +166,10 @@ def input_jobs_dataset(state: ProjectState) -> Dataset:
 
     titles = {r.id: r.job_title for r in state.raw_records}
     hc = {r.id: r.headcount for r in state.raw_records}
+    bf = {
+        r.id: (r.business_level_1 or "", r.business_level_2 or "", r.business_level_3 or "")
+        for r in state.raw_records
+    }
     members = {g.group_id: g.member_ids for g in state.dedupe_groups}
 
     rows = []
@@ -170,6 +179,7 @@ def input_jobs_dataset(state: ProjectState) -> Dataset:
             rows.append([
                 titles.get(rec_id, rec_id), rec_id, hc.get(rec_id),
                 a.item_id if len(group) > 1 else "",
+                *bf.get(rec_id, ("", "", "")),
                 c.family_names.get(a.final_family_id, ""),
                 c.category_names.get(a.final_category_id, ""),
                 c.profile_names.get(a.final_profile_id, ""),

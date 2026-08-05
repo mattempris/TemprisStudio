@@ -297,6 +297,9 @@ async def ingest_hris_preview(
             "job_description_col": suggestion.job_description_col,
             "job_level_col": suggestion.job_level_col,
             "headcount_col": suggestion.headcount_col,
+            "business_level_1_col": suggestion.business_level_1_col,
+            "business_level_2_col": suggestion.business_level_2_col,
+            "business_level_3_col": suggestion.business_level_3_col,
             "confidence": suggestion.confidence,
             "reasoning": suggestion.reasoning,
         },
@@ -309,6 +312,10 @@ class ConfirmMappingRequest(BaseModel):
     job_description_col: str | None = None
     job_level_col: str | None = None
     headcount_col: str | None = None
+    # The organisation's reporting cascade, broadest first. All optional.
+    business_level_1_col: str | None = None
+    business_level_2_col: str | None = None
+    business_level_3_col: str | None = None
     header_row: int = 0
     # Every ingested row costs a strip call and (post-dedupe) a normalize call, so
     # a large export commits real spend. This lets a user trial a subset first
@@ -346,7 +353,16 @@ def ingest_hris_confirm(client_slug: str, project_slug: str, req: ConfirmMapping
 
     loaded = load_spreadsheet(source.filename, data, header_row=req.header_row)
     df = loaded.df
-    for col in filter(None, [req.job_title_col, req.job_description_col, req.job_level_col, req.headcount_col]):
+    mapped_cols = [
+        req.job_title_col,
+        req.job_description_col,
+        req.job_level_col,
+        req.headcount_col,
+        req.business_level_1_col,
+        req.business_level_2_col,
+        req.business_level_3_col,
+    ]
+    for col in filter(None, mapped_cols):
         if col not in df.columns:
             raise HTTPException(400, f"column '{col}' not present in the sheet")
 
@@ -375,6 +391,9 @@ def ingest_hris_confirm(client_slug: str, project_slug: str, req: ConfirmMapping
                 raw_text=description or title,
                 level_raw=_cell(row, req.job_level_col),
                 headcount=_safe_int(row[req.headcount_col]) if req.headcount_col else None,
+                business_level_1=_cell(row, req.business_level_1_col),
+                business_level_2=_cell(row, req.business_level_2_col),
+                business_level_3=_cell(row, req.business_level_3_col),
             )
         )
         added += 1
@@ -386,6 +405,9 @@ def ingest_hris_confirm(client_slug: str, project_slug: str, req: ConfirmMapping
         job_description_col=req.job_description_col,
         job_level_col=req.job_level_col,
         headcount_col=req.headcount_col,
+        business_level_1_col=req.business_level_1_col,
+        business_level_2_col=req.business_level_2_col,
+        business_level_3_col=req.business_level_3_col,
         user_confirmed=True,
     )
     svc.save_state(

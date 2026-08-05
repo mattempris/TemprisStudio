@@ -292,6 +292,68 @@ def profile_headcount(state: ProjectState) -> dict[str, int]:
     return out
 
 
+def profile_business_units(state: ProjectState) -> dict[str, dict[tuple[str, str, str], int]]:
+    """Per job profile_key, the business-framework paths beneath it and their headcount.
+
+    A cross-tab rather than one value per profile, because the two hierarchies genuinely
+    do not nest: a job profile cluster is built from role *content*, so "Credit Risk
+    Analyst" can span Retail Banking and Commercial Banking. Collapsing that to a single
+    dominant path would make a departmental filter silently wrong about which people it
+    included.
+
+    Keeping the split is what lets a facet return a *partial* profile — this department's
+    share of a job's headcount — rather than an all-or-nothing answer. Headcount falls
+    back to 1 per record when no headcount column was mapped, matching how
+    `profile_headcount`'s absence degrades to counting distinct jobs.
+
+    Deliberately not `profile_headcount`'s shape: that one sums, and business-framework
+    levels are labels. The closest existing precedent is `_source_titles` in the overview
+    route, which rolls strings rather than numbers up the same id chain.
+    """
+    if not state.clustering:
+        return {}
+    bf = {
+        r.id: (
+            (r.business_level_1 or "").strip(),
+            (r.business_level_2 or "").strip(),
+            (r.business_level_3 or "").strip(),
+        )
+        for r in state.raw_records
+    }
+    hc = {r.id: r.headcount for r in state.raw_records}
+    groups = {g.group_id: g.member_ids for g in state.dedupe_groups}
+    key_of_cluster = {d.profile_cluster_id: d.profile_key for d in state.job_profiles}
+
+    out: dict[str, dict[tuple[str, str, str], int]] = {}
+    for a in state.clustering.assignments:
+        key = key_of_cluster.get(a.final_profile_id)
+        if not key:
+            continue
+        for member in groups.get(a.item_id, [a.item_id]):
+            path = bf.get(member)
+            # A record with no framework value at all contributes nothing: an empty path
+            # is not a department, and bucketing every unmapped record under ("","","")
+            # would invent a business unit named nothing.
+            if not path or not any(path):
+                continue
+            heads = hc.get(member) or 1
+            bucket = out.setdefault(key, {})
+            bucket[path] = bucket.get(path, 0) + heads
+    return out
+
+
+def has_business_framework(state: ProjectState) -> bool:
+    """Whether any ingested record carries a framework value.
+
+    Its own function so callers can hide the facet entirely rather than showing three
+    empty dropdowns — the same reason `has_headcount` exists. Reads the records, not the
+    column mapping: a mapped column that turned out to be blank is still no framework.
+    """
+    return any(
+        (r.business_level_1 or r.business_level_2 or r.business_level_3) for r in state.raw_records
+    )
+
+
 def _entity_facts(state: ProjectState, entity: str) -> EntityFacts:
     clustering = {
         "job": state.clustering,

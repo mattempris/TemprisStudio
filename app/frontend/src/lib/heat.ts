@@ -45,11 +45,16 @@ export function heatColor(value: number, min: number, max: number): string {
  *
  * Same ramp, deliberately, so the app has one visual language for "further along
  * means more" — but linear rather than logarithmic, because these are percentages of
- * a bounded quantity and are not skewed the way cluster sizes are. The ceiling is the
- * assessment's own: no action may score above 80, so 80 is the top of the scale and a
- * 60% action reads as high rather than as two-thirds of the way to nothing.
+ * a bounded quantity and are not skewed the way cluster sizes are.
+ *
+ * 100, not 80. The assessment used to cap both axes at 80 and this matched it, so the
+ * hot end of the ramp meant "as automatable as anything gets". The cap is gone — some
+ * work genuinely is fully automatable, and the residual supervision is now modelled as
+ * the agent's own oversight tasks instead of being baked into a ceiling. Where a real
+ * taxonomy's scores cluster in a narrow band, `opportunityColorIn` stretches the ramp to
+ * the observed range, which is what keeps the picture readable now the scale is wider.
  */
-export const OPPORTUNITY_CEILING = 80;
+export const OPPORTUNITY_CEILING = 100;
 
 export function opportunityColor(pct: number, ceiling = OPPORTUNITY_CEILING): string {
   return heatColorAt(pct / ceiling);

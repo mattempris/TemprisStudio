@@ -93,8 +93,10 @@ def main() -> int:
     calls = []
     good = {"actions": [{"name": "A", "definition": "d", "pct_of_task": 100,
                          "automation_pct": 55, "augmentation_pct": 60}]}
+    # 140 rather than 95: with the ceiling removed, 95 is a legitimate score for
+    # genuinely mechanical work, so the out-of-range case has to be an actual mistake.
     bad = {"actions": [{"name": "A", "definition": "d", "pct_of_task": 100,
-                        "automation_pct": 95, "augmentation_pct": 60}]}
+                        "automation_pct": 140, "augmentation_pct": 60}]}
     opp.llm.complete_json = stub([bad, good], calls=calls)  # type: ignore[assignment]
     a = opp.assess_cluster(IN)
     check("out-of-range score triggers a retry", len(calls) == 2, f"{len(calls)} calls")
@@ -106,7 +108,7 @@ def main() -> int:
     opp.llm.complete_json = stub([bad, bad], calls=calls)  # type: ignore[assignment]
     a = opp.assess_cluster(IN)
     check("a stubborn cluster is clamped rather than lost", a.clamped is True)
-    check("clamped to the ceiling", close(a.automation_pct, float(opp.SCORE_CEILING)),
+    check("clamped into the band", close(a.automation_pct, float(opp.SCORE_MAX)),
           f"{a.automation_pct}")
 
     # ---- role roll-up ----

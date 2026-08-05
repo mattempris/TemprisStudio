@@ -33,12 +33,24 @@ from dataclasses import dataclass, field
 
 from app.services import llm
 
-# Both scores are capped here rather than at 100. Nothing in real work is fully
-# absorbed: there is always a hand-off, an exception, a check, or someone who has to
-# be accountable for the output. A model asked for an unbounded percentage will
-# cheerfully return 95 for "draft the letter", and the resulting business case is one
-# a client can dismantle in a meeting.
-SCORE_CEILING = 80
+# The full range is allowed. An earlier version capped both axes at 80 on the grounds
+# that nothing in real work is fully absorbed — there is always a hand-off, an exception,
+# or someone accountable. That reasoning conflated two different things, and the cap was
+# doing the wrong job:
+#
+#   - Some work genuinely is fully automatable. Transferring a figure between two systems
+#     against a written rule has no residual human part, and a ceiling made that
+#     unreachable by construction, so an agent could never be shown absorbing a task
+#     outright however mechanical it was.
+#   - The residual human part of automatable work is real, but it is *supervision*, and it
+#     is now modelled explicitly: an agent specification carries its own oversight tasks
+#     with time estimates, which Work Design adds back as visible task lines.
+#
+# So the cap has been replaced by a harder question in the prompt and a visible add-back
+# downstream. Two mechanisms for one cost would understate every lever; see the prompt's
+# note telling the model NOT to deduct for review time.
+SCORE_MIN = 0
+SCORE_MAX = 100
 
 ACTIONS_SCHEMA = {
     "type": "object",
@@ -87,11 +99,11 @@ SYSTEM = (
     "category in general terms.\n\n"
     "pct_of_task: integer share of the cluster's total effort this action takes. "
     "The actions MUST sum to exactly 100.\n\n"
-    "automation_pct (0-80): the share of THIS action that a current AI system — a "
-    "capable language model with access to the relevant systems and documents, or an "
-    "agent built on one — could carry out unattended, to a standard that would be "
-    "accepted without a person redoing the work.\n\n"
-    "augmentation_pct (0-80): how much faster a competent person is at THIS action "
+    "automation_pct (0-100): the share of THIS action that AI systems available and "
+    "deployable TODAY — a capable language model with access to the relevant systems "
+    "and documents, or an agent built on one — would carry out unattended, to a "
+    "standard accepted without a person redoing the work.\n\n"
+    "augmentation_pct (0-100): how much faster a competent person is at THIS action "
     "with AI assistance, when the person stays in the loop and remains accountable "
     "for the outcome.\n\n"
     "The two scores are different questions and often diverge sharply. Reviewing a "
@@ -100,25 +112,47 @@ SYSTEM = (
     "form removes most of the reading). Chasing an outstanding document automates "
     "well and augments little, because there was never much thinking in it. Chairing "
     "a disciplinary hearing scores near zero on both.\n\n"
-    "Calibration — be discriminating. A set of actions all scored 40-55 is a failed "
-    "assessment: it tells the client nothing and is almost certainly wrong about both "
-    "the easy and the hard parts.\n"
-    "LOW automation (0-25): face-to-face negotiation, building and holding "
-    "relationships, judgement about people, regulated or personal advice, physical "
-    "and manual work, safety-critical decisions, and anything whose entire point is "
-    "that a named person is accountable.\n"
-    "MODERATE automation (25-45): work with a clear method but real consequences if "
-    "it is wrong, where a person must review every output.\n"
-    "HIGH automation (45-80): data entry and transfer between systems, document "
-    "production from known inputs, checking one document against another, chasing, "
-    "summarising, first-draft writing, structured comparison, routine reporting, and "
-    "classification against a written rulebook.\n"
+    "The test for a HIGH automation score is specific: would you be comfortable with "
+    "NO PERSON LOOKING at the output before it takes effect? If someone must read every "
+    "one, the action is moderate at best, however mechanical it looks.\n\n"
+    "Do NOT deduct for the time a person spends reviewing, correcting or supervising "
+    "the AI. That cost is estimated separately and added back elsewhere; subtracting it "
+    "here as well would count it twice. Score what the AI does to the work itself.\n\n"
+    "Calibration — be discriminating, and be sceptical. A set of actions all scored "
+    "40-55 is a failed assessment: it tells the client nothing and is almost certainly "
+    "wrong about both the easy and the hard parts. Err downwards on anything you are "
+    "unsure about — an overstated number is worth less than nothing, because the client "
+    "will find the one you cannot defend and stop believing the rest.\n"
+    "NEAR ZERO (0-10): physical and manual work, face-to-face negotiation, holding a "
+    "relationship, difficult conversations, judgement about people, and anything whose "
+    "entire point is that a named person is accountable.\n"
+    "LOW (10-30): regulated or personal advice, safety-critical decisions, work "
+    "requiring context that exists only in someone's head or in a conversation.\n"
+    "MODERATE (30-55): a clear method but real consequences if it is wrong, so a person "
+    "reads every output before it counts. Most analytical and drafting work sits here.\n"
+    "HIGH (55-85): mechanical transformation of known inputs — transferring data between "
+    "systems, producing a document from a template and a record, checking one document "
+    "against another, chasing, summarising, structured comparison, classification "
+    "against a written rulebook.\n"
+    "FULL (85-100): the action is deterministic, its inputs are complete and structured, "
+    "the rule is written down, there is no judgement in it, and being wrong is cheap and "
+    "self-evident. Issuing a certificate from a completed training record, sending a "
+    "reminder when a date passes, moving a figure from one system to another, and "
+    "generating a standing weekly report from a query all belong here — a person adds "
+    "nothing by touching them, and pretending otherwise understates the case as badly as "
+    "inflating the difficult work overstates it.\n"
+    "Be sceptical about the difficult end, not about this one. Scepticism is for work "
+    "involving judgement, accountability or people; it is not a reason to mark down work "
+    "that is genuinely mechanical. A clerical action scored 45 because 'someone might "
+    "want to look' is as wrong as a negotiation scored 70.\n"
+    "Most actions in most organisations are LOW or MODERATE, and a minority are genuinely "
+    "FULL. Use the whole range: an assessment where nothing exceeds 60 has almost "
+    "certainly failed to identify the mechanical work, just as one where half the actions "
+    "exceed 60 has failed to identify the hard work.\n"
     "Augmentation is usually higher than automation for analytical, drafting and "
     "research work, similar for routine administration, and near zero for physical "
     "or purely interpersonal work — AI cannot carry a box or hold a difficult "
-    "conversation on your behalf.\n\n"
-    "Neither score may exceed 80. There is always a hand-off, an exception or a "
-    "person who has to own the result."
+    "conversation on your behalf."
 )
 
 
@@ -299,7 +333,7 @@ def _out_of_range(actions: list[Action]) -> list[str]:
     for a in actions:
         for attr in ("automation_pct", "augmentation_pct"):
             v = getattr(a, attr)
-            if v < 0 or v > SCORE_CEILING:
+            if v < SCORE_MIN or v > SCORE_MAX:
                 bad.append(f"{a.name}.{attr}={v:g}")
     return bad
 
@@ -307,12 +341,12 @@ def _out_of_range(actions: list[Action]) -> list[str]:
 def assess_cluster(inp: ClusterInput, *, attempts: int = 2) -> ClusterAssessment:
     """Assess one task cluster. One LLM call, or two if the first is out of range.
 
-    A score outside 0-80 is rejected and the call repeated, per the plan — a model
-    that returns 95 has misunderstood the ceiling, and saying so usually fixes it. If
-    the repeat is also out of range the values are pulled into the band and the
-    assessment is flagged `clamped`, rather than failing the cluster outright: one
-    stubborn cluster should not cost a 750-cluster run, and a clamped score that is
-    marked as clamped can be reviewed, whereas a missing one cannot.
+    A score outside 0-100 is rejected and the call repeated — that is now only reachable
+    by a genuine mistake (a negative, or a number above 100) rather than by
+    misunderstanding a house cap. If the repeat is also out of range the values are pulled
+    into the band and the assessment is flagged `clamped`, rather than failing the cluster
+    outright: one stubborn cluster should not cost a 750-cluster run, and a clamped score
+    that is marked as clamped can be reviewed, whereas a missing one cannot.
     """
     prompt = inp.prompt()
     last_bad: list[str] = []
@@ -320,9 +354,10 @@ def assess_cluster(inp: ClusterInput, *, attempts: int = 2) -> ClusterAssessment
         p = prompt
         if last_bad:
             p += (
-                "\n\nYour previous answer put these outside the permitted 0-"
-                f"{SCORE_CEILING} range: {', '.join(last_bad[:6])}. "
-                f"No action may score above {SCORE_CEILING} on either axis."
+                "\n\nYour previous answer put these outside the permitted "
+                f"{SCORE_MIN}-{SCORE_MAX} range: {', '.join(last_bad[:6])}. "
+                "Both are percentages of a single action and must sit between "
+                f"{SCORE_MIN} and {SCORE_MAX}."
             )
         raw = llm.complete_json(
             p,
@@ -343,8 +378,8 @@ def assess_cluster(inp: ClusterInput, *, attempts: int = 2) -> ClusterAssessment
         clamped = bool(bad)
         if clamped:
             for a in actions:
-                a.automation_pct = min(SCORE_CEILING, max(0.0, a.automation_pct))
-                a.augmentation_pct = min(SCORE_CEILING, max(0.0, a.augmentation_pct))
+                a.automation_pct = min(SCORE_MAX, max(float(SCORE_MIN), a.automation_pct))
+                a.augmentation_pct = min(SCORE_MAX, max(float(SCORE_MIN), a.augmentation_pct))
         raw_sum = _normalise_pcts(actions)
         return ClusterAssessment(
             cluster_id=inp.cluster_id,

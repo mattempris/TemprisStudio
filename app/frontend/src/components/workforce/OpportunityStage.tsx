@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronRight, Flame, Play, Search } from "lucide-react";
+import { ChevronRight, Flame, LayoutGrid, List, Play, Search } from "lucide-react";
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
 import { ProgressBar } from "../wizard/ProgressBar";
 import { JobPulse } from "../wizard/JobPulse";
 import { HEAT_GRADIENT, OPPORTUNITY_CEILING, opportunityColor } from "../../lib/heat";
+import { TaskTreemap } from "./TaskTreemap";
 import { useJobStream } from "../../hooks/useJobStream";
 import type { workforceApi } from "../../services/workforceApi";
 import type {
@@ -394,6 +395,10 @@ function RoleRow({
   // Which task within this role has its actions showing. One at a time: the actions are
   // four or five rows each, and several open at once turns the role back into a wall.
   const [openTask, setOpenTask] = useState<number | null>(null);
+  // The treemap leads because the shape of the week is what a client reacts to. The list
+  // is kept rather than replaced: it is the only view that shows the arithmetic behind a
+  // task's score, and the only one usable without a pointer.
+  const [shape, setShape] = useState<"map" | "list">("map");
   return (
     <div className="border-b border-border last:border-0">
       <button
@@ -431,8 +436,16 @@ function RoleRow({
         </span>
       </button>
 
-      {open && (
-        <div className="bg-panel px-3 pb-2.5 pt-1">
+      {open && shape === "map" && (
+        <div className="bg-panel px-3 pb-2.5 pt-1.5">
+          <ShapeToggle shape={shape} onChange={setShape} />
+          <TaskTreemap tasks={role.tasks} actionsByCluster={actionsByCluster} heat={heat} />
+        </div>
+      )}
+
+      {open && shape === "list" && (
+        <div className="bg-panel px-3 pb-2.5 pt-1.5">
+          <ShapeToggle shape={shape} onChange={setShape} />
           <div className="flex items-center gap-3 py-1 text-[10px] font-extrabold uppercase tracking-wider text-text-muted">
             <span className="w-[10px] shrink-0" />
             <span className="min-w-0 flex-1">Task</span>
@@ -519,6 +532,32 @@ function RoleRow({
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Treemap or list, for one expanded role. */
+function ShapeToggle({
+  shape,
+  onChange,
+}: {
+  shape: "map" | "list";
+  onChange: (s: "map" | "list") => void;
+}) {
+  return (
+    <div className="mb-1.5 flex rounded-[6px] border border-border bg-card p-0.5 w-fit">
+      {(["map", "list"] as const).map((s) => (
+        <button
+          key={s}
+          onClick={() => onChange(s)}
+          className={`flex items-center gap-1 rounded-[4px] px-2 py-0.5 text-[10.5px] font-semibold transition-colors ${
+            shape === s ? "bg-accent-bg text-accent" : "text-text-secondary hover:text-text"
+          }`}
+        >
+          {s === "map" ? <LayoutGrid size={10} /> : <List size={10} />}
+          {s === "map" ? "Task map" : "Task list"}
+        </button>
+      ))}
     </div>
   );
 }

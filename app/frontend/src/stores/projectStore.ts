@@ -2,10 +2,15 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { ProjectMeta } from "../types/project";
 
-/** Which half of the app is showing. JAStudio builds the architecture; Workforce
- *  Studio consumes it. Persisted with the selection so a reload returns you to the
- *  one you were in. */
-export type Studio = "job-architecture" | "workforce";
+/** Which studio is showing. Job Architecture builds the architecture, Work Architecture
+ *  analyses it, Work Design composes new jobs out of the result. Persisted with the
+ *  selection so a reload returns you to the one you were in.
+ *
+ *  The values are ids, never displayed — see STUDIO_LABEL in StudioToggle. "workforce"
+ *  is deliberately still called that: this store is persisted with no `version`/`migrate`,
+ *  so renaming a member would rehydrate an invalid studio from every existing browser.
+ *  Adding one is safe; renaming one is not. */
+export type Studio = "job-architecture" | "workforce" | "work-design";
 
 interface ProjectStore {
   clientSlug: string | null;
@@ -33,7 +38,7 @@ export const useProjectStore = create<ProjectStore>()(
       studio: "job-architecture",
       setStudio: (studio) => set({ studio }),
       // Switching project returns to the architecture side: the new project may not
-      // have one built yet, and landing in Workforce Studio on an empty project is
+      // have one built yet, and landing in Work Architecture Studio on an empty project is
       // a dead end rather than a starting point.
       setSelection: (clientSlug, project) =>
         set({ clientSlug, project, studio: "job-architecture" }),

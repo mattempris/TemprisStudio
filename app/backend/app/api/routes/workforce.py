@@ -1,4 +1,4 @@
-"""Workforce Studio routes.
+"""Work Architecture Studio routes.
 
 Steps 1 (the work architecture graph) and 3 (the AI opportunity assessment) are here.
 Later steps — process upload, personal productivity, agent definitions, future role
@@ -114,6 +114,10 @@ def workforce_status(client_slug: str, project_slug: str) -> dict:
         # does — so the page does not need a call per step to know what is unlocked.
         "clusters_assessed": len(state.workforce.opportunity),
         "skills_written": len(state.workforce.skills_guidance),
+        # Work Design Studio needs at least one lever to pull, and either kind will do.
+        # Here rather than on its own endpoint for the same reason as the two above: the
+        # studio switcher should not need a call per studio to know what is reachable.
+        "agents_defined": len(state.workforce.agents),
     }
 
 
@@ -248,7 +252,7 @@ def opportunity_status(client_slug: str, project_slug: str) -> dict:
     """What is assessed, what is left, and what finishing it would cost.
 
     The estimate is shown before the button is pressed, following the clustering
-    gate's precedent: this is the first Workforce Studio step that spends money, and
+    gate's precedent: this is the first Work Architecture Studio step that spends money, and
     a run over a real project is hundreds of calls.
     """
     _, state = _load(client_slug, project_slug)

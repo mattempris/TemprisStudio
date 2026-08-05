@@ -17,8 +17,30 @@ import type {
   SkillEstimate,
   WorkforceStatus,
 } from "../types/workforce";
+import type { Studio } from "../stores/projectStore";
+import type { StudioGate } from "../components/wizard/StudioToggle";
 
-/** Workforce Studio client. Mirrors pipelineApi's shape and its `/api` prefixing. */
+/**
+ * What each gated studio needs, from one `/workforce/status` payload.
+ *
+ * Derived here rather than in each page because PipelinePage and WorkforcePage both render
+ * the switcher, and two copies of this would eventually disagree about what "unlocked"
+ * means — which is the thing the single `wfGate` fetch was already trying to avoid.
+ */
+export function studioGates(s: WorkforceStatus): Partial<Record<Studio, StudioGate>> {
+  const levers = (s.agents_defined ?? 0) + (s.skills_written ?? 0);
+  return {
+    workforce: { ready: s.ready, missing: s.missing },
+    "work-design": {
+      // Needs the architecture AND something to apply to it. An empty studio would open
+      // onto a filter over work with no lever to pull.
+      ready: s.ready && levers > 0,
+      missing: s.ready ? ["an agent or an augmentation"] : s.missing,
+    },
+  };
+}
+
+/** Work Architecture Studio client. Mirrors pipelineApi's shape and its `/api` prefixing. */
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {

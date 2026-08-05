@@ -5,7 +5,7 @@ Every step in both studios can be re-run, and doing so makes some of what follow
 What this replaces: `pipeline._invalidate_from` was called from exactly one of the
 twenty-six re-runnable steps — dedupe confirmation — and knew only four stages, because it
 predated per-tier clustering, the skills and tasks taxonomies, third-party matching and
-all seven Workforce Studio steps. So re-running dedupe cleared the normalised profiles and
+all seven Work Architecture Studio steps. So re-running dedupe cleared the normalised profiles and
 the old flat clustering, and left the per-tier hierarchies, both taxonomies, the matches,
 the opportunity assessment, four agent specs and the graph all describing records that no
 longer existed. Re-running anything else invalidated nothing at all.
@@ -92,7 +92,7 @@ STEPS: tuple[Step, ...] = (
     Step("task:category", "Task categories", ("task:profile",), counter="task categories"),
     Step("task:family", "Task domains", ("task:category",), counter="task domains"),
     Step("matching", "3rd-party taxonomy match", ("profiles",), counter="matches"),
-    # Workforce Studio. The graph is derived and cheap, so it is always cleared.
+    # Work Architecture Studio. The graph is derived and cheap, so it is always cleared.
     Step("workforce:graph", "Work architecture", ("task:family", "skill:family", "profiles")),
     Step("opportunity", "AI opportunity", ("task:family",), counter="assessed task clusters"),
     Step(

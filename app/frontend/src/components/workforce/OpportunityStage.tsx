@@ -19,7 +19,7 @@ import type {
 /**
  * Step 3 — the AI opportunity assessment.
  *
- * One LLM call per task cluster, so this is the first Workforce Studio step that
+ * One LLM call per task cluster, so this is the first Work Architecture Studio step that
  * spends real money on a real project: 750 clusters is 750 calls. The cost is stated
  * before the button is pressed and a small calibration run is offered first, following
  * the clustering gate's precedent — the point being that nobody discovers the spend

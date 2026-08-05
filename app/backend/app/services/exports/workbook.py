@@ -334,7 +334,7 @@ def je_dataset(state: ProjectState) -> Dataset:
 
 
 # ---------------------------------------------------------------------------
-# Workforce Studio
+# Work Architecture Studio
 # ---------------------------------------------------------------------------
 # Every one of these carries the provenance of its numbers in a column rather than in a
 # footnote: the two opportunity scores are model estimates, and a spreadsheet that

@@ -207,7 +207,7 @@ def parse_doc(data: bytes) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Process diagrams and spreadsheets — added for Workforce Studio step 2
+# Process diagrams and spreadsheets — added for Work Architecture Studio step 2
 # ---------------------------------------------------------------------------
 def parse_svg(data: bytes) -> str:
     """Labels out of an SVG diagram, in document order.

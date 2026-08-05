@@ -1,4 +1,4 @@
-"""Personal productivity — Workforce Studio step 5.
+"""Personal productivity — Work Architecture Studio step 5.
 
 For one role, the tasks where a prompt helps that person most, and a downloadable
 Claude Skill for each. The output is deliberately a file rather than a screen: the

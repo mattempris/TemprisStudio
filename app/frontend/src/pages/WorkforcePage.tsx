@@ -9,14 +9,14 @@ import { FutureRolesStage } from "../components/workforce/FutureRolesStage";
 import { ProgressBar } from "../components/wizard/ProgressBar";
 import { JobPulse } from "../components/wizard/JobPulse";
 import { StageSection } from "../components/wizard/StageSection";
-import { StudioToggle } from "../components/wizard/StudioToggle";
+import { StudioToggle, ProceedToWorkDesign } from "../components/wizard/StudioToggle";
 import { useSectionScroll } from "../hooks/useSectionScroll";
 import { DemoReset } from "../components/wizard/DemoReset";
 import { Button } from "../components/ui/Button";
 import { Modal } from "../components/ui/Modal";
 import { HEAT_GRADIENT, opportunityColor, opportunitySpan } from "../lib/heat";
 import { useJobStream } from "../hooks/useJobStream";
-import { workforceApi } from "../services/workforceApi";
+import { workforceApi, studioGates } from "../services/workforceApi";
 import type {
   GraphCut,
   GraphFilters,
@@ -27,9 +27,9 @@ import type {
 } from "../types/workforce";
 
 /**
- * Workforce Studio.
+ * Work Architecture Studio.
  *
- * Same shape as the JAStudio wizard — sticky step list, scrolling accordion of
+ * Same shape as the Job Architecture Studio wizard — sticky step list, scrolling accordion of
  * stages — reusing its components rather than reimplementing them. Steps 1 and 3 are
  * built; the rest are declared and locked, so the shape of the whole thing is visible
  * from the start rather than appearing a step at a time.
@@ -38,7 +38,7 @@ import type {
 const STEPS = [
   {
     id: "architecture",
-    title: "Workforce architecture",
+    title: "Work architecture",
     description:
       "Every job profile, skill cluster and task cluster, and how they connect. Later steps add processes, agents and actions to the same graph.",
   },
@@ -84,13 +84,16 @@ export function WorkforcePage({
   // object is a render loop, not an inefficiency.
   const api = useMemo(() => workforceApi(clientSlug, projectSlug), [clientSlug, projectSlug]);
   const [status, setStatus] = useState<WorkforceStatus | null>(null);
+  // Real gates rather than a hardcoded `ready`: being inside this studio says nothing about
+  // whether the next one is reachable, and the toggle used to claim both were.
+  const gates = useMemo(() => (status ? studioGates(status) : {}), [status]);
   const [cut, setCut] = useState<GraphCut | null>(null);
   const [level, setLevel] = useState<GraphLevel>("family");
   const [expanded, setExpanded] = useState<string[]>([]);
   const [detail, setDetail] = useState<NodeDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string>("architecture");
-  // Same accordion, same problem as the JAStudio wizard — the graph and opportunity steps
+  // Same accordion, same problem as the Job Architecture Studio wizard — the graph and opportunity steps
   // are the tall ones here. See useSectionScroll.
   const { hold, reveal } = useSectionScroll(open);
   const [colorMode, setColorMode] = useState<ColorMode>("entity");
@@ -206,18 +209,18 @@ export function WorkforcePage({
   return (
     <div className="mx-auto flex max-w-[1600px] gap-6 px-6 py-6">
       <aside className="sticky top-[76px] hidden h-fit w-56 shrink-0 lg:block">
-        {/* The way back. Without this the toggle exists only on the JAStudio nav, so
-            entering Workforce Studio was a one-way door — you could reach it and then
+        {/* The way back. Without this the toggle exists only on the Job Architecture Studio nav, so
+            entering Work Architecture Studio was a one-way door — you could reach it and
             had no route back to the architecture that feeds it. */}
         <div className="mb-3 space-y-1.5">
-          <StudioToggle ready missing={[]} />
+          <StudioToggle gates={gates} />
           {/* Reachable from both halves: a demo that needs resetting is usually one that
-              just cascaded a Workforce step, and walking back to find the button is the
+              just cascaded a Work Architecture step, and walking back to find it is the
               last thing anyone wants to do mid-meeting. */}
           <DemoReset />
         </div>
         <p className="mb-3 text-[11px] font-extrabold uppercase tracking-wider text-text-muted">
-          Workforce
+          Steps
         </p>
         <nav className="space-y-0.5">
           {STEPS.map((s, i) => (
@@ -242,7 +245,7 @@ export function WorkforcePage({
         {/* The sidebar is hidden below `lg`, so the way back needs to exist here too —
             otherwise the one-way door reappears on a narrow window. */}
         <div className="lg:hidden">
-          <StudioToggle ready missing={[]} />
+          <StudioToggle gates={gates} />
         </div>
 
         {error && (
@@ -569,6 +572,16 @@ export function WorkforcePage({
             </StageSection>
           );
         })}
+
+        {/* The forward door. Job Architecture has one at the foot of its wizard; without the
+            same here, Work Design was only reachable from the sidebar toggle, which is hidden
+            below lg and easy to miss once you have scrolled seven steps down. */}
+        {gates["work-design"] && (
+          <ProceedToWorkDesign
+            ready={gates["work-design"].ready}
+            missing={gates["work-design"].missing}
+          />
+        )}
       </main>
 
       {detail && <NodeModal detail={detail} onClose={() => setDetail(null)} />}

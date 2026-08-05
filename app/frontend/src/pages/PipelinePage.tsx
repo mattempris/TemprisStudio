@@ -24,9 +24,10 @@ import type {
 import { StageSection, type StageState } from "../components/wizard/StageSection";
 import { ProgressBar } from "../components/wizard/ProgressBar";
 import { JobPulse } from "../components/wizard/JobPulse";
-import { ProceedToWorkforce, StudioToggle } from "../components/wizard/StudioToggle";
+import { ProceedToWorkforce, StudioToggle, type StudioGate } from "../components/wizard/StudioToggle";
+import type { Studio } from "../stores/projectStore";
 import { DemoReset } from "../components/wizard/DemoReset";
-import { workforceApi } from "../services/workforceApi";
+import { workforceApi, studioGates } from "../services/workforceApi";
 import { DedupePanel } from "../components/pipeline/DedupePanel";
 import { JEResultsBrowser } from "../components/pipeline/JEResultsBrowser";
 import { ProfileSelect } from "../components/pipeline/ProfileSelect";
@@ -110,13 +111,13 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
   // Per entity, per tier. Three hierarchies now use the same per-tier flow, so
   // the wizard needs all nine statuses rather than just the job hierarchy's three.
   const [tiers, setTiers] = useState<EntityTiers>(EMPTY_TIERS);
-  // Whether Workforce Studio can be entered, and what is missing if not. Comes from
+  // Whether the later studios can be entered, and what is missing if not. Comes from
   // the workforce side rather than being re-derived here, so one definition of "the
   // architecture is complete" serves the toggle, the button and the studio itself.
-  const [wfGate, setWfGate] = useState<{ ready: boolean; missing: string[] }>({
-    ready: false,
-    missing: [],
-  });
+  // Every gated studio's state, from one /workforce/status call. Derived by studioGates so
+  // this page and WorkforcePage cannot drift on what "unlocked" means.
+  const [gates, setGates] = useState<Partial<Record<Studio, StudioGate>>>({});
+  const wfGate = gates.workforce ?? { ready: false, missing: [] };
   // Per-run embedding choices. null model means "use the server default".
   const [jobModel, setJobModel] = useState<string | null>(null);
   const [forceCpu, setForceCpu] = useState(false);
@@ -163,7 +164,7 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
       void api.embeddingModels().then(setEmbedModels).catch(() => {});
       void workforceApi(clientSlug, projectSlug)
         .status()
-        .then((w) => setWfGate({ ready: w.ready, missing: w.missing }))
+        .then((w) => setGates(studioGates(w)))
         .catch(() => {});
       setBackendDown(false);
       return s;
@@ -283,7 +284,7 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
       {/* sticky step indicator */}
       <nav className="sticky top-24 hidden h-fit w-52 shrink-0 lg:block">
         <div className="mb-3 space-y-1.5">
-          <StudioToggle ready={wfGate.ready} missing={wfGate.missing} />
+          <StudioToggle gates={gates} />
           {/* Renders only on a seeded demo project — absent everywhere else. */}
           <DemoReset />
         </div>
@@ -441,7 +442,7 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
         )}
 
         {/* The instructions put this at the foot of the screen: the architecture is
-            finished, so the next thing to do is take it into Workforce Studio. */}
+            finished, so the next thing to do is take it into Work Architecture Studio. */}
         <ProceedToWorkforce ready={wfGate.ready} missing={wfGate.missing} />
       </div>
     </div>

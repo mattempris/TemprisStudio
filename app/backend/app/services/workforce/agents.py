@@ -1,4 +1,4 @@
-"""Agent definitions — Workforce Studio step 6.
+"""Agent definitions — Work Architecture Studio step 6.
 
 One API call per agent to a strong model, returning the domain content; the technical
 scaffolding is templated. That split is taken from

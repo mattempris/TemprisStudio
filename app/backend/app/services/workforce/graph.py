@@ -1,6 +1,6 @@
-"""The work architecture graph — Workforce Studio step 1.
+"""The work architecture graph — Work Architecture Studio step 1.
 
-One asset unifying the three hierarchies JAStudio produces: job profiles, skill
+One asset unifying the three hierarchies Job Architecture Studio produces: job profiles, skill
 clusters and task clusters, with the relationships between them. Later steps add
 process, agent and action nodes to the same structure.
 

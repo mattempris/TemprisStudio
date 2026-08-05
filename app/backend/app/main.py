@@ -10,7 +10,7 @@ from app.api.routes import (
 )
 from app.core.config import get_settings
 
-app = FastAPI(title="Tempris JAStudio")
+app = FastAPI(title="Tempris Studio")
 
 settings = get_settings()
 app.add_middleware(

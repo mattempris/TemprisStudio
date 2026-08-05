@@ -1,4 +1,4 @@
-"""Future role design — Workforce Studio step 7.
+"""Future role design — Work Architecture Studio step 7.
 
 Per role: what it is today, what it becomes once the automatable work is absorbed, and
 what the person should be getting better at. The output the instructions ask for is a

@@ -1,4 +1,4 @@
-"""Processes — Workforce Studio steps 2 and 4.
+"""Processes — Work Architecture Studio steps 2 and 4.
 
 Step 2 takes an uploaded process document, infers its ordered steps, and maps each one
 onto the task taxonomy. Step 4 assesses the process as-is and to-be.
@@ -11,7 +11,7 @@ infers the sequence from them, which works well for a document that describes a 
 and less well for hand-drawn boxes with no text ordering. That is a property of the
 input, not a defect to hide.
 
-**Why steps get mapped to task clusters at all.** The whole point of Workforce Studio
+**Why steps get mapped to task clusters at all.** The whole point of Work Architecture Studio
 is one work architecture. A process that floats free of the task taxonomy is a second,
 disconnected picture of the same organisation. Mapping is by embedding similarity with
 an LLM confirmation on the uncertain tail — the same stability-gated shape the

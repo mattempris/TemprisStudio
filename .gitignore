@@ -29,6 +29,10 @@ build/
 
 # Model weights (large, provided separately in ./models and unzipped on demand)
 app/backend/data/models/
+# Generated embedding caches — regenerated on demand from the models, and large
+# (a single taxonomy index is 24-48 MB). Two pairs reached the history before this
+# line existed; see the note in the commit that added it.
+app/backend/data/cache/
 
 # Uploaded/generated project artifacts kept in blob storage, not git
 app/backend/data/uploads/

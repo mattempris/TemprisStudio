@@ -321,7 +321,7 @@ class TasksState(BaseModel):
 
 
 class TaskActionRecord(BaseModel):
-    """One action inside a task cluster — Workforce Studio step 3.
+    """One action inside a task cluster — Work Architecture Studio step 3.
 
     A task cluster says *what kind of work* this is; its actions say what a person
     actually does within it, which is the level AI opportunity is real at. "Handling
@@ -517,7 +517,7 @@ class FutureRoleRecord(BaseModel):
 
 
 class WorkforceState(BaseModel):
-    """Workforce Studio's own state. Phase B populates actions and opportunity, phase C
+    """Work Architecture Studio's own state. Phase B populates actions and opportunity, phase C
     skills guidance and agents; processes and future roles arrive with their phases."""
 
     actions: list[TaskActionRecord] = Field(default_factory=list)
@@ -608,5 +608,5 @@ class ProjectState(BaseModel):
     skills: SkillsState = Field(default_factory=SkillsState)
     tasks: TasksState = Field(default_factory=TasksState)
     matching: MatchingState = Field(default_factory=MatchingState)
-    # Workforce Studio. Reads everything above; nothing above reads it.
+    # Work Architecture Studio. Reads everything above; nothing above reads it.
     workforce: WorkforceState = Field(default_factory=WorkforceState)

@@ -2,7 +2,7 @@
 @import "./palettes.css";
 
 /*
-  Tempris JAStudio design tokens — see plan's "Design System" section.
+  Tempris Studio design tokens — see plan's "Design System" section.
   Primary source: style guide.html (a real, applied Tempris client report),
   chosen over the more report-oriented tempris-format skill since it's a much
   closer analog to this interactive, data-dense app. Resolved: Inter (not

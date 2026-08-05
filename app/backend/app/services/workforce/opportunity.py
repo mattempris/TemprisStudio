@@ -1,4 +1,4 @@
-"""AI opportunity assessment — Workforce Studio step 3.
+"""AI opportunity assessment — Work Architecture Studio step 3.
 
 One LLM call per task cluster returns the 3-5 **actions** that cluster is made of,
 each scored on two axes. Everything above the action — the cluster's score, a role's

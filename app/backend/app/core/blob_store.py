@@ -4,7 +4,7 @@ IMPORTANT — storage model (confirmed by direct inspection of the live `tempris
 account, not assumed): each Tempris client is its own **container** named
 `client-<slug>` (not a blob-name prefix within one shared container). Several of
 these containers are already populated by an existing, live Tempris pipeline
-(`inputs/`, `runs/`, `taxonomy/` at the container root). Tempris JAStudio must
+(`inputs/`, `runs/`, `taxonomy/` at the container root). Tempris Studio must
 never touch those paths — it owns exactly one new top-level subtree per client
 container: `job-architecture/`.
 

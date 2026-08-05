@@ -1,4 +1,4 @@
-/** Workforce Studio types. Steps 1 (the graph) and 3 (AI opportunity). */
+/** Work Architecture Studio types. Steps 1 (the graph) and 3 (AI opportunity). */
 
 /** "action" is not a fourth hierarchy — it has one level and hangs off a single task
  *  cluster, appearing only when that cluster is opened. */
@@ -84,6 +84,8 @@ export interface WorkforceStatus {
    *  per step to know what is unlocked. */
   clusters_assessed: number;
   skills_written: number;
+  /** Work Design needs one lever; either kind counts. */
+  agents_defined: number;
 }
 
 export interface NodeDetail {
@@ -473,7 +475,7 @@ export interface RoleOpportunityReport {
   };
 }
 
-/** The subset of the pipeline's JobHandle that Workforce Studio needs. */
+/** The subset of the pipeline's JobHandle that Work Architecture Studio needs. */
 export interface JobHandleLike {
   job_id: string;
   stage: string;

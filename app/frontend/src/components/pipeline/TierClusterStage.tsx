@@ -283,6 +283,7 @@ export function TierClusterStage({
                           titles={result.titles?.[i] ?? []}
                           total={result.title_counts?.[i] ?? 0}
                           omitted={result.titles_omitted?.[i] ?? 0}
+                          clickForDetails
                         />
                       }
                     >
@@ -521,7 +522,10 @@ function ClusterDetail({
       title={`Group ${cluster + 1}`}
       subtitle={
         data
-          ? `${size} ${itemNoun} · ${data.total} ${data.label_noun}, ${data.members.length} distinct`
+          ? `${size} ${itemNoun}` +
+            (data.total !== size || data.total_noun !== itemNoun
+              ? ` · ${data.total} ${data.total_noun}`
+              : "")
           : `${size} ${itemNoun}`
       }
       onClose={onClose}
@@ -529,20 +533,47 @@ function ClusterDetail({
       {error && <p className="text-[12px] text-brand">{error}</p>}
       {!data && !error && <p className="text-[12px] text-text-muted">Loading…</p>}
       {data && (
-        <ul className="space-y-0.5">
+        <ul className="space-y-0">
           {data.members.map((m, i) => (
             <li
               key={`${m.label}-${i}`}
-              className="flex items-baseline gap-2 border-b border-border/50 py-1 text-[12px] last:border-0"
+              className="border-b border-border/50 py-1.5 text-[12px] last:border-0"
             >
-              <span className="w-6 shrink-0 text-right text-[10px] tabular-nums text-text-muted">
-                {i + 1}
-              </span>
-              <span className="min-w-0 flex-1 text-text">{m.label}</span>
-              {m.count > 1 && (
-                <span className="shrink-0 rounded-sm bg-accent-bg px-1.5 text-[10px] font-bold tabular-nums text-accent">
-                  ×{m.count}
+              <div className="flex items-baseline gap-2">
+                <span className="w-6 shrink-0 text-right text-[10px] tabular-nums text-text-muted">
+                  {i + 1}
                 </span>
+                <span className="min-w-0 flex-1 font-semibold text-text">{m.label}</span>
+                {m.count > 1 && (
+                  <span className="shrink-0 rounded-sm bg-accent-bg px-1.5 text-[10px] font-bold tabular-nums text-accent">
+                    ×{m.count}
+                  </span>
+                )}
+              </div>
+              {/* The description is the point of this dialog. Two tiles showing the same
+                  name are only distinguishable here, so it is never truncated. */}
+              {m.description && (
+                <p className="mt-0.5 pl-8 text-[11.5px] leading-snug text-text-secondary">
+                  {m.description}
+                </p>
+              )}
+              {m.points.length > 0 && (
+                <ul className="mt-1 pl-8">
+                  {m.points.map((p, pi) => (
+                    <li
+                      key={pi}
+                      className="flex gap-1.5 text-[11px] leading-snug text-text-secondary"
+                    >
+                      <span className="text-text-muted">·</span>
+                      <span className="min-w-0">{p}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {m.also.length > 0 && (
+                <p className="mt-0.5 pl-8 text-[10.5px] leading-snug text-text-muted">
+                  also filed as: {m.also.join(" · ")}
+                </p>
               )}
             </li>
           ))}

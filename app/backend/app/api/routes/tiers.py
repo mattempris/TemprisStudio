@@ -853,6 +853,69 @@ def tier_clusters(client_slug: str, project_slug: str, entity: str, tier: str) -
     }
 
 
+def _member_details(state: ProjectState, entity: str, item_ids: list[str]) -> list[dict]:
+    """One row per clustered item, carrying the text that actually separated them.
+
+    This exists because collapsing identical names hid the answer to the most common
+    question the clustering UI provokes. Four tasks inferred from four different jobs are
+    all called "Administrative Reporting"; the modal showed a single row reading
+    "Administrative Reporting ×4" and the tiles either side of it looked like duplicates.
+    They are not — their embeddings sit 0.22-0.42 cosine apart, because what is embedded
+    is `name. description` and the description is twenty words against the name's two.
+    One is about network projects, one about installation faults, one about project
+    governance, one about analysis progress. Showing the description makes that legible
+    instead of leaving it as an apparent bug in the clustering.
+
+    So identical names are deliberately *not* merged here — the whole point is that four
+    rows with the same name and four different descriptions is the honest picture. The
+    hover tooltip still collapses them, because it has no room for prose and now says to
+    click through.
+
+    For jobs the row is the normalised profile rather than the source record: several
+    source titles can sit behind one profile after dedupe, and the purpose statement
+    belongs to the profile, so repeating it per title would be noise.
+    """
+    if entity == "job":
+        titles = {r.id: (r.job_title or r.id) for r in state.raw_records}
+        groups = {g.group_id: g.member_ids for g in state.dedupe_groups}
+        purpose = {p.id: p.purpose_statement for p in state.normalized_profiles}
+        tasks = {p.id: p.key_tasks for p in state.normalized_profiles}
+        rows: list[dict] = []
+        for item_id in item_ids:
+            members = groups.get(item_id, [item_id])
+            names = [titles.get(m, m) for m in members]
+            rows.append(
+                {
+                    "label": names[0],
+                    # The other titles that deduped into this profile, named rather than
+                    # counted — "(+3)" tells you less than knowing which three.
+                    "also": names[1:],
+                    "count": len(members),
+                    "description": purpose.get(item_id, ""),
+                    "points": tasks.get(item_id, []),
+                }
+            )
+        return sorted(rows, key=lambda r: (-r["count"], r["label"]))
+
+    records = state.skills.inferred if entity == "skill" else state.tasks.inferred
+    by_id = {r.id: r for r in records}
+    rows = []
+    for item_id in item_ids:
+        rec = by_id.get(item_id)
+        rows.append(
+            {
+                "label": rec.name if rec else item_id,
+                "also": [],
+                "count": 1,
+                "description": rec.description if rec else "",
+                "points": [],
+            }
+        )
+    # Grouped by name so the identically-named ones sit together and read as a set of
+    # variations rather than being scattered through the list.
+    return sorted(rows, key=lambda r: (r["label"].casefold(), r["description"]))
+
+
 def _member_labeller(state: ProjectState, entity: str, tier: str):
     """Human-readable name for a tier member — the base record's own name at the
     finest tier, the confirmed cluster name at the coarser tiers."""
@@ -912,18 +975,23 @@ def tier_cluster_members(
     # column is more useful holding "profiles in this category" than a repeat multiplier.
     child = _child_view(state, entity, tier)
     if child is not None:
-        child_names, child_counts, _ = child
-        counts = {child_names.get(i, i): child_counts.get(i, 0) for i in member_ids}
-        total = sum(counts.values())
+        child_names, child_counts, beneath_noun = child
+        members = [
+            {"label": child_names.get(i, i), "count": child_counts.get(i, 0), "also": [],
+             "description": "", "points": []}
+            for i in member_ids
+        ]
+        members.sort(key=lambda r: (-r["count"], r["label"]))
+        # The rows are child clusters; the total counts what sits beneath them, which is a
+        # different unit. Naming both stops the subtitle reading "3 job categories · 8 job
+        # categories" when the 8 are profiles.
+        total_noun = beneath_noun
     else:
-        resolved = _title_map(state, entity)
-        names: list[str] = []
-        for item_id in member_ids:
-            names.extend(resolved.get(item_id, [item_id]))
-        counts = {}
-        for n in names:
-            counts[n] = counts.get(n, 0) + 1
-        total = len(names)
+        # The finest tier carries each item's own description — the thing that decided
+        # which cluster it landed in, and the only way to tell identically-named items
+        # apart. See _member_details.
+        members = _member_details(state, entity, member_ids)
+        total_noun = _label_noun(entity, tier)
     return {
         "entity": entity,
         "tier": tier,
@@ -931,14 +999,9 @@ def tier_cluster_members(
         "cluster": cluster,
         "size": len(member_ids),
         "label_noun": _label_noun(entity, tier),
-        # Grouped rather than repeated: a dedupe group of 18 identically-titled
-        # branch roles is one row with a count, not 18 rows. Above the finest tier the
-        # count is instead how many sit beneath that child cluster.
-        "members": [
-            {"label": label, "count": n}
-            for label, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
-        ],
-        "total": total,
+        "members": members,
+        "total": sum(r["count"] for r in members),
+        "total_noun": total_noun,
     }
 
 

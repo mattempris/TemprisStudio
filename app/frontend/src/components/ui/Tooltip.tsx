@@ -85,6 +85,7 @@ export function TitleListTooltip({
   titles,
   total,
   omitted = 0,
+  clickForDetails = false,
 }: {
   heading: string;
   subheading: string;
@@ -94,6 +95,11 @@ export function TitleListTooltip({
   total: number;
   /** Distinct titles the sample left out. */
   omitted?: number;
+  /** Set where clicking the tile opens the detail dialog. The hover list collapses
+   *  repeats and has no room for prose, so two tiles holding differently-described
+   *  records with the same name look identical here — the note is what tells you
+   *  there is more to see rather than leaving that as an apparent bug. */
+  clickForDetails?: boolean;
 }) {
   return (
     <>
@@ -120,6 +126,11 @@ export function TitleListTooltip({
             </span>
           )}
         </>
+      )}
+      {clickForDetails && (
+        <span className="mt-1.5 block border-t border-border pt-1 text-[10px] font-semibold text-accent">
+          Click cluster tile for details
+        </span>
       )}
     </>
   );

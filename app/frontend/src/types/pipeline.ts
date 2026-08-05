@@ -198,8 +198,21 @@ export interface ClusterMembers {
   cluster: number;
   size: number;
   label_noun: string;
-  members: { label: string; count: number }[];
+  members: {
+    label: string;
+    count: number;
+    /** Other source titles that deduped into this same item. Jobs only. */
+    also: string[];
+    /** The item's own description — what actually decided its cluster. Empty above
+     *  the finest tier, where the rows are child clusters rather than records. */
+    description: string;
+    /** Key tasks, for a job profile. */
+    points: string[];
+  }[];
   total: number;
+  /** What `total` counts, which is not always the same unit as the rows: a family's
+   *  rows are categories while its total is the profiles beneath them. */
+  total_noun: string;
 }
 
 export interface TierClusterMember {

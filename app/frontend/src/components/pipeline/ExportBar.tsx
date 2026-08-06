@@ -1,14 +1,17 @@
 import { useEffect, useState } from "react";
-import { Download, FileSpreadsheet } from "lucide-react";
+import { Download, FileSpreadsheet, FileText } from "lucide-react";
 import { Button } from "../ui/Button";
 
 /**
  * Export surface for the whole project.
  *
- * The workbook is the primary action — a consultant wants one file with every
- * sheet, not eight downloads. Individual CSVs are secondary, listed with their
- * row counts, and only datasets that actually have rows are offered: a download
- * that produces an empty file reads as a bug.
+ * Two primary actions, because they are for different readers. The workbook is the working
+ * artefact — a consultant wants one file with every sheet, not eight downloads. The HTML report
+ * is the deliverable: a guided read of the finished architecture for the client, with no method
+ * in it. Neither substitutes for the other, so neither is buried.
+ *
+ * Individual CSVs are secondary, listed with their row counts, and only datasets that actually
+ * have rows are offered: a download that produces an empty file reads as a bug.
  */
 
 interface DatasetInfo {
@@ -21,10 +24,11 @@ interface DatasetInfo {
 interface Props {
   manifest: () => Promise<{ datasets: DatasetInfo[] }>;
   workbookUrl: string;
+  reportUrl: string;
   csvUrl: (dataset: string) => string;
 }
 
-export function ExportBar({ manifest, workbookUrl, csvUrl }: Props) {
+export function ExportBar({ manifest, workbookUrl, reportUrl, csvUrl }: Props) {
   const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
 
   useEffect(() => {
@@ -46,11 +50,21 @@ export function ExportBar({ manifest, workbookUrl, csvUrl }: Props) {
             {datasets.length} datasets, {totalRows.toLocaleString()} rows
           </p>
         </div>
-        <Button variant="primary" onClick={() => window.open(workbookUrl, "_blank")}>
-          <span className="flex items-center gap-1.5">
-            <FileSpreadsheet size={12} /> Download full workbook (.xlsx)
-          </span>
-        </Button>
+        <span className="flex flex-wrap items-center gap-2">
+          <Button variant="primary" onClick={() => window.open(workbookUrl, "_blank")}>
+            <span className="flex items-center gap-1.5">
+              <FileSpreadsheet size={12} /> Export job architecture (.xlsx)
+            </span>
+          </Button>
+          {/* Opened rather than downloaded: it is meant to be read, and putting a file manager
+              between the button and the page is friction for no gain. Saving it is one keypress
+              away once it is open. */}
+          <Button onClick={() => window.open(reportUrl, "_blank")}>
+            <span className="flex items-center gap-1.5">
+              <FileText size={12} /> Export HTML report
+            </span>
+          </Button>
+        </span>
       </div>
       <ul className="mt-2.5 flex flex-wrap gap-1.5 border-t border-border pt-2.5">
         {datasets.map((d) => (

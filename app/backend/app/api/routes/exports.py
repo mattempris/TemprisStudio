@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
 from app.models.project_state import ProjectState
+from app.services.exports import report as html_report
 from app.services.exports import workbook
 from app.services.project_service import ProjectService
 
@@ -28,6 +29,25 @@ def _load(client_slug: str, project_slug: str) -> ProjectState:
 def _attachment(name: str) -> str:
     # Quote-strip so a project name with a quote can't break the header.
     return f'attachment; filename="{re.sub(chr(34), "", name)}"'
+
+
+@router.get("/report.html")
+def architecture_report(client_slug: str, project_slug: str) -> Response:
+    """The job architecture as one self-contained HTML file.
+
+    Rendered on request rather than stored, exactly as the role profile documents are: it is
+    derived from state, so a cached copy is only ever a chance to serve a stale one.
+
+    Inline rather than an attachment. This is meant to be read — a consultant opens it, walks
+    it with a client, then saves it if they want it. Forcing a download first puts a file
+    manager between the button and the thing.
+    """
+    state = _load(client_slug, project_slug)
+    try:
+        html = html_report.render(state)
+    except html_report.NotReady as e:
+        raise HTTPException(409, str(e)) from e
+    return Response(content=html, media_type="text/html; charset=utf-8")
 
 
 @router.get("/manifest")

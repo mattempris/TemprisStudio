@@ -480,6 +480,7 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
               <ExportBar
                 manifest={api.exportManifest}
                 workbookUrl={api.workbookUrl()}
+                reportUrl={api.reportUrl()}
                 csvUrl={api.datasetCsvUrl}
               />
             </div>

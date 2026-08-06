@@ -288,6 +288,9 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
         `${base}/exports/manifest`,
       ),
     workbookUrl: () => `/api${base}/exports/workbook.xlsx`,
+    /** The architecture as one self-contained HTML file — a client deliverable, opened
+     *  rather than downloaded. */
+    reportUrl: () => `/api${base}/exports/report.html`,
     datasetCsvUrl: (dataset: string) => `/api${base}/exports/${dataset}.csv`,
 
     // ── Skills (steps 8-9) ───────────────────────────────────────────────────

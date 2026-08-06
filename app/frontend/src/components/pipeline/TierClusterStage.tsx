@@ -314,11 +314,19 @@ export function TierClusterStage({
           </div>
 
           {result && result.k === k && (
-            <div className="flex flex-wrap gap-x-6 gap-y-2 rounded-[10px] border border-border bg-panel px-4 py-3">
-              <SizeStatRow stats={result} singletons={result.singletons} largest={result.largest} />
-              {result.mean_stability != null && (
-                <Stat label="Mean stability" value={result.mean_stability.toFixed(2)} />
-              )}
+            <div className="space-y-2 rounded-[10px] border border-border bg-panel px-4 py-3">
+              <div className="flex flex-wrap gap-x-6 gap-y-2">
+                <SizeStatRow stats={result} singletons={result.singletons} largest={result.largest} />
+                {result.mean_stability != null && (
+                  <Stat label="Mean stability" value={result.mean_stability.toFixed(2)} />
+                )}
+              </div>
+              <SingletonWarning
+                singletons={result.singletons}
+                k={result.k}
+                itemNoun={status.item_noun}
+                title={title}
+              />
             </div>
           )}
 
@@ -711,6 +719,44 @@ function StabilityGuidance({
  * job that genuinely has no near neighbours is a legitimate profile of one, not a
  * sign the cluster count is wrong.
  */
+/**
+ * When a cut leaves most groups holding one item, say what that costs.
+ *
+ * The count was already on screen — "Single-item 140" — and read as a statistic rather than as a
+ * problem, which is exactly how it got past someone. A tier cut this fine is not grouping; it is
+ * relabelling, and it looks *better* than a real grouping because every name describes exactly
+ * one thing. The damage lands one level up, where the tier above inherits single-item centroids
+ * instead of theme centroids and its groups stop making sense.
+ *
+ * Seen on a real project: 239 tasks cut into 181 clusters, 77% of them singletons. Level one
+ * read perfectly and the categories above it were incoherent.
+ */
+function SingletonWarning({
+  singletons,
+  k,
+  itemNoun,
+  title,
+}: {
+  singletons: number;
+  k: number;
+  itemNoun: string;
+  title: string;
+}) {
+  // Half is the point where "some things are genuinely unique" stops being the explanation.
+  if (!k || singletons / k < 0.5) return null;
+  const pct = Math.round((100 * singletons) / k);
+  return (
+    <p className="rounded-[8px] border border-warning-border bg-warning-bg px-2.5 py-1.5 text-[11.5px] leading-snug text-text-secondary">
+      <strong className="text-text">
+        {pct}% of these {title.toLowerCase()} would hold a single {itemNoun.replace(/s$/, "")}.
+      </strong>{" "}
+      At this count the tier is relabelling rather than grouping, which reads well here — every
+      name describes exactly one thing — but hands the tier above single items instead of themes,
+      and its groups will look arbitrary. A lower count is usually what you want.
+    </p>
+  );
+}
+
 function SizeStatRow({
   stats,
   singletons,

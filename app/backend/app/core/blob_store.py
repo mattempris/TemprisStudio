@@ -49,6 +49,9 @@ def client_container_name(client_slug: str) -> str:
 
 
 _service_client: BlobServiceClient | None = None
+
+# Blocks uploaded in parallel for a payload large enough to be staged rather than put whole.
+_UPLOAD_CONCURRENCY = 4
 _service_lock = threading.Lock()
 
 
@@ -82,6 +85,14 @@ def _shared_service_client(settings: Settings) -> BlobServiceClient:
                         client_id=settings.azure_client_id,
                         client_secret=settings.azure_client_secret,
                     ),
+                    # The state blob is 42.5 MB and the SDK's default is to put anything under
+                    # 64 MiB in a single request. One PUT that large is one request that has to
+                    # survive for the whole upload, and on a domestic uplink it does not — it
+                    # aborts with "the write operation timed out" and the caller sees a 500.
+                    # Under this threshold the SDK stages blocks instead, so a large write
+                    # becomes several short requests that each retry independently.
+                    max_single_put_size=4 * 1024 * 1024,
+                    max_block_size=4 * 1024 * 1024,
                 )
     return _service_client
 
@@ -144,7 +155,14 @@ class BlobProjectStore:
     def write_json(self, client_slug: str, path: str, data: dict, *, overwrite: bool = True) -> None:
         payload = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
         blob = self._container(client_slug).get_blob_client(self._app_path(path))
-        blob.upload_blob(payload, overwrite=overwrite, content_settings=ContentSettings(content_type="application/json"))
+        blob.upload_blob(
+            payload,
+            overwrite=overwrite,
+            content_settings=ContentSettings(content_type="application/json"),
+            # Only has an effect once the payload exceeds `max_single_put_size` and the SDK
+            # stages blocks; the 42.5 MB state blob does, and a small one is unaffected.
+            max_concurrency=_UPLOAD_CONCURRENCY,
+        )
 
     def read_json(self, client_slug: str, path: str) -> dict | None:
         try:
@@ -155,7 +173,12 @@ class BlobProjectStore:
 
     def write_bytes(self, client_slug: str, path: str, data: bytes, *, content_type: str = "application/octet-stream") -> None:
         blob = self._container(client_slug).get_blob_client(self._app_path(path))
-        blob.upload_blob(data, overwrite=True, content_settings=ContentSettings(content_type=content_type))
+        blob.upload_blob(
+            data,
+            overwrite=True,
+            content_settings=ContentSettings(content_type=content_type),
+            max_concurrency=_UPLOAD_CONCURRENCY,
+        )
 
     def read_bytes(self, client_slug: str, path: str) -> bytes | None:
         try:

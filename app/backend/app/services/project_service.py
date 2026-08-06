@@ -30,11 +30,28 @@ from datetime import datetime, timezone
 import numpy as np
 
 from app.core.blob_store import BlobProjectStore
-from app.models.project_state import ProjectMeta, ProjectState
+from app.models.project_state import DesignedJobRecord, ProjectMeta, ProjectState
 
 
 class ProjectNotFound(LookupError):
     pass
+
+
+# Designed jobs live beside state rather than inside it.
+#
+# Every other writer of state/current.json is a step boundary — confirm the mapping, confirm
+# the dedupe, generate the agents. Those already take seconds, so re-uploading the whole tree
+# is invisible inside them. Saving a designed job is not that: it is a button in a workbench
+# that someone presses after every rearrangement, and it was re-uploading 42.5 MB to persist
+# about 8 KB. On a domestic uplink that is a single PUT that runs long enough for the Azure SDK
+# to abort it, which is how this was found — every save returned 500.
+#
+# So `work_design.jobs` is the one part of state with its own blob: written alone, and
+# hydrated back onto the state object inside `load_state` so that every reader — the routes,
+# the workbook exporter, lineage — keeps reading `state.work_design.jobs` and cannot tell the
+# difference. The settings that sit alongside it in `WorkDesignState` (the uplift, the
+# oversight fractions) stay in state, because they change at most once a project.
+DESIGNED_JOBS_BLOB = "work-design/jobs"
 
 
 # Parsed state per (client, project), with the ETag it was read at. Shared across every
@@ -77,7 +94,9 @@ class ProjectService:
             if self.store.state_etag(client_slug, project_slug) == etag:
                 with _STATE_LOCK:
                     _STATE_CACHE.move_to_end(key)
-                return state.model_copy(deep=True)
+                return self._with_designed_jobs(
+                    client_slug, project_slug, state.model_copy(deep=True)
+                )
 
         raw, etag = self.store.read_state_with_etag(client_slug, project_slug)
         if raw is None:
@@ -96,7 +115,54 @@ class ProjectService:
                 _STATE_CACHE.move_to_end(key)
                 while len(_STATE_CACHE) > _STATE_CACHE_MAX:
                     _STATE_CACHE.popitem(last=False)
-        return state.model_copy(deep=True)
+        return self._with_designed_jobs(client_slug, project_slug, state.model_copy(deep=True))
+
+    def _with_designed_jobs(
+        self, client_slug: str, project_slug: str, state: ProjectState
+    ) -> ProjectState:
+        """Hydrate designed jobs from their own blob onto a freshly-copied state.
+
+        Read on every load rather than cached with the state, because the whole point of the
+        split is that a job write does not touch state — so the state ETag does not move when
+        jobs change, and a cached copy would go stale invisibly. The blob is a few hundred KB
+        against the 42.5 MB it rides alongside, so this is noise on a cache miss and an
+        acceptable small read on a cache hit.
+
+        A project with no jobs blob is the normal case, not an error: nothing is designed yet,
+        or the project predates this studio. Either way, leave whatever the state carried —
+        which is how a state blob written before the split still surfaces its jobs.
+        """
+        raw = self.store.read_json(client_slug, f"{project_slug}/{DESIGNED_JOBS_BLOB}.json")
+        if raw is None:
+            return state
+        state.work_design.jobs = [
+            DesignedJobRecord.model_validate(j) for j in raw.get("jobs", [])
+        ]
+        return state
+
+    def save_designed_jobs(
+        self,
+        state: ProjectState,
+        *,
+        action: str,
+        lineage_payload: dict | None = None,
+    ) -> None:
+        """Persist only the designed jobs, and record the decision in lineage.
+
+        The counterpart to `save_state` for the one part of state that a user edits
+        interactively. Deliberately does *not* invalidate the state cache: state did not
+        change, and dropping it would make the next read pay for a 42.5 MB download to
+        observe an edit that is not in there.
+        """
+        client, project = state.meta.client_slug, state.meta.project_slug
+        self.store.write_json(
+            client,
+            f"{project}/{DESIGNED_JOBS_BLOB}.json",
+            {"jobs": [j.model_dump(mode="json") for j in state.work_design.jobs]},
+        )
+        state.meta.updated_at = datetime.now(timezone.utc)
+        self.store.write_project_meta(client, project, state.meta.model_dump(mode="json"))
+        self.store.write_lineage_entry(client, project, action, lineage_payload or {})
 
     def save_state(
         self,
@@ -115,6 +181,10 @@ class ProjectService:
         client, project = state.meta.client_slug, state.meta.project_slug
 
         payload = state.model_dump(mode="json")
+        # Designed jobs have their own blob, so they must not also be written here — two homes
+        # for one list is two versions of it the moment either write fails. `load_state`
+        # hydrates them straight back, so a caller never sees the gap.
+        payload.get("work_design", {}).pop("jobs", None)
         self.store.write_state(client, project, payload)
         # The blob's ETag has changed, so the next read would re-download anyway. Dropping
         # it here means the very next reader does not pay for a stale-cache round trip.

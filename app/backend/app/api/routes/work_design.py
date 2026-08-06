@@ -289,7 +289,7 @@ def create_designed_job(client_slug: str, project_slug: str, body: JobIn) -> dic
     job = DesignedJobRecord(id=f"wd-{uuid.uuid4().hex[:8]}", title=body.title, created_at=now, updated_at=now)
     _apply_in(job, body)
     state.work_design.jobs.append(job)
-    svc.save_state(
+    svc.save_designed_jobs(
         state,
         action="create-designed-job",
         lineage_payload={"job_id": job.id, "title": job.title, "lines": len(job.tasks)},
@@ -307,7 +307,7 @@ def update_designed_job(client_slug: str, project_slug: str, job_id: str, body: 
     # upstream, this arrangement is the one they mean now.
     job.stale = False
     job.stale_reason = ""
-    svc.save_state(
+    svc.save_designed_jobs(
         state,
         action="update-designed-job",
         lineage_payload={"job_id": job.id, "title": job.title, "lines": len(job.tasks)},
@@ -331,7 +331,7 @@ def delete_designed_job(client_slug: str, project_slug: str, job_id: str) -> dic
         sum(t.hours_per_week for t in job.tasks if t.origin != "agent_oversight"), 2
     )
     state.work_design.jobs = [j for j in state.work_design.jobs if j.id != job_id]
-    svc.save_state(
+    svc.save_designed_jobs(
         state,
         action="delete-designed-job",
         lineage_payload={"job_id": job_id, "title": job.title, "hours_returned": returned},

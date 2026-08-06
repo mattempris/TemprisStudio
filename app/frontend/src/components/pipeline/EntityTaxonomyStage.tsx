@@ -122,15 +122,18 @@ export function EntityTaxonomyStage({
         >
           <span className="flex items-center gap-1.5">
             <Play size={12} />
-            {inferredCount > 0 ? `Re-infer ${noun}` : `Infer ${noun}`} from {jobProfileCount} job
-            profile{jobProfileCount === 1 ? "" : "s"}
+            {inferredCount > 0 ? `Re-infer ${noun}` : `Infer ${noun}`} from {jobProfileCount} anchor
+            role{jobProfileCount === 1 ? "" : "s"}
           </span>
         </Button>
         {inferredCount > 0 && (
-          <p className="text-[12.5px] text-text-secondary">
-            {inferredCount} {noun} across {profilesCovered} profiles
-            {audit && Object.keys(audit).length > 0 && <AuditLine kind={kind} audit={audit} />}
-          </p>
+          <div className="min-w-0">
+            <p className="text-[12.5px] text-text-secondary">
+              {inferredCount} {noun} across {profilesCovered} anchor roles
+              {audit && Object.keys(audit).length > 0 && <AuditLine kind={kind} audit={audit} />}
+            </p>
+            {audit && <SourceLine audit={audit} />}
+          </div>
         )}
       </div>
 
@@ -264,4 +267,33 @@ function AuditLine({ kind, audit }: { kind: TaxonomyKind; audit: Record<string, 
   }
   if (!parts.length) return null;
   return <span className="text-text-muted"> — {parts.join(", ")}</span>;
+}
+
+/**
+ * Which input this run actually read.
+ *
+ * Two roles in one project can be inferred from different things — an anchor role standing for a
+ * single uploaded record is read from that record's own description, one that merges several is
+ * read from the document written about it. That is deliberate, but it makes the output
+ * unaccountable unless it is stated: "inferred from 40 job descriptions" and "inferred from 40
+ * generated documents" are different claims about the same number.
+ *
+ * Silent when nothing used a source description, so a conventional project gains no noise.
+ */
+function SourceLine({ audit }: { audit: Record<string, number> }) {
+  const n = audit.from_source_description ?? 0;
+  const total = audit.profiles_run ?? 0;
+  if (!n) return null;
+  const all = total > 0 && n >= total;
+  return (
+    <p className="mt-1.5 rounded-[8px] border border-border bg-panel px-2.5 py-1.5 text-[11px] leading-snug text-text-secondary">
+      <strong className="text-text">
+        {all ? "Read from the uploaded job descriptions." : `${n} of ${total} read from the uploaded job descriptions.`}
+      </strong>{" "}
+      {all ? "Every anchor role here" : "Those roles"} maps to exactly one uploaded record, so its
+      own description was used directly instead of the generated role document — nothing was
+      summarised away first.
+      {!all && ` The other ${total - n} merge several records, so the generated document was used.`}
+    </p>
+  );
 }

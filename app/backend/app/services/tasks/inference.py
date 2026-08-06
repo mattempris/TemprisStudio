@@ -140,8 +140,40 @@ def audit_tasks(tasks: list[InferredTask], fixes: list[ProportionFix]) -> TaskAu
     return TaskAudit(total=len(tasks), name_out_of_range=bad_names, proportion_fixes=fixes)
 
 
-def _profile_prompt(title: str, content: dict) -> str:
+def _profile_prompt(title: str, content: dict, source_text: str | None = None) -> str:
+    """The prompt for one anchor role.
+
+    `source_text` is the uploaded job description, present only when this anchor role stands for
+    exactly one uploaded record (see `services/provenance`). When it is there it REPLACES the
+    generated document, because the document is two model calls downstream of it and every hop
+    compresses — a description listing twenty-five responsibilities is already about eight
+    phrases by the time the document is written. Passing both would invite the same piece of work
+    to be counted twice, once from the summary and once from the source, which matters more here
+    than for skills: task proportions must sum to 100, so a double-counted duty distorts every
+    other task's share of the week.
+
+    The title still comes from the anchor role rather than the source, because that is the
+    confirmed name the taxonomy is keyed on.
+    """
     parts = [f"Job profile: {title}\n"]
+
+    if source_text:
+        # See the twin of this in skills/inference: the guard lives in the user prompt because it
+        # is only true when a source description is in play, and SYSTEM is the cached half.
+        #
+        # It matters more here than for skills. Proportions must sum to 100, so a benefits
+        # paragraph read as a duty does not just add a spurious task — it takes a share of the
+        # week away from every real one.
+        parts.append(
+            "The job description as supplied by the organisation. It is the source document, so "
+            "it is fuller than a summary — but it is also written to attract candidates. Read "
+            "only the substance of the role. Ignore recruitment framing, the employer's name, "
+            "benefits, pay, location, working patterns, culture and diversity statements, and "
+            "anything about the application process: none of those are work the job holder "
+            "does, and none should receive a share of the week.\n\n"
+            + source_text.strip()
+        )
+        return "\n\n".join(parts)
 
     def add(label: str, value) -> None:
         if not value:
@@ -163,9 +195,11 @@ def _profile_prompt(title: str, content: dict) -> str:
     return "\n\n".join(parts)
 
 
-def infer_for_profile(profile_key: str, title: str, content: dict) -> tuple[list[InferredTask], ProportionFix]:
+def infer_for_profile(
+    profile_key: str, title: str, content: dict, source_text: str | None = None
+) -> tuple[list[InferredTask], ProportionFix]:
     result = llm.complete_json(
-        _profile_prompt(title, content),
+        _profile_prompt(title, content, source_text),
         system=SYSTEM,
         json_schema=TASKS_SCHEMA,
         effort="low",
@@ -193,13 +227,14 @@ def infer_for_profile(profile_key: str, title: str, content: dict) -> tuple[list
 
 
 def infer_many(
-    profiles: list[tuple[str, str, dict]],
+    # (profile_key, title, content, source_text or None)
+    profiles: list[tuple[str, str, dict, str | None]],
     *,
     workers: int = 8,
     progress=None,
 ) -> list[tuple[list[InferredTask], ProportionFix]]:
     return llm.pmap(
-        lambda p: infer_for_profile(p[0], p[1], p[2]),
+        lambda p: infer_for_profile(p[0], p[1], p[2], p[3] if len(p) > 3 else None),
         profiles,
         workers=workers,
         label="tasks",

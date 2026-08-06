@@ -126,8 +126,40 @@ def audit_skills(skills: list[InferredSkill]) -> SkillAudit:
     return SkillAudit(len(skills), too_long, bad_desc, tasky)
 
 
-def _profile_prompt(title: str, content: dict) -> str:
+def _profile_prompt(title: str, content: dict, source_text: str | None = None) -> str:
+    """The prompt for one anchor role.
+
+    `source_text` is the uploaded job description, present only when this anchor role stands for
+    exactly one uploaded record (see `services/provenance`). When it is there it REPLACES the
+    generated document, because the document is two model calls downstream of it and every hop
+    compresses — a description listing twenty-five responsibilities is already about eight
+    phrases by the time the document is written. Passing both would invite the same
+    responsibility to be counted twice, once from the summary and once from the source.
+
+    The title still comes from the anchor role rather than the source, because that is the
+    confirmed name the taxonomy is keyed on.
+    """
     parts = [f"Job profile: {title}\n"]
+
+    if source_text:
+        # The guard goes here rather than in SYSTEM for two reasons: it is only true when a source
+        # description is in play, and SYSTEM is the cached half of the request — moving it there
+        # would invalidate the cache for the document path too.
+        #
+        # It is needed because this text has only been through the extractive strip step, which
+        # removes but never rewrites. Real examples on the demo project still open "Join us as a
+        # Test/Software Engineer Lead at Barclays" and carry benefits and hybrid-working blurb.
+        # The document path never saw any of that, because normalise and document generation had
+        # already rewritten it into neutral register.
+        parts.append(
+            "The job description as supplied by the organisation. It is the source document, so "
+            "it is fuller than a summary — but it is also written to attract candidates. Read "
+            "only the substance of the role. Ignore recruitment framing, the employer's name, "
+            "benefits, pay, location, working patterns, culture and diversity statements, and "
+            "anything about the application process: none of those describe the work.\n\n"
+            + source_text.strip()
+        )
+        return "\n\n".join(parts)
 
     def add(label: str, value) -> None:
         if not value:
@@ -151,9 +183,11 @@ def _profile_prompt(title: str, content: dict) -> str:
     return "\n\n".join(parts)
 
 
-def infer_for_profile(profile_key: str, title: str, content: dict) -> list[InferredSkill]:
+def infer_for_profile(
+    profile_key: str, title: str, content: dict, source_text: str | None = None
+) -> list[InferredSkill]:
     result = llm.complete_json(
-        _profile_prompt(title, content),
+        _profile_prompt(title, content, source_text),
         system=SYSTEM,
         json_schema=SKILLS_SCHEMA,
         effort="low",
@@ -177,14 +211,15 @@ def infer_for_profile(profile_key: str, title: str, content: dict) -> list[Infer
 
 
 def infer_many(
-    profiles: list[tuple[str, str, dict]],  # (profile_key, title, content)
+    # (profile_key, title, content, source_text or None)
+    profiles: list[tuple[str, str, dict, str | None]],
     *,
     workers: int = 8,
     progress=None,
 ) -> list[list[InferredSkill]]:
     """One call per profile, per the spec's "job by job API calls"."""
     return llm.pmap(
-        lambda p: infer_for_profile(p[0], p[1], p[2]),
+        lambda p: infer_for_profile(p[0], p[1], p[2], p[3] if len(p) > 3 else None),
         profiles,
         workers=workers,
         label="skills",

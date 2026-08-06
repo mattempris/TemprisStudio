@@ -20,7 +20,7 @@ from app.models.project_state import (
     ProfileSkillRequirementRecord,
     ProjectState,
 )
-from app.services import llm
+from app.services import llm, provenance
 from app.services.orchestrator import JobAlreadyRunning, ProgressReporter, get_registry, run_job
 from app.api.routes import lineage as lineage_routes
 from app.services.project_service import ProjectService
@@ -109,7 +109,14 @@ async def infer_skills(
     if not selected:
         raise HTTPException(400, "none of the requested profile_keys matched a current anchor role")
 
-    payload = [(p.profile_key, p.title, p.content) for p in selected]
+    # Where an anchor role stands for exactly one uploaded record, read that record's own text
+    # rather than the document written about it — the document is two model calls downstream and
+    # every hop compresses. See services/provenance for why this tests the data, not the flags.
+    sources = provenance.single_source_text(state)
+    payload = [
+        (p.profile_key, p.title, p.content, sources.get(p.profile_key)) for p in selected
+    ]
+    from_source = sum(1 for row in payload if row[3])
 
     def work(reporter: ProgressReporter) -> dict:
         reporter.stage_start(len(payload), f"Inferring skills for {len(payload)} anchor roles")
@@ -128,7 +135,11 @@ async def infer_skills(
             )
             for s in flat
         ]
-        fresh.skills.audit = audit.summary()
+        fresh.skills.audit = {
+            **audit.summary(),
+            "from_source_description": from_source,
+            "profiles_run": len(payload),
+        }
         # re-inferring invalidates the taxonomy built from the previous skill set
         # The taxonomy, the proficiency map and everything downstream are all declared
         # descendants of this step, so the cascade owns clearing them. Doing it by hand
@@ -145,6 +156,10 @@ async def infer_skills(
             "skills": len(flat),
             "profiles": len(payload),
             "mean_per_profile": round(len(flat) / max(1, len(payload)), 1),
+            # How many roles were read from their own uploaded description rather than from the
+            # document written about them. Reported per run, because a step that silently reads
+            # different inputs for different roles is one whose output nobody can account for.
+            "from_source_description": from_source,
             "technical": sum(1 for s in flat if s.kind == "technical"),
             "non_technical": sum(1 for s in flat if s.kind == "non-technical"),
             **audit.summary(),

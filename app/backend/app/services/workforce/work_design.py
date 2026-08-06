@@ -561,6 +561,11 @@ def apply_levers(
         "unit": pool_result["unit"],
         "has_headcount": pool_result["has_headcount"],
         "hours_per_fte_week": hpw,
+        # Carried through rather than dropped: the facet bar's summary strip reads these, and
+        # applying a lever does not change which slice of the workforce is being looked at.
+        "facets": pool_result["facets"],
+        "basis": pool_result["basis"],
+        "sample": pool_result["sample"],
         "threshold": ABSORPTION_THRESHOLD,
         "uplift": uplift,
         "agents": list(agent_rows.values()),
@@ -699,6 +704,12 @@ def drain(applied: dict, allocated: dict[int, float]) -> dict:
     t["remaining_hours_per_week"] = round(tot_remaining, 2)
     # Stated rather than implied: the four terms must add back to the starting total, and a
     # reader should be able to see that without doing the arithmetic themselves.
+    #
+    # Oversight is deliberately NOT a term here. It is work the agents *created*, not work
+    # re-allocated out of the as-is stack, so including it made the check read as exactly the
+    # oversight total instead of zero — which looked like a rounding drift of 68 hours until
+    # the number turned out to match oversight to the penny. The identity is over the pool;
+    # oversight is reported alongside it.
     t["conservation_check"] = round(
         t["as_is_hours_per_week"]
         - (
@@ -706,8 +717,7 @@ def drain(applied: dict, allocated: dict[int, float]) -> dict:
             + t["freed_by_augmentation_hours_per_week"]
             + tot_alloc
             + tot_remaining
-        )
-        + t["oversight_hours_per_week"],
+        ),
         2,
     )
     return {

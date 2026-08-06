@@ -317,6 +317,15 @@ def main() -> int:
     )
     check("producing one line each", len(r2["added"]) == 2, str(len(r2["added"])))
 
+    # The facet bar reads `sample` off whichever response it last received, so applying a lever
+    # must not drop it. It did, and the summary strip rendered nothing.
+    check(
+        "applying levers carries the sample block through",
+        "sample" in r and r["sample"]["job_profiles"] == 2,
+        str(r.get("sample")),
+    )
+    check("and the facets and basis with it", "facets" in r and "basis" in r)
+
     print("\nA specification with no oversight tasks degrades to a labelled assumption")
     fl.agents = [wf.AgentFact("ag-1", "Drafter", 100, 40.0, True, 0.15, "fallback", [])]
     r3 = wd.apply_levers(fl, base, agent_ids=["ag-1"], skill_ids=[], uplift=1.0)
@@ -485,6 +494,29 @@ def main() -> int:
         "the conservation identity closes",
         close(t["conservation_check"], 0.0, 0.1),
         f"{t['conservation_check']}",
+    )
+    # With an agent selected there is oversight in play, and oversight must not appear in the
+    # identity: it is work the agent created, not work re-allocated out of the as-is stack.
+    # Including it made the check read as exactly the oversight total, which looked like drift.
+    with_agent = wd.apply_levers(
+        fp, wd.pool(fp, wd.Facets(), hours_per_fte_week=HPW),
+        agent_ids=["ag-oversight"], skill_ids=[], uplift=1.0,
+    )
+    fp.agents = [
+        wf.AgentFact("ag-oversight", "O", 100, 40.0, True, 0.25, "specification", [("Review", "d", 100.0)])
+    ]
+    with_agent = wd.drain(
+        wd.apply_levers(
+            fp, wd.pool(fp, wd.Facets(), hours_per_fte_week=HPW),
+            agent_ids=["ag-oversight"], skill_ids=[], uplift=1.0,
+        ),
+        {},
+    )
+    check(
+        "and still closes when oversight is in play",
+        close(with_agent["totals"]["conservation_check"], 0.0, 0.1),
+        f"check {with_agent['totals']['conservation_check']} with "
+        f"{with_agent['totals']['oversight_hours_per_week']} h of oversight",
     )
     by = {c["cluster_id"]: c for c in drained["clusters"]}
     check(

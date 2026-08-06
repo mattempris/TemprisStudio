@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { ChevronRight, Sparkles } from "lucide-react";
-import type { TaxonomyLeaf, TaxonomyNode } from "../../types/pipeline";
+import type { TaxonomyLeaf, TaxonomyNode, TierName } from "../../types/pipeline";
 import { Badge } from "../ui/Badge";
 import { cn } from "../../lib/cn";
 
@@ -11,6 +11,16 @@ import { cn } from "../../lib/cn";
  * takes the tier labels and an analytics renderer rather than being written
  * twice. The aggregate-first discipline from the JE browser applies here too:
  * every tier shows its rolled-up numbers and nothing expands until asked.
+ *
+ * **Editable in place** when `edit` is supplied. Renaming and re-parenting already existed on the
+ * per-tier confirm panels above, and were reported as missing anyway — because this is the view
+ * that looks like the architecture, so this is where someone goes to correct it. Asking them to
+ * find the right numbered accordion, expand it, expand a group inside it and use an unlabelled
+ * dropdown was a worse answer than putting the two controls on the rows they describe.
+ *
+ * Both edits are label changes: nothing is re-embedded and no tier is invalidated. Moving a
+ * category to another family is `reassign` on the FAMILY tier — a tier owns the placement of its
+ * children, so the call is always made one level above the row being moved.
  */
 
 export type TaxonomyKind = "skill" | "task";
@@ -36,16 +46,76 @@ export function normalizeTaxonomy(roots: unknown[], kind: TaxonomyKind): Taxonom
   return roots.map((r) => walk(r as Record<string, unknown>, 0));
 }
 
+/** Renaming a cluster, and re-parenting one into a different group. */
+export interface TaxonomyEdit {
+  rename: (tier: TierName, clusterId: number, name: string) => Promise<unknown>;
+  /** `tier` is the PARENT tier — the one that owns where its children sit. */
+  reassign: (tier: TierName, itemId: string, clusterId: number) => Promise<unknown>;
+  onChanged: () => void;
+}
+
 interface Props {
   kind: TaxonomyKind;
   roots: TaxonomyNode[];
   hasHeadcount: boolean;
   tierLabels: [string, string, string];
+  /** Omit for a read-only tree. */
+  edit?: TaxonomyEdit;
 }
 
-export function TaxonomyBrowser({ kind, roots, hasHeadcount, tierLabels }: Props) {
+/** Depth in this tree to the tier name the API uses. Finest last, matching the API's order. */
+const TIER_AT: [TierName, TierName, TierName] = ["family", "category", "profile"];
+
+export function TaxonomyBrowser({ kind, roots, hasHeadcount, tierLabels, edit }: Props) {
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const toggle = (k: string) => setOpen((o) => ({ ...o, [k]: !o[k] }));
+  const [busy, setBusy] = useState<string | null>(null);
+
+  /** Where a row at `depth` could be moved to: its parent tier's clusters. */
+  const parents = useMemo(
+    () => ({
+      1: roots.map((r) => ({ id: r.id, name: r.name })),
+      2: roots.flatMap((r) => (r.children ?? []).map((c) => ({ id: c.id, name: c.name }))),
+    }),
+    [roots],
+  );
+
+  /** What a row at `depth` can do. A family has no parent, so it gets rename only. */
+  function rowEdit(depth: number, node: TaxonomyNode, parentId: number | null): RowEdit | undefined {
+    if (!edit) return undefined;
+    const tier = TIER_AT[depth];
+    const key = `${tier}:${node.id}`;
+    return {
+      busy: busy === key,
+      onRename: async (name) => {
+        setBusy(key);
+        try {
+          await edit.rename(tier, node.id, name);
+          edit.onChanged();
+        } finally {
+          setBusy(null);
+        }
+      },
+      // Moving is always a call on the tier ABOVE: that tier owns where its children sit, and
+      // the item id it knows this row by is "<this tier>:<id>".
+      move:
+        depth === 0
+          ? undefined
+          : {
+              currentId: parentId,
+              options: parents[depth as 1 | 2],
+              onMove: async (to) => {
+                setBusy(key);
+                try {
+                  await edit.reassign(TIER_AT[depth - 1], `${tier}:${node.id}`, to);
+                  edit.onChanged();
+                } finally {
+                  setBusy(null);
+                }
+              },
+            },
+    };
+  }
 
   const totals = useMemo(() => {
     const leafCount = (n: TaxonomyNode) => n.skill_count ?? n.task_count ?? 0;
@@ -85,6 +155,7 @@ export function TaxonomyBrowser({ kind, roots, hasHeadcount, tierLabels }: Props
                 hasHeadcount={hasHeadcount}
                 expanded={!!open[rk]}
                 onToggle={() => toggle(rk)}
+                edit={rowEdit(0, root, null)}
               />
               {open[rk] &&
                 (root.children ?? []).map((cat) => {
@@ -98,6 +169,7 @@ export function TaxonomyBrowser({ kind, roots, hasHeadcount, tierLabels }: Props
                         hasHeadcount={hasHeadcount}
                         expanded={!!open[ck]}
                         onToggle={() => toggle(ck)}
+                        edit={rowEdit(1, cat, root.id)}
                       />
                       {open[ck] &&
                         (cat.children ?? []).map((cl) => {
@@ -111,6 +183,7 @@ export function TaxonomyBrowser({ kind, roots, hasHeadcount, tierLabels }: Props
                                 hasHeadcount={hasHeadcount}
                                 expanded={!!open[lk]}
                                 onToggle={() => toggle(lk)}
+                                edit={rowEdit(2, cl, cat.id)}
                               />
                               {open[lk] && (
                                 <LeafTable
@@ -144,6 +217,17 @@ function Stat({ label, value }: { label: string; value: string | number }) {
   );
 }
 
+export interface RowEdit {
+  busy: boolean;
+  onRename: (name: string) => Promise<void>;
+  /** Absent on a family row, which has no parent to move between. */
+  move?: {
+    currentId: number | null;
+    options: { id: number; name: string }[];
+    onMove: (to: number) => Promise<void>;
+  };
+}
+
 function Row({
   depth,
   node,
@@ -151,6 +235,7 @@ function Row({
   hasHeadcount,
   expanded,
   onToggle,
+  edit,
 }: {
   depth: number;
   node: TaxonomyNode;
@@ -158,29 +243,85 @@ function Row({
   hasHeadcount: boolean;
   expanded: boolean;
   onToggle: () => void;
+  edit?: RowEdit;
 }) {
   const count = node.skill_count ?? node.task_count ?? 0;
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState(node.name);
+
+  // A div, not a button. The row now contains an input and a select, and a button cannot hold
+  // either — the browser hoists them out and the layout collapses.
   return (
-    <button
-      onClick={onToggle}
+    <div
       className={cn(
         "flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-panel",
         depth === 0 && "font-semibold",
       )}
       style={{ paddingLeft: `${12 + depth * 18}px` }}
     >
-      <ChevronRight
-        size={13}
-        className={cn("shrink-0 text-text-muted transition-transform", expanded && "rotate-90")}
-      />
-      <span
-        className={cn(
-          "min-w-0 flex-1 truncate",
-          depth === 0 ? "text-[13px] text-text" : "text-[12.5px] text-text-secondary",
-        )}
-      >
-        {node.name}
-      </span>
+      <button onClick={onToggle} className="shrink-0" aria-label={expanded ? "Collapse" : "Expand"}>
+        <ChevronRight
+          size={13}
+          className={cn("text-text-muted transition-transform", expanded && "rotate-90")}
+        />
+      </button>
+      {edit && renaming ? (
+        <input
+          autoFocus
+          value={draft}
+          disabled={edit.busy}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              setDraft(node.name);
+              setRenaming(false);
+            }
+            if (e.key === "Enter" && draft.trim() && draft.trim() !== node.name) {
+              void edit.onRename(draft.trim()).then(() => setRenaming(false));
+            } else if (e.key === "Enter") {
+              setRenaming(false);
+            }
+          }}
+          onBlur={() => {
+            setDraft(node.name);
+            setRenaming(false);
+          }}
+          className="min-w-0 flex-1 rounded-[6px] border border-accent bg-card px-2 py-0.5 text-[12.5px] font-semibold text-text outline-none"
+        />
+      ) : (
+        <button
+          onClick={() => (edit ? (setDraft(node.name), setRenaming(true)) : onToggle())}
+          title={edit ? "Click to rename" : undefined}
+          className={cn(
+            "min-w-0 flex-1 truncate text-left",
+            depth === 0 ? "text-[13px] text-text" : "text-[12.5px] text-text-secondary",
+            edit && "rounded-[4px] hover:bg-card",
+          )}
+        >
+          {node.name}
+        </button>
+      )}
+      {edit?.move && edit.move.options.length > 1 && (
+        <span className="flex shrink-0 items-center gap-1">
+          <span className="text-[10px] text-text-muted">move to</span>
+          <select
+            value={edit.move.currentId ?? ""}
+            disabled={edit.busy}
+            title="Move to another group"
+            onChange={(e) => {
+              const to = Number(e.target.value);
+              if (to !== edit.move!.currentId) void edit.move!.onMove(to);
+            }}
+            className="max-w-[11rem] rounded-[6px] border border-border bg-card px-1 py-0.5 text-[10.5px] text-text-secondary outline-none hover:border-accent focus:border-accent disabled:opacity-50"
+          >
+            {edit.move.options.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.name}
+              </option>
+            ))}
+          </select>
+        </span>
+      )}
 
       <span className="flex shrink-0 items-center gap-3 tabular-nums">
         {kind === "task" && node.proportion_sum != null && (
@@ -200,7 +341,7 @@ function Row({
         )}
         <Metric value={count} label={kind === "skill" ? "skills" : "tasks"} />
       </span>
-    </button>
+    </div>
   );
 }
 

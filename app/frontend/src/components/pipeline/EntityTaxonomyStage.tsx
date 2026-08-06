@@ -294,6 +294,14 @@ export function EntityTaxonomyStage({
           roots={normalizeTaxonomy(tree.roots, kind)}
           hasHeadcount={tree.hasHeadcount}
           tierLabels={tierLabels}
+          // Editable here as well as on the tier panels above. This is the view that looks like
+          // the architecture, so it is where someone goes to correct it — and the taxonomy has to
+          // be reloaded afterwards, since a move changes the tree's shape rather than one row.
+          edit={{
+            rename: (tier, id, name) => tierApi(tier).rename(id, name),
+            reassign: (tier, itemId, clusterId) => tierApi(tier).reassign(itemId, clusterId),
+            onChanged: () => void refresh(),
+          }}
         />
       )}
     </div>

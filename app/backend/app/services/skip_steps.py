@@ -70,7 +70,10 @@ SKIPPABLE: tuple[SkippableStep, ...] = (
         "Anchor roles",
         "identity",
         "Each normalised job becomes its own anchor role, named from the job title in the "
-        "upload. No grouping and no naming call — a one-to-one mapping.",
+        "upload. No grouping and no naming call, so nothing is merged and no detail is lost. "
+        "The jobs are still embedded, because the job categories step groups anchor roles by "
+        "similarity and needs vectors to measure it — so this takes a few minutes on a large "
+        "upload, with no model spend.",
     ),
     SkippableStep(
         "categories",

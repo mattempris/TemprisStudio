@@ -208,11 +208,13 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
             body: JSON.stringify({ k, gate }),
           }),
         /** Confirm this tier one-to-one: every item its own cluster, named from the data.
-         *  Not a job — there is no model call and no stability pass to report on. */
-        skip: () =>
-          request<{ k: number; one_to_one: boolean; invalidated: unknown[] }>(`${t}/skip`, {
-            method: "POST",
-          }),
+         *  A job, because the finest tier still has to embed — the tier above clusters these
+         *  centroids, so vectors are needed even though no grouping happens here. */
+        skip: (opts?: { device?: string | null; embedding_model?: string | null }) =>
+          request<JobHandle>(
+            `${t}/skip${qs({ device: opts?.device, embedding_model: opts?.embedding_model })}`,
+            { method: "POST" },
+          ),
         clusters: () => request<TierClusters>(`${t}/clusters`),
         /** Full membership of one cluster of an unconfirmed cut — the preview's
          *  per-cluster sample is capped, so opening one needs its own call. */

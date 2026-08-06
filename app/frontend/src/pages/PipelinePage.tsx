@@ -258,13 +258,13 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
         kind={step.kind}
         skipped={isSkipped}
         busy={busy}
-        // `act` already wraps error handling, the busy flag and a refresh — the same
-        // treatment every other non-job action on this page gets.
+        // A tier skip is a job — the anchor-role tier still embeds, because job categories
+        // are formed by clustering those vectors. Everything else is instant, so it goes
+        // through `act`, which wraps error handling, the busy flag and a refresh.
         onSkip={() =>
-          void act(async () => {
-            if (tierOf) await api.tier("job", tierOf).skip();
-            else await api.skipStep(id);
-          })
+          tierOf
+            ? void runJob(() => api.tier("job", tierOf).skip(), id)
+            : void act(() => api.skipStep(id))
         }
         onUndo={() => void act(() => api.unskipStep(id))}
       />

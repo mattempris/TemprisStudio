@@ -789,77 +789,134 @@ async def tier_confirm(
 
 
 @router.post("/skip")
-def tier_skip(client_slug: str, project_slug: str, entity: str, tier: str) -> dict:
+async def tier_skip(
+    client_slug: str,
+    project_slug: str,
+    entity: str,
+    tier: str,
+    device: str | None = None,
+    embedding_model: str | None = None,
+) -> dict:
     """Confirm this tier one-to-one: every item becomes its own cluster.
 
-    Synchronous, not a job. The whole point is that there is no model call and no stability
-    pass — the work is building a result object and writing it — so a progress bar would be
-    reporting on nothing. It is the only confirm path in this module that does not spend.
+    For a set of job descriptions that are already distinct and well written, grouping them
+    into anchor roles only loses detail — so this is the path that keeps every profile as its
+    own anchor role, named from the title the upload carried, with no naming call and no
+    grouping.
 
-    Names come from the data rather than a naming call. At the anchor-role tier that is the
-    job title the spreadsheet already carried, which is exactly what the user asked for when
-    they declined to cluster: the titles they uploaded, unchanged. At the coarser tiers it is
-    the confirmed name of the single child, so a category holding one anchor role is called
-    the same thing rather than being renamed for no reason.
+    **It still embeds, and that is not avoidable.** A one-to-one tier needs no vectors of its
+    own, but the tier *above* it does: job categories are formed by clustering anchor roles, and
+    clustering needs somewhere to measure distance. `save_tier` therefore has to write a centroid
+    per anchor role, and for a cluster of one the centroid is that job's own embedding. This
+    endpoint used to fail with a 409 telling the user to run the build first, which was true and
+    useless — the distinction between "group these" (declinable) and "embed these" (not) is an
+    implementation detail nobody should have to learn. So it embeds if the vectors are missing.
 
-    Everything else follows the real confirm path exactly — the same cascade, the same tier
-    drop, the same cache invalidation — because a skipped tier is a confirmed tier and
-    anything downstream that reads it must be treated as describing an older version of it.
+    It does *not* build the Ward tree. That is the expensive half of the build step and it exists
+    only to make cluster-count previews instant; a tier confirmed one-to-one has no cluster count
+    to preview. Skipping is genuinely cheaper here, not just differently shaped.
+
+    A job rather than a synchronous call, because of the embedding: 900 jobs is minutes of GPU
+    time on a cold model. Where the vectors already exist it finishes immediately, and where they
+    do not the progress bar says what it is doing. Still the only confirm path in this module
+    that makes no model call.
+
+    Names come from the data rather than a naming call. At the anchor-role tier that is the job
+    title the spreadsheet already carried. At the coarser tiers it is the confirmed name of the
+    single child, so a category holding one anchor role is called the same thing rather than
+    being renamed for no reason.
+
+    Everything else follows the real confirm path exactly — the same cascade, the same tier drop,
+    the same cache invalidation — because a skipped tier is a confirmed tier, and anything
+    downstream that reads it must be treated as describing an older version of it.
     """
     es = _check(entity, tier)
     svc, state = _load(client_slug, project_slug)
-    model_name = embeddings.resolve_model(es.embeddings_entity).name
+
+    if tier == "profile" and len(tier_state.base_items(state, entity)) < 3:
+        raise HTTPException(
+            400,
+            f"need at least 3 {tier_state.tier_noun(entity, 'profile')} to confirm a tier — "
+            f"run the step that produces them first",
+        )
+    if tier != "profile" and not tier_state.is_confirmed(state, entity, tier_state.CHILD_OF[tier]):
+        below = tier_state.CHILD_OF[tier]
+        raise HTTPException(
+            409,
+            f"the {tier_state.tier_title(entity, below).lower()} must be confirmed before the "
+            f"{tier_state.tier_title(entity, tier).lower()} — {tier} clusters {below}s",
+        )
 
     try:
-        items = tier_state.build_items(svc, state, entity, tier)
-    except tier_state.TierNotReady as e:
-        raise HTTPException(409, str(e)) from e
-    if not len(items):
-        raise HTTPException(409, f"nothing to confirm at the {tier} tier")
+        model_spec = embeddings.resolve_model(es.embeddings_entity, embedding_model)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
 
-    if tier == "profile":
-        # The route back to the upload: normalised profile id is a dedupe group id, whose
-        # representative is a raw record with the original title on it.
-        titles = skip_steps.source_titles(state)
-        names = [titles.get(i, "") or i for i in items.ids]
-    else:
-        below = tier_state.CHILD_OF[tier]
-        prev = tier_state.tiers_of(state, entity).get(below)
-        prev_names = prev.names if prev else {}
-        # `build_items` ids are "<below>:<cid>" at the coarser tiers.
-        names = [prev_names.get(_child_id(i), "") for i in items.ids]
+    def work(reporter: ProgressReporter) -> dict:
+        if tier == "profile":
+            # Idempotent and fingerprint-aware: returns immediately when the vectors already
+            # came from this model, so pressing skip after a build costs nothing.
+            _embed_base(svc, state, entity, reporter, model_spec.name, device, embedding_model)
 
-    result = skip_steps.identity_tier_result(
-        list(items.ids), list(items.texts), items.embeddings, names,
-        # No gate was applied because nothing was routed. Zero says that, where carrying the
-        # default would imply a threshold had been used to decide something.
-        gate=0.0,
-    )
+        reporter.message(
+            f"Confirming {tier_state.tier_title(entity, tier).lower()} one-to-one"
+        )
+        try:
+            items = tier_state.build_items(svc, state, entity, tier)
+        except tier_state.TierNotReady as e:
+            raise ValueError(str(e)) from e
+        if not len(items):
+            raise ValueError(f"nothing to confirm at the {tier} tier")
 
-    fresh = svc.load_state(client_slug, project_slug)
-    dropped = [t for t in tier_state.ORDER[tier_state.ORDER.index(tier) + 1 :]
-               if t in tier_state.tiers_of(fresh, entity)]
-    invalidated = lineage_routes.cascade(svc, fresh, _lineage_step(entity, tier))
-    tier_state.save_tier(svc, fresh, entity, tier, result, embedding_model=model_name)
-    if entity == "job":
-        skip_steps.mark(fresh, _WIZARD_STEP[tier])
-    svc.save_state(
-        fresh,
-        action=f"skip-{entity}-{tier}-tier",
-        lineage_payload={
+        if tier == "profile":
+            # The route back to the upload: a normalised profile's id is a dedupe group id,
+            # whose representative is a raw record carrying the original title.
+            titles = skip_steps.source_titles(state)
+            names = [titles.get(i, "") or i for i in items.ids]
+        else:
+            below = tier_state.CHILD_OF[tier]
+            prev = tier_state.tiers_of(state, entity).get(below)
+            prev_names = prev.names if prev else {}
+            # `build_items` ids are "<below>:<cid>" above the finest tier.
+            names = [prev_names.get(_child_id(i), "") for i in items.ids]
+
+        result = skip_steps.identity_tier_result(
+            list(items.ids), list(items.texts), items.embeddings, names,
+            # No gate was applied because nothing was routed. Zero says that, where carrying
+            # the default would imply a threshold had been used to decide something.
+            gate=0.0,
+        )
+
+        fresh = svc.load_state(client_slug, project_slug)
+        dropped = [t for t in tier_state.ORDER[tier_state.ORDER.index(tier) + 1 :]
+                   if t in tier_state.tiers_of(fresh, entity)]
+        invalidated = lineage_routes.cascade(svc, fresh, _lineage_step(entity, tier))
+        tier_state.save_tier(svc, fresh, entity, tier, result, embedding_model=model_spec.name)
+        if entity == "job":
+            skip_steps.mark(fresh, _WIZARD_STEP[tier])
+        svc.save_state(
+            fresh,
+            action=f"skip-{entity}-{tier}-tier",
+            lineage_payload={
+                "entity": entity, "tier": tier, "k": result.k, "one_to_one": True,
+                "tiers_invalidated": dropped,
+                "invalidated": [i["step"] for i in invalidated],
+            },
+        )
+        for above in tier_state.ORDER[tier_state.ORDER.index(tier) :]:
+            _TIER_CACHE.pop((client_slug, project_slug, entity, above), None)
+            _ANALYSIS_CACHE.pop((client_slug, project_slug, entity, above), None)
+
+        summary = {
             "entity": entity, "tier": tier, "k": result.k, "one_to_one": True,
-            "tiers_invalidated": dropped,
-            "invalidated": [i["step"] for i in invalidated],
-        },
-    )
-    for above in tier_state.ORDER[tier_state.ORDER.index(tier) :]:
-        _TIER_CACHE.pop((client_slug, project_slug, entity, above), None)
-        _ANALYSIS_CACHE.pop((client_slug, project_slug, entity, above), None)
+            "clusters": len(result.names),
+            "tiers_invalidated": len(dropped),
+            "invalidated": invalidated,
+        }
+        reporter.stage_complete(summary)
+        return summary
 
-    return {
-        "entity": entity, "tier": tier, "k": result.k, "one_to_one": True,
-        "tiers_invalidated": dropped, "invalidated": invalidated,
-    }
+    return _start_job(client_slug, project_slug, _stage(entity, tier), work)
 
 
 def _child_id(item_id: str) -> int:

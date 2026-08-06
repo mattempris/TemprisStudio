@@ -474,6 +474,88 @@ def future_roles_dataset(state: ProjectState) -> Dataset:
     return Dataset("Future roles", cols, rows)
 
 
+def designed_jobs_dataset(state: ProjectState) -> Dataset:
+    """One row per job designed in Work Design Studio."""
+    cols = [
+        "Designed job", "Headcount", "Hours per FTE week",
+        "Capacity h/week", "Assigned h/week", "Fill %", "Over capacity",
+        "Required headcount",
+        "Task lines", "As-is lines", "Agent oversight lines", "Manual lines",
+        "Agents selected", "Augmentations selected",
+        "Imported from role", "Job families in sample", "Task domains in sample",
+        "Business function filter", "Business department filter",
+        "Profile document", "Stale", "Stale reason", "Created", "Updated",
+    ]
+    hpw = state.workforce.hours_per_fte_week
+    names = {a.id: a.name for a in state.workforce.agents}
+    skills = {s.id: s.name for s in state.workforce.skills_guidance}
+    rows = []
+    for j in state.work_design.jobs:
+        assigned = sum(t.hours_per_week for t in j.tasks)
+        cap = j.headcount * hpw
+        rows.append([
+            j.title, j.headcount, hpw,
+            round(cap, 2), round(assigned, 2),
+            round(100.0 * assigned / cap, 1) if cap else None,
+            "yes" if assigned > cap + 0.01 else "",
+            round(assigned / hpw, 2) if hpw else None,
+            len(j.tasks),
+            sum(1 for t in j.tasks if t.origin == "as_is"),
+            sum(1 for t in j.tasks if t.origin == "agent_oversight"),
+            sum(1 for t in j.tasks if t.origin == "manual"),
+            " | ".join(names.get(a, a) for a in j.selected_agent_ids),
+            " | ".join(skills.get(s, s) for s in j.selected_skill_ids),
+            j.imported_from_profile_key or "",
+            len(j.facets.job_family_ids), len(j.facets.task_family_ids),
+            " | ".join(j.facets.business_level_1), " | ".join(j.facets.business_level_3),
+            "yes" if j.profile_doc else "",
+            "yes" if j.stale else "", j.stale_reason,
+            j.created_at.isoformat(timespec="seconds"),
+            j.updated_at.isoformat(timespec="seconds"),
+        ])
+    rows.sort(key=lambda r: str(r[0]))
+    return Dataset("Designed jobs", cols, rows)
+
+
+def designed_job_tasks_dataset(state: ProjectState) -> Dataset:
+    """Every line of work in every designed job, with where it came from.
+
+    Automation and augmentation stay in separate columns and are never combined into one
+    "time saved" — they are different claims, and one figure would let a reader treat hours
+    that are still worked as hours that have gone.
+    """
+    cols = [
+        "Designed job", "Task cluster", "Task line", "Origin",
+        "Hours per week", "% of capacity", "FTE equivalent",
+        "Agent", "Levers applied",
+        "Automation % (estimate)", "Augmentation % (estimate)",
+        "Contributing tasks", "Imported from role", "Task cluster still exists",
+    ]
+    hpw = state.workforce.hours_per_fte_week
+    names = {a.id: a.name for a in state.workforce.agents}
+    live = set(state.tasks.clustering.profile_names) if state.tasks.clustering else set()
+    rows = []
+    for j in state.work_design.jobs:
+        cap = j.headcount * hpw
+        for t in j.tasks:
+            rows.append([
+                j.title, t.cluster_name, t.name, t.origin,
+                round(t.hours_per_week, 2),
+                round(100.0 * t.hours_per_week / cap, 1) if cap else None,
+                round(t.hours_per_week / hpw, 3) if hpw else None,
+                names.get(t.agent_id or "", ""),
+                " | ".join(t.lever_ids),
+                t.automation_pct, t.augmentation_pct,
+                " | ".join(t.contributing_tasks),
+                t.source_profile_key or "",
+                # The honest column for a design whose taxonomy moved underneath it. The line
+                # is still readable because cluster_name was snapshotted.
+                "" if t.task_cluster_id is None else ("yes" if t.task_cluster_id in live else "no"),
+            ])
+    rows.sort(key=lambda r: (str(r[0]), -float(r[4] or 0)))
+    return Dataset("Designed job tasks", cols, rows)
+
+
 BUILDERS = {
     "architecture": architecture_dataset,
     "input-jobs": input_jobs_dataset,
@@ -489,6 +571,9 @@ BUILDERS = {
     "processes": processes_dataset,
     "process-opportunity": process_opportunity_dataset,
     "future-roles": future_roles_dataset,
+    # After future-roles so sheet order follows studio order.
+    "designed-jobs": designed_jobs_dataset,
+    "designed-job-tasks": designed_job_tasks_dataset,
 }
 
 

@@ -14,10 +14,17 @@ Built on a hand-made `Facts` rather than a project, so the numbers are checkable
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.models.project_state import (  # noqa: E402
+    DesignedJobRecord,
+    DesignedTaskLine,
+    ProjectMeta,
+    ProjectState,
+)
 from app.services.workforce import graph as wf  # noqa: E402
 from app.services.workforce import work_design as wd  # noqa: E402
 
@@ -80,6 +87,18 @@ def build_facts(*, has_headcount: bool = True, business: bool = False) -> wf.Fac
             wf.BusinessUnitFact(11, "Commercial", "Technical", "Platform", 2),
         ]
     return f
+
+
+def _state_with(jobs: list[DesignedJobRecord]) -> ProjectState:
+    """A minimal project carrying only what the allocation functions read."""
+    now = datetime.now(timezone.utc)
+    st = ProjectState(
+        meta=ProjectMeta(
+            client_slug="c", project_slug="p", display_name="C", created_at=now, updated_at=now
+        )
+    )
+    st.work_design.jobs = list(jobs)
+    return st
 
 
 def main() -> int:
@@ -415,6 +434,122 @@ def main() -> int:
         "and contributes no hours",
         close(rs["totals"]["removed_by_automation_hours_per_week"], 0.0),
     )
+
+    # ------------------------------------------------- capacity and the pool draining
+    print("\nCapacity: one job definition, headcount raises capacity not size")
+    now = datetime.now(timezone.utc)
+    job = DesignedJobRecord(
+        id="wd-1", title="Designed", headcount=1.0, created_at=now, updated_at=now,
+        tasks=[
+            DesignedTaskLine(id="l1", name="A", task_cluster_id=100, hours_per_week=30.0),
+            DesignedTaskLine(id="l2", name="B", task_cluster_id=102, hours_per_week=5.0),
+        ],
+    )
+    cap = wd.capacity(job, hours_per_fte_week=HPW)
+    check("capacity is headcount x a week", close(cap["capacity_hours_per_week"], HPW))
+    check("fill is assigned over capacity", close(cap["fill_pct"], 100 * 35.0 / HPW), str(cap["fill_pct"]))
+    check("not over capacity", cap["over_capacity"] is False)
+    check("and the spare is stated", close(cap["spare_hours_per_week"], 2.5))
+
+    job.headcount = 0.5
+    cap = wd.capacity(job, hours_per_fte_week=HPW)
+    check("halving headcount halves capacity", close(cap["capacity_hours_per_week"], HPW / 2))
+    check("over capacity is reported, not rejected", cap["over_capacity"] is True)
+    check(
+        "required headcount is the useful output",
+        close(cap["required_headcount"], 35.0 / HPW),
+        str(cap["required_headcount"]),
+    )
+    check("fill_pct is unbounded — 187% is a sentence, not an error", cap["fill_pct"] > 100)
+    check("and the message says it in words", "needs" in cap["message"], cap["message"])
+
+    print("\nThe pool drains as work is allocated, and the invariant holds")
+    st = _state_with([job])
+    job.headcount = 1.0
+    fp = build_facts()
+    fp.actions = [wf.ActionFact(100, "Drafting", "d", 50.0, 60.0, 80.0),
+                  wf.ActionFact(100, "Deciding", "d", 50.0, 20.0, 30.0)]
+    applied = wd.apply_levers(
+        fp, wd.pool(fp, wd.Facets(), hours_per_fte_week=HPW), agent_ids=[], skill_ids=[], uplift=1.0
+    )
+    alloc = wd.allocated_hours(st)
+    drained = wd.drain(applied, alloc)
+    t = drained["totals"]
+    check("allocated hours are what the jobs hold", close(t["allocated_hours_per_week"], 35.0), str(t["allocated_hours_per_week"]))
+    check(
+        "remaining = as-is minus everything accounted for",
+        close(t["remaining_hours_per_week"], t["as_is_hours_per_week"] - 35.0),
+        str(t["remaining_hours_per_week"]),
+    )
+    check(
+        "the conservation identity closes",
+        close(t["conservation_check"], 0.0, 0.1),
+        f"{t['conservation_check']}",
+    )
+    by = {c["cluster_id"]: c for c in drained["clusters"]}
+    check(
+        "the drawn hours of a cluster fall by what was taken from it",
+        close(by[100]["hours_per_week"], 3000.0 - 30.0),
+        str(by[100]["hours_per_week"]),
+    )
+
+    print("\nEditing a job must not drain the pool twice")
+    excl = wd.allocated_hours(st, exclude_job_id="wd-1")
+    check("its own allocation is excluded", excl == {}, str(excl))
+    d2 = wd.drain(applied, excl)
+    check(
+        "so the pool shows the hours the edit can draw on, including its own",
+        close(d2["totals"]["allocated_hours_per_week"], 0.0),
+    )
+    check(
+        "which is the undrained total",
+        close(d2["totals"]["remaining_hours_per_week"], d2["totals"]["as_is_hours_per_week"]),
+    )
+
+    print("\nDeleting a job returns its hours — no second code path")
+    st.work_design.jobs = []
+    back = wd.drain(applied, wd.allocated_hours(st))
+    check(
+        "removing the job restores the pool exactly",
+        close(back["totals"]["remaining_hours_per_week"], t["as_is_hours_per_week"]),
+        str(back["totals"]["remaining_hours_per_week"]),
+    )
+
+    print("\nOversight lines are created work, so they do not drain the pool")
+    ovs = DesignedJobRecord(
+        id="wd-2", title="With oversight", headcount=1.0, created_at=now, updated_at=now,
+        tasks=[
+            DesignedTaskLine(id="o1", name="Reviewing", task_cluster_id=100,
+                             origin="agent_oversight", hours_per_week=4.0),
+            DesignedTaskLine(id="a1", name="Real work", task_cluster_id=100, hours_per_week=6.0),
+        ],
+    )
+    a2 = wd.allocated_hours(_state_with([ovs]))
+    check(
+        "only the as-is line counts against the pool",
+        close(a2.get(100, 0.0), 6.0),
+        str(a2.get(100)),
+    )
+    check(
+        "a hand-typed line with no cluster cannot consume pool hours either",
+        wd.allocated_hours(
+            _state_with([
+                DesignedJobRecord(id="wd-3", title="Manual", created_at=now, updated_at=now,
+                                  tasks=[DesignedTaskLine(id="m", name="Typed", origin="manual",
+                                                          hours_per_week=9.0)])
+            ])
+        ) == {},
+    )
+
+    print("\nThe target profile is the deliverable view")
+    tgt = wd.target_profile(_state_with([ovs]), hours_per_fte_week=HPW)
+    check("it totals every line", close(tgt["totals"]["hours_per_week"], 10.0))
+    check(
+        "and keeps oversight separate, so supervision is visible",
+        close(tgt["totals"]["oversight_hours_per_week"], 4.0),
+        str(tgt["totals"]["oversight_hours_per_week"]),
+    )
+    check("with one row per (origin, cluster)", len(tgt["lines"]) == 2, str(len(tgt["lines"])))
 
     print("\n" + ("PASS" if ok else "FAIL"))
     return 0 if ok else 1

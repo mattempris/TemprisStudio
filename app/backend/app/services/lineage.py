@@ -123,6 +123,16 @@ STEPS: tuple[Step, ...] = (
         verb=Verb.MARK_STALE,
         counter="role designs",
     ),
+    Step(
+        "work-design",
+        "Designed jobs",
+        # Both: a designed job's task hours come from the assessment and its oversight lines
+        # come from the agents. Deliberately NOT workforce:graph — the graph is a derived read
+        # model, and depending on it would mean rebuilding it invalidates human work product.
+        ("opportunity", "automation"),
+        verb=Verb.MARK_STALE,
+        counter="designed jobs",
+    ),
 )
 
 BY_KEY: dict[str, Step] = {s.key: s for s in STEPS}
@@ -204,6 +214,8 @@ def count(state: ProjectState, key: str) -> int:
         return len(w.process_assessments)
     if key == "future-roles":
         return len(w.future_roles)
+    if key == "work-design":
+        return sum(1 for j in state.work_design.jobs if not j.stale)
     if key == "workforce:graph":
         # Derived and stored outside state, so its presence is not answerable here. The
         # route that owns the blob reports it; 0 keeps the dialog honest rather than
@@ -278,6 +290,21 @@ def _stale(state: ProjectState, key: str) -> None:
     elif key == "evaluation":
         for r in state.je_results:
             r.stale = True
+    elif key == "work-design":
+        # The first honest MARK_STALE in this half of the app. The three below are declared
+        # MARK_STALE but clear their lists, because their records have no `stale` field — a
+        # clear wearing a stale label. A designed job is a title, a headcount and an
+        # arrangement of work a person argued about in a workshop: the only artefact in any of
+        # the three studios authored by a human rather than a model, and the only one that
+        # cannot be regenerated. So it is badged and kept, and re-saving it clears the badge.
+        for j in state.work_design.jobs:
+            j.stale = True
+            j.stale_reason = (
+                "the AI opportunity assessment or the agent specifications behind these "
+                "numbers were re-run"
+            )
+            if j.profile_doc:
+                j.profile_doc.stale = True
     elif key in ("augmentation", "automation", "future-roles"):
         # These have no `stale` field: they are files and specs in blob, and a half-marked
         # record would be worse than an honest clear. Cleared from the index, files left

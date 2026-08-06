@@ -26,7 +26,7 @@ the assessment and — since this studio — the agents, augmentations and busin
 """
 from __future__ import annotations
 
-from app.models.project_state import ProjectState
+from app.models.project_state import DesignedJobRecord, ProjectState
 from app.services.workforce import graph as wf
 from app.services.workforce.agents import ABSORPTION_THRESHOLD
 
@@ -599,6 +599,167 @@ def apply_levers(
             if skipped_agents or skipped_skills
             else []
         ),
+    }
+
+
+def capacity(job: DesignedJobRecord, *, hours_per_fte_week: float) -> dict:
+    """A designed job's capacity against what is in it.
+
+    One job definition. Headcount raises the **capacity, not the size** — several people can
+    hold the same job, so the design is still one job description however many hold it.
+
+    `required_headcount` is the studio's primary output rather than a diagnostic: "this work
+    needs 21.7 people" is the answer a workforce designer came for. So over-capacity is
+    reported, never rejected and never clamped. A designer overshoots and then trims; failing
+    the write mid-edit would lose the arrangement, and an over-capacity design is frequently
+    the finding rather than a mistake. `fill_pct` is deliberately unbounded — 433% is not an
+    error state, it is a sentence.
+    """
+    hpw = hours_per_fte_week
+    cap = job.headcount * hpw
+    assigned = sum(t.hours_per_week for t in job.tasks)
+    over = max(0.0, assigned - cap)
+    return {
+        "headcount": job.headcount,
+        "hours_per_fte_week": hpw,
+        "capacity_hours_per_week": round(cap, 2),
+        "assigned_hours_per_week": round(assigned, 2),
+        "fill_pct": round(100.0 * assigned / cap, 1) if cap else None,
+        "over_capacity": assigned > cap + 0.01,
+        "over_by_hours_per_week": round(over, 2),
+        "over_by_fte": round(over / hpw, 2) if hpw else None,
+        "spare_hours_per_week": round(max(0.0, cap - assigned), 2),
+        "required_headcount": round(assigned / hpw, 2) if hpw else None,
+        "message": (
+            f"This work needs {assigned / hpw:.1f} people at {hpw:g} hours a week; "
+            f"the job is set to {job.headcount:g}."
+            if hpw and assigned > cap + 0.01
+            else f"{max(0.0, cap - assigned):.1f} hours a week spare."
+        ),
+    }
+
+
+def allocated_hours(state: ProjectState, *, exclude_job_id: str | None = None) -> dict[int, float]:
+    """Hours already committed to designed jobs, per task cluster.
+
+    `exclude_job_id` is what makes editing an existing job work. While a job is open in the
+    panel its lines are *in* the panel, so counting them as allocated too would show the same
+    hours in both places and drain the pool twice over. Excluding it means the pool shows what
+    is available to this edit — including the hours the job currently holds, which is exactly
+    what a person re-arranging it needs to see.
+
+    A line with no cluster (typed in by hand) is not counted: it does not correspond to any of
+    the pool's work, so it cannot consume any of it.
+    """
+    out: dict[int, float] = {}
+    for job in state.work_design.jobs:
+        if exclude_job_id is not None and job.id == exclude_job_id:
+            continue
+        for line in job.tasks:
+            # Oversight lines are work the levers *created*, not work drawn from the pool, so
+            # they do not reduce it either.
+            if line.task_cluster_id is None or line.origin == "agent_oversight":
+                continue
+            out[line.task_cluster_id] = out.get(line.task_cluster_id, 0.0) + line.hours_per_week
+    return out
+
+
+def drain(applied: dict, allocated: dict[int, float]) -> dict:
+    """Subtract what is already allocated to designed jobs, leaving the unreviewed pool.
+
+    The conservation invariant this studio rests on, and the first thing to check when a
+    number looks wrong:
+
+        as_is == removed_by_automation + freed_by_augmentation
+                 + allocated_to_jobs + remaining
+
+    Every term is reported so the identity can be read off the response rather than trusted.
+    """
+    clusters = []
+    tot_alloc = tot_remaining = 0.0
+    for c in applied["clusters"]:
+        alloc = min(allocated.get(c["cluster_id"], 0.0), c["to_be_hours_per_week"])
+        remaining = max(0.0, c["to_be_hours_per_week"] - alloc)
+        tot_alloc += alloc
+        tot_remaining += remaining
+        clusters.append(
+            {
+                **c,
+                "allocated_hours_per_week": round(alloc, 2),
+                "remaining_hours_per_week": round(remaining, 2),
+                # What the pool draws. Once a cluster is fully allocated it leaves the panel,
+                # which is what makes "finished" mean an empty pool.
+                "hours_per_week": round(remaining, 2),
+                "fully_allocated": remaining <= 0.01,
+            }
+        )
+
+    t = dict(applied["totals"])
+    t["allocated_hours_per_week"] = round(tot_alloc, 2)
+    t["remaining_hours_per_week"] = round(tot_remaining, 2)
+    # Stated rather than implied: the four terms must add back to the starting total, and a
+    # reader should be able to see that without doing the arithmetic themselves.
+    t["conservation_check"] = round(
+        t["as_is_hours_per_week"]
+        - (
+            t["removed_by_automation_hours_per_week"]
+            + t["freed_by_augmentation_hours_per_week"]
+            + tot_alloc
+            + tot_remaining
+        )
+        + t["oversight_hours_per_week"],
+        2,
+    )
+    return {
+        **applied,
+        "clusters": [c for c in clusters if not c["fully_allocated"]],
+        "allocated_clusters": [c for c in clusters if c["fully_allocated"]],
+        "totals": t,
+    }
+
+
+def target_profile(state: ProjectState, *, hours_per_fte_week: float) -> dict:
+    """The accumulated to-be work across every designed job — the deliverable view.
+
+    Aggregated by task cluster so it reads in the same vocabulary as the pool it came from,
+    with oversight lines kept separate: they are work the levers created rather than work that
+    was re-allocated, and merging the two would hide how much of the new design is supervision.
+    """
+    rows: dict[str, dict] = {}
+    for job in state.work_design.jobs:
+        for line in job.tasks:
+            key = f"{line.origin}:{line.task_cluster_id or line.name}"
+            row = rows.setdefault(
+                key,
+                {
+                    "key": key,
+                    "task_cluster_id": line.task_cluster_id,
+                    "name": line.cluster_name or line.name,
+                    "origin": line.origin,
+                    "hours_per_week": 0.0,
+                    "jobs": [],
+                },
+            )
+            row["hours_per_week"] += line.hours_per_week
+            if job.title not in row["jobs"]:
+                row["jobs"].append(job.title)
+
+    out = sorted(rows.values(), key=lambda r: -r["hours_per_week"])
+    for r in out:
+        r["hours_per_week"] = round(r["hours_per_week"], 2)
+        r["fte"] = round(r["hours_per_week"] / hours_per_fte_week, 2) if hours_per_fte_week else None
+    total = sum(r["hours_per_week"] for r in out)
+    return {
+        "lines": out,
+        "totals": {
+            "hours_per_week": round(total, 2),
+            "fte": round(total / hours_per_fte_week, 2) if hours_per_fte_week else None,
+            "jobs": len(state.work_design.jobs),
+            "headcount": round(sum(j.headcount for j in state.work_design.jobs), 2),
+            "oversight_hours_per_week": round(
+                sum(r["hours_per_week"] for r in out if r["origin"] == "agent_oversight"), 2
+            ),
+        },
     }
 
 

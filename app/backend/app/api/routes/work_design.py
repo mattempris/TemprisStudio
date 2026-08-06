@@ -9,6 +9,7 @@ Every read here is served from the graph blob rather than project state — see 
 from __future__ import annotations
 
 from fastapi import APIRouter
+from pydantic import BaseModel, Field
 
 from app.models.project_state import ProjectState
 from app.services.project_service import ProjectService
@@ -53,7 +54,14 @@ def _facts(svc: ProjectService, client_slug: str, project_slug: str) -> wf.Facts
 def work_design_status(client_slug: str, project_slug: str) -> dict:
     """Whether the studio can be entered, and what is missing if not."""
     svc, state = _load(client_slug, project_slug)
-    return wd.readiness(state, graph_built=_graph_built(svc, client_slug, project_slug))
+    built = _graph_built(svc, client_slug, project_slug)
+    version = 0
+    if built:
+        try:
+            version = _facts(svc, client_slug, project_slug).version
+        except Exception:
+            version = 0
+    return wd.readiness(state, graph_built=built, graph_version=version)
 
 
 @router.get("/facets")
@@ -82,6 +90,92 @@ def _ints(value: str | None) -> list[int]:
 
 def _strs(value: str | None) -> list[str]:
     return [p.strip() for p in (value or "").split(",") if p.strip()]
+
+
+@router.get("/levers")
+def work_design_levers(client_slug: str, project_slug: str) -> dict:
+    """Every agent and augmentation that could be applied, with what it targets."""
+    svc, state = _load(client_slug, project_slug)
+    facts = _facts(svc, client_slug, project_slug)
+    tf = facts.entities.get("task")
+    return {
+        "uplift": state.work_design.augmentation_uplift,
+        "threshold": wd.ABSORPTION_THRESHOLD,
+        "agents": [
+            {
+                "id": a.agent_id,
+                "name": a.name,
+                "cluster_id": a.task_cluster,
+                "cluster": wf.label_of(tf, "profile", a.task_cluster) if tf else "",
+                "automation": a.automation_pct,
+                "human_in_the_loop": a.human_in_the_loop,
+                "oversight_fraction": a.oversight_fraction,
+                "oversight_source": a.oversight_source,
+                "oversight_tasks": [
+                    {"name": n, "definition": d, "pct_of_absorbed_time": p}
+                    for n, d, p in a.oversight_tasks
+                ],
+            }
+            for a in facts.agents
+        ],
+        "augmentations": [
+            {
+                "id": s.skill_id,
+                "name": s.name,
+                "role_title": s.role_title,
+                "profile_key": s.profile_key,
+                "cluster_id": s.task_cluster,
+                "cluster": wf.label_of(tf, "profile", s.task_cluster) if tf else "",
+                "rank_score": s.rank_score,
+            }
+            for s in sorted(facts.augmentations, key=lambda x: -x.rank_score)
+        ],
+    }
+
+
+class LeversRequest(BaseModel):
+    """A lever selection, applied to a filtered pool.
+
+    Facets travel in the body rather than the query string because this is one operation over
+    both — computing automation and augmentation in two round trips would let the client
+    combine them in the wrong order, and the order is load-bearing.
+    """
+
+    job_family_ids: list[int] = Field(default_factory=list)
+    job_category_ids: list[int] = Field(default_factory=list)
+    task_family_ids: list[int] = Field(default_factory=list)
+    task_category_ids: list[int] = Field(default_factory=list)
+    business_level_1: list[str] = Field(default_factory=list)
+    business_level_2: list[str] = Field(default_factory=list)
+    business_level_3: list[str] = Field(default_factory=list)
+    agent_ids: list[str] = Field(default_factory=list)
+    skill_ids: list[str] = Field(default_factory=list)
+    # Overrides the project setting for a what-if, without saving it.
+    uplift: float | None = Field(default=None, ge=0, le=1)
+
+
+@router.post("/apply")
+def work_design_apply(client_slug: str, project_slug: str, req: LeversRequest) -> dict:
+    """The pool with levers applied — automation first, then augmentation on what survives."""
+    svc, state = _load(client_slug, project_slug)
+    facts = _facts(svc, client_slug, project_slug)
+    facets = wd.Facets(
+        job_family_ids=req.job_family_ids,
+        job_category_ids=req.job_category_ids,
+        task_family_ids=req.task_family_ids,
+        task_category_ids=req.task_category_ids,
+        business_level_1=req.business_level_1,
+        business_level_2=req.business_level_2,
+        business_level_3=req.business_level_3,
+    )
+    pool = wd.pool(facts, facets, hours_per_fte_week=state.workforce.hours_per_fte_week)
+    return wd.apply_levers(
+        facts,
+        pool,
+        agent_ids=req.agent_ids,
+        skill_ids=req.skill_ids,
+        uplift=req.uplift if req.uplift is not None else state.work_design.augmentation_uplift,
+    )
 
 
 @router.get("/pool")

@@ -240,6 +240,182 @@ def main() -> int:
         wd.pool(empty, wd.Facets(), hours_per_fte_week=HPW)["sample"]["job_profiles"] == 0,
     )
 
+    # ------------------------------------------------------------------ levers
+    print("\nAutomation: absorbed actions leave, and are a union over agents")
+    fl = build_facts()
+    # Cluster 100 has 3,000 h/wk. Two actions: one at 60% automation taking half the task
+    # (absorbed, since 60 >= the 40% threshold), one at 20% (retained). So removed is
+    # 3000 x 0.5 x 0.6 = 900.
+    fl.actions = [
+        wf.ActionFact(100, "Drafting", "d", 50.0, 60.0, 80.0),
+        wf.ActionFact(100, "Deciding", "d", 50.0, 20.0, 30.0),
+    ]
+    fl.agents = [
+        wf.AgentFact(
+            "ag-1", "Drafter", 100, 40.0, True, 0.20, "specification",
+            [("Reviewing drafts", "d", 100.0)],
+        )
+    ]
+    base = wd.pool(fl, wd.Facets(), hours_per_fte_week=HPW)
+    r = wd.apply_levers(fl, base, agent_ids=["ag-1"], skill_ids=[], uplift=1.0)
+    c100 = {c["cluster_id"]: c for c in r["clusters"]}[100]
+    check(
+        "removed = hours x pct_of_task x automation",
+        close(c100["removed_by_automation_hours_per_week"], 900.0),
+        str(c100["removed_by_automation_hours_per_week"]),
+    )
+    check(
+        "the sub-threshold action's automatable time is surfaced, not silently lost",
+        close(c100["retained_automatable_hours_per_week"], 300.0),
+        str(c100["retained_automatable_hours_per_week"]),
+    )
+    check(
+        "oversight is the agent's own fraction of what it absorbed",
+        close(r["totals"]["oversight_hours_per_week"], 180.0),
+        str(r["totals"]["oversight_hours_per_week"]),
+    )
+    check("and lands as a named task line", r["added"][0]["name"] == "Reviewing drafts")
+    check(
+        "labelled as coming from the specification",
+        "specification" in r["added"][0]["basis"],
+        r["added"][0]["basis"],
+    )
+
+    fl.agents.append(
+        wf.AgentFact("ag-2", "Second", 100, 40.0, True, 0.20, "specification", [("Checking", "d", 100.0)])
+    )
+    r2 = wd.apply_levers(fl, base, agent_ids=["ag-1", "ag-2"], skill_ids=[], uplift=1.0)
+    c2 = {c["cluster_id"]: c for c in r2["clusters"]}[100]
+    check(
+        "two agents on one cluster remove the SAME total as one — a union, not a sum",
+        close(c2["removed_by_automation_hours_per_week"], 900.0),
+        str(c2["removed_by_automation_hours_per_week"]),
+    )
+    check(
+        "and share the oversight rather than doubling it",
+        close(r2["totals"]["oversight_hours_per_week"], 180.0),
+        str(r2["totals"]["oversight_hours_per_week"]),
+    )
+    check("producing one line each", len(r2["added"]) == 2, str(len(r2["added"])))
+
+    print("\nA specification with no oversight tasks degrades to a labelled assumption")
+    fl.agents = [wf.AgentFact("ag-1", "Drafter", 100, 40.0, True, 0.15, "fallback", [])]
+    r3 = wd.apply_levers(fl, base, agent_ids=["ag-1"], skill_ids=[], uplift=1.0)
+    check("still produces a line", len(r3["added"]) == 1)
+    check(
+        "named generically rather than left blank",
+        r3["added"][0]["name"].startswith("Overseeing"),
+        r3["added"][0]["name"],
+    )
+    check(
+        "and says it is an assumption rather than the model's judgement",
+        "assumption" in r3["added"][0]["basis"],
+        r3["added"][0]["basis"],
+    )
+
+    print("\nThe residual-augmentation correction")
+    # The identity that makes it safe: with nothing absorbed it must reduce exactly to the
+    # cluster's own effort-weighted mean, so the correction is invisible when there is no
+    # collision and self-correcting when there is.
+    fl.agents = []
+    r4 = wd.apply_levers(fl, base, agent_ids=[], skill_ids=[], uplift=1.0)
+    c4 = {c["cluster_id"]: c for c in r4["clusters"]}[100]
+    stored = 0.5 * 80.0 + 0.5 * 30.0
+    check(
+        "with nothing absorbed it equals the effort-weighted mean exactly",
+        close(c4["residual_augmentation_pct"], stored),
+        f"{c4['residual_augmentation_pct']} vs {stored}",
+    )
+    fl.agents = [wf.AgentFact("ag-1", "Drafter", 100, 40.0, True, 0.0, "specification", [])]
+    r5 = wd.apply_levers(fl, base, agent_ids=["ag-1"], skill_ids=[], uplift=1.0)
+    c5 = {c["cluster_id"]: c for c in r5["clusters"]}[100]
+    check(
+        "after absorbing the MORE augmentable action, the residual falls",
+        c5["residual_augmentation_pct"] < stored,
+        f"{c5['residual_augmentation_pct']} vs {stored}",
+    )
+
+    print("\nAugmentation is scoped to the role its skill was written for")
+    fl.agents = []
+    fl.augmentations = [
+        wf.AugmentationFact("sk-1", "faster-drafting", "case-handler-aaa", "Case Handler", 100, 40.0)
+    ]
+    r6 = wd.apply_levers(fl, base, agent_ids=[], skill_ids=["sk-1"], uplift=1.0)
+    c6 = {c["cluster_id"]: c for c in r6["clusters"]}[100]
+    check(
+        "freed = that role's hours x the residual augmentation",
+        close(c6["freed_by_augmentation_hours_per_week"], 3000.0 * stored / 100.0),
+        str(c6["freed_by_augmentation_hours_per_week"]),
+    )
+    check(
+        "coverage reports how many of the cluster's roles it reached",
+        close(c6["augmentation_coverage_pct"], 100.0),
+        str(c6["augmentation_coverage_pct"]),
+    )
+    r7 = wd.apply_levers(fl, base, agent_ids=[], skill_ids=["sk-1"], uplift=0.5)
+    check(
+        "uplift scales it — the one assumption, applied visibly",
+        close(
+            {c["cluster_id"]: c for c in r7["clusters"]}[100]["freed_by_augmentation_hours_per_week"],
+            c6["freed_by_augmentation_hours_per_week"] / 2,
+        ),
+    )
+
+    print("\nThe two levers never sum past the work available")
+    fl.agents = [wf.AgentFact("ag-1", "Drafter", 100, 40.0, True, 0.0, "specification", [])]
+    r8 = wd.apply_levers(fl, base, agent_ids=["ag-1"], skill_ids=["sk-1"], uplift=1.0)
+    over = [
+        c
+        for c in r8["clusters"]
+        if c["removed_by_automation_hours_per_week"] + c["freed_by_augmentation_hours_per_week"]
+        > c["as_is_hours_per_week"] + 0.01
+    ]
+    check("every cluster's removed + freed stays within its as-is hours", not over, str(over[:1]))
+    check(
+        "and the two are reported separately, never as one 'time saved'",
+        "removed_by_automation_hours_per_week" in r8["clusters"][0]
+        and "freed_by_augmentation_hours_per_week" in r8["clusters"][0]
+        and "time_saved" not in r8["totals"],
+    )
+
+    print("\nWith the ceiling removed, a fully automatable cluster reaches zero")
+    ff = build_facts()
+    ff.actions = [wf.ActionFact(100, "Transferring", "d", 100.0, 100.0, 50.0)]
+    ff.agents = [wf.AgentFact("ag-1", "Mover", 100, 100.0, False, 0.0, "specification", [])]
+    rz = wd.apply_levers(
+        ff, wd.pool(ff, wd.Facets(), hours_per_fte_week=HPW),
+        agent_ids=["ag-1"], skill_ids=[], uplift=1.0,
+    )
+    cz = {c["cluster_id"]: c for c in rz["clusters"]}[100]
+    check(
+        "its whole area is absorbed and the tile goes to zero",
+        close(cz["to_be_hours_per_week"], 0.0),
+        str(cz["to_be_hours_per_week"]),
+    )
+    check(
+        "and augmenting nothing does not divide by zero",
+        close(cz["residual_augmentation_pct"], 0.0),
+        str(cz["residual_augmentation_pct"]),
+    )
+
+    print("\nA lever outside the filter is skipped, loudly")
+    fs2 = build_facts()
+    fs2.agents = [wf.AgentFact("ag-x", "Elsewhere", 999, 40.0, True, 0.2, "specification", [])]
+    rs = wd.apply_levers(
+        fs2, wd.pool(fs2, wd.Facets(), hours_per_fte_week=HPW),
+        agent_ids=["ag-x"], skill_ids=[], uplift=1.0,
+    )
+    check("it appears in skipped_agents", len(rs["skipped_agents"]) == 1)
+    check("with a reason", "not in this sample" in rs["skipped_agents"][0]["reason"])
+    check(
+        "and a warning, rather than being silently dropped",
+        any("outside this filter" in w for w in rs["warnings"]),
+    )
+    check(
+        "and contributes no hours",
+        close(rs["totals"]["removed_by_automation_hours_per_week"], 0.0),
+    )
+
     print("\n" + ("PASS" if ok else "FAIL"))
     return 0 if ok else 1
 

@@ -28,9 +28,10 @@ from __future__ import annotations
 
 from app.models.project_state import ProjectState
 from app.services.workforce import graph as wf
+from app.services.workforce.agents import ABSORPTION_THRESHOLD
 
 
-def readiness(state: ProjectState, *, graph_built: bool) -> dict:
+def readiness(state: ProjectState, *, graph_built: bool, graph_version: int = 0) -> dict:
     """What this studio actually reads, and nothing else.
 
     Deliberately does **not** check that the opportunity assessment has run, even though
@@ -62,9 +63,20 @@ def readiness(state: ProjectState, *, graph_built: bool) -> dict:
             f"{n_clusters} task clusters, {n_inferred:,} inferred tasks",
         ),
         (
+            # Current, not merely present. A graph built before this studio existed loads
+            # without error but carries no agents, no augmentations and no business units, so
+            # every lever list would come back empty on a project that has plenty. Reported as
+            # "rebuild" rather than left to look like "you have no agents".
             "Work architecture built",
-            graph_built,
-            "" if graph_built else "build it in Work Architecture Studio — seconds, no model calls",
+            graph_built and graph_version >= wf.FACTS_VERSION,
+            ""
+            if graph_built and graph_version >= wf.FACTS_VERSION
+            else (
+                "rebuild it in Work Architecture Studio — it predates this studio and carries "
+                "no levers"
+                if graph_built
+                else "build it in Work Architecture Studio — seconds, no model calls"
+            ),
         ),
         (
             "An agent or augmentation to apply",
@@ -84,6 +96,8 @@ def readiness(state: ProjectState, *, graph_built: bool) -> dict:
         "agents": n_agents,
         "augmentations": n_augs,
         "designed_jobs": len(state.work_design.jobs),
+        "graph_version": graph_version,
+        "graph_version_required": wf.FACTS_VERSION,
         "has_headcount": bool(wf.profile_headcount(state)),
         "has_business_framework": wf.has_business_framework(state),
         "hours_per_fte_week": state.workforce.hours_per_fte_week,
@@ -334,6 +348,257 @@ def pool(facts: wf.Facts, f: Facets, *, hours_per_fte_week: float) -> dict:
         },
         "clusters": clusters,
         "warnings": warnings,
+    }
+
+
+def _residual_augmentation(actions: list[wf.ActionFact], absorbed: set[str]) -> tuple[float, float]:
+    """Augmentation of the hours that survive automation, and the share that survives.
+
+    "Augmentation applies to the remaining time" is right but not sufficient, because *which*
+    hours remain is not neutral. A cluster's stored `augmentation_pct` is the effort-weighted
+    mean over all its actions. The actions an agent absorbs are the high-automation ones —
+    drafting, summarising, transferring data — and those are precisely the actions that also
+    score highest on augmentation. So the hours that survive absorption are systematically
+    *less* augmentable than the cluster average, and applying the whole-cluster percentage to
+    them overstates the saving on exactly the clusters where both levers are pulled.
+
+    Two properties make this safe to introduce, and both are asserted in the offline test:
+
+      - With nothing absorbed it reduces *exactly* to the cluster's stored augmentation_pct,
+        because the expression becomes the same effort-weighted mean. So the correction is
+        invisible when there is no collision and self-corrects when there is.
+      - The surviving share can now reach zero, since the automation ceiling was removed. A
+        fully automated cluster has no hours left to augment, so the guard returns 0 rather
+        than dividing by it.
+    """
+    surviving = 0.0
+    weighted = 0.0
+    for a in actions:
+        share = a.pct_of_task / 100.0
+        if a.name in absorbed:
+            share *= 1.0 - a.automation_pct / 100.0
+        surviving += share
+        weighted += share * a.augmentation_pct
+    if surviving <= 0:
+        return 0.0, 0.0
+    return weighted / surviving, surviving
+
+
+def apply_levers(
+    facts: wf.Facts,
+    pool_result: dict,
+    *,
+    agent_ids: list[str],
+    skill_ids: list[str],
+    uplift: float,
+) -> dict:
+    """Apply automation and augmentation to a pool, in that order.
+
+    The order is not arbitrary. If an agent absorbs an action, the human does not perform it,
+    so there is no human speed left to improve — augmenting absorbed work augments nobody.
+    Reversing it would also compute the agent's saving against an already-shrunk base,
+    understating automation, and automation is the number quoted against that agent
+    everywhere else in the app. One agent must not release different amounts on different
+    screens.
+
+    The two effects stay separate fields and are never summed into one "time saved". They are
+    different claims — one is work that has gone, the other is the same work done faster — and
+    a single figure would let a deck say "we removed 900 hours" about hours still being worked.
+    """
+    by_cluster: dict[int, list[wf.ActionFact]] = {}
+    for a in facts.actions:
+        by_cluster.setdefault(a.task_cluster, []).append(a)
+
+    agents = {a.agent_id: a for a in facts.agents if a.agent_id in set(agent_ids)}
+    skills = {s.skill_id: s for s in facts.augmentations if s.skill_id in set(skill_ids)}
+    in_pool = {c["cluster_id"] for c in pool_result["clusters"]}
+    hpw = pool_result["hours_per_fte_week"]
+
+    # Silently ignoring a checked lever whose cluster is outside the filter is the same class
+    # of quiet lie as scoring unassessed time as zero.
+    skipped_agents = [
+        {"id": a.agent_id, "name": a.name, "reason": "its task cluster is not in this sample"}
+        for a in agents.values()
+        if a.task_cluster not in in_pool
+    ]
+    skipped_skills = [
+        {"id": s.skill_id, "name": s.name, "reason": "its task cluster is not in this sample"}
+        for s in skills.values()
+        if s.task_cluster not in in_pool
+    ]
+
+    agents_by_cluster: dict[int, list[wf.AgentFact]] = {}
+    for a in agents.values():
+        if a.task_cluster in in_pool:
+            agents_by_cluster.setdefault(a.task_cluster, []).append(a)
+    skills_by_cluster: dict[int, list[wf.AugmentationFact]] = {}
+    for s in skills.values():
+        if s.task_cluster in in_pool:
+            skills_by_cluster.setdefault(s.task_cluster, []).append(s)
+
+    clusters: list[dict] = []
+    added: list[dict] = []
+    agent_rows: dict[str, dict] = {}
+    tot_removed = tot_oversight = tot_freed = 0.0
+
+    for c in pool_result["clusters"]:
+        cid = c["cluster_id"]
+        h = c["hours_per_week"]
+        actions = by_cluster.get(cid, [])
+        cluster_agents = agents_by_cluster.get(cid, [])
+        cluster_skills = skills_by_cluster.get(cid, [])
+
+        # A UNION over agents, never a sum: two agents on one cluster absorb the same
+        # actions, and summing would remove the same hours twice.
+        absorbed = {
+            a.name for a in actions if a.automation_pct >= ABSORPTION_THRESHOLD
+        } if cluster_agents else set()
+        removed = (
+            h
+            * sum(
+                (a.pct_of_task / 100.0) * (a.automation_pct / 100.0)
+                for a in actions
+                if a.name in absorbed
+            )
+            if absorbed
+            else 0.0
+        )
+        # The automatable part of the work the agent was explicitly told not to attempt. The
+        # fastest answer to "why isn't this bigger?", so it is surfaced rather than implied.
+        retained_automatable = h * sum(
+            (a.pct_of_task / 100.0) * (a.automation_pct / 100.0)
+            for a in actions
+            if a.name not in absorbed
+        )
+        after_auto = max(0.0, h - removed)
+
+        residual_aug, _ = _residual_augmentation(actions, absorbed)
+        # Scoped to the role each skill was written for, not to the whole cluster. A skill
+        # written for one role does not speed up the other thirteen, and applying it as if it
+        # did would overstate the saving on a 565-role project by an order of magnitude.
+        role_hours = {r["job_cluster"]: r["hours_per_week"] for r in c["roles"]}
+        key_to_cluster = {v[0]: k for k, v in facts.job_profile_keys.items()}
+        freed = 0.0
+        augmented_roles: set[int] = set()
+        for s in cluster_skills:
+            jp = key_to_cluster.get(s.profile_key)
+            if jp is None or jp in augmented_roles:
+                continue
+            base = role_hours.get(jp, 0.0) * (after_auto / h if h else 0.0)
+            freed += base * (residual_aug / 100.0) * uplift
+            augmented_roles.add(jp)
+        freed = min(freed, after_auto)
+
+        to_be = max(0.0, after_auto - freed)
+        tot_removed += removed
+        tot_freed += freed
+
+        for a in cluster_agents:
+            share = removed / len(cluster_agents) if cluster_agents else 0.0
+            oversight = share * a.oversight_fraction
+            tot_oversight += oversight
+            agent_rows[a.agent_id] = {
+                "id": a.agent_id,
+                "name": a.name,
+                "cluster_id": cid,
+                "cluster": c["name"],
+                "automation": a.automation_pct,
+                "human_in_the_loop": a.human_in_the_loop,
+                "removed_hours_per_week": round(share, 2),
+                "oversight_hours_per_week": round(oversight, 2),
+                "oversight_fraction": a.oversight_fraction,
+                "oversight_source": a.oversight_source,
+                "net_hours_per_week": round(oversight - share, 2),
+            }
+            # One line per oversight task where the specification named them, so the design
+            # carries real work rather than a single generic "oversee the agent".
+            tasks = a.oversight_tasks or [
+                (f"Overseeing {a.name}", f"Checking and correcting what {a.name} produces.", 100.0)
+            ]
+            denom = sum(t[2] for t in tasks) or 100.0
+            for name, definition, pct in tasks:
+                added.append(
+                    {
+                        "id": f"oversight:{a.agent_id}:{name}",
+                        "name": name,
+                        "description": definition,
+                        "origin": "agent_oversight",
+                        "agent_id": a.agent_id,
+                        "task_cluster_id": cid,
+                        "cluster_name": c["name"],
+                        "hours_per_week": round(oversight * (pct / denom), 2),
+                        "basis": (
+                            "from the agent's specification"
+                            if a.oversight_source == "specification"
+                            else "house assumption — this specification predates oversight tasks"
+                        ),
+                    }
+                )
+
+        clusters.append(
+            {
+                **c,
+                "as_is_hours_per_week": round(h, 2),
+                "removed_by_automation_hours_per_week": round(removed, 2),
+                "freed_by_augmentation_hours_per_week": round(freed, 2),
+                "to_be_hours_per_week": round(to_be, 2),
+                "retained_automatable_hours_per_week": round(retained_automatable, 2),
+                "residual_augmentation_pct": round(residual_aug, 1),
+                "absorbed_by": [a.agent_id for a in cluster_agents],
+                "augmented_by": [s.skill_id for s in cluster_skills],
+                "augmentation_coverage_pct": (
+                    round(100.0 * len(augmented_roles) / len(role_hours), 1) if role_hours else 0.0
+                ),
+                "roles_augmented": len(augmented_roles),
+            }
+        )
+
+    as_is = pool_result["sample"]["shown_hours_per_week"]
+    to_be_total = sum(c["to_be_hours_per_week"] for c in clusters) + sum(
+        a["hours_per_week"] for a in added
+    )
+    return {
+        "unit": pool_result["unit"],
+        "has_headcount": pool_result["has_headcount"],
+        "hours_per_fte_week": hpw,
+        "threshold": ABSORPTION_THRESHOLD,
+        "uplift": uplift,
+        "agents": list(agent_rows.values()),
+        "augmentations": [
+            {
+                "id": s.skill_id,
+                "name": s.name,
+                "role_title": s.role_title,
+                "profile_key": s.profile_key,
+                "cluster_id": s.task_cluster,
+                "rank_score": s.rank_score,
+            }
+            for s in skills.values()
+            if s.task_cluster in in_pool
+        ],
+        "clusters": clusters,
+        "added": added,
+        "totals": {
+            "as_is_hours_per_week": round(as_is, 2),
+            "removed_by_automation_hours_per_week": round(tot_removed, 2),
+            "freed_by_augmentation_hours_per_week": round(tot_freed, 2),
+            "oversight_hours_per_week": round(tot_oversight, 2),
+            "to_be_hours_per_week": round(to_be_total, 2),
+            "net_change_hours_per_week": round(to_be_total - as_is, 2),
+            "net_change_pct": round(100.0 * (to_be_total - as_is) / as_is, 1) if as_is else 0.0,
+            "net_fte": round((as_is - to_be_total) / hpw, 2) if hpw else None,
+        },
+        "skipped_agents": skipped_agents,
+        "skipped_augmentations": skipped_skills,
+        "warnings": list(pool_result.get("warnings", []))
+        + (
+            [
+                f"{len(skipped_agents) + len(skipped_skills)} selected levers target work "
+                f"outside this filter and were ignored."
+            ]
+            if skipped_agents or skipped_skills
+            else []
+        ),
     }
 
 

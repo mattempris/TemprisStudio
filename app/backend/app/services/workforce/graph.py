@@ -86,6 +86,16 @@ def label_of(ef: "EntityFacts", level: str, cluster_id: int) -> str:
     return UNPARENTED if cluster_id < 0 else f"{level} {cluster_id}"
 
 
+# The fact table's shape. Bump this whenever a field is ADDED to Facts, not only when one
+# changes meaning — an older blob loads fine (every post-hoc field reads through `.get`) but
+# loads *empty*, and a studio that silently shows no agents on a project with four is worse
+# than one that says "rebuild the work architecture".
+#
+# 1: the original graph, plus the step-2 and step-3 additions, which were all optional reads.
+# 2: Work Design — job_profile_keys, business_units, agents, augmentations.
+FACTS_VERSION = 2
+
+
 class GraphNotReady(RuntimeError):
     """The graph needs all three hierarchies confirmed and profiles generated."""
 
@@ -490,7 +500,7 @@ def _entity_facts(state: ProjectState, entity: str) -> EntityFacts:
     return f
 
 
-def build(state: ProjectState, *, version: int = 1) -> Facts:
+def build(state: ProjectState, *, version: int = FACTS_VERSION) -> Facts:
     """Compute the whole graph at leaf resolution.
 
     Deterministic: derived from state alone, no model calls, no embeddings. Cheap

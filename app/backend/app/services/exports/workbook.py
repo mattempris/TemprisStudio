@@ -95,7 +95,7 @@ def architecture_dataset(state: ProjectState) -> Dataset:
     """One row per job profile — the headline deliverable."""
     c = state.clustering
     cols = [
-        "Job family", "Job category", "Job profile", "Profile key", "Headcount",
+        "Job family", "Job category", "Anchor role", "Profile key", "Headcount",
         "Input jobs", "JE score", "JE level",
         "Taxonomy family", "Taxonomy specialization", "Taxonomy code",
         "Career level", "Match confidence", "Match needs review", "Match set by user",
@@ -156,7 +156,7 @@ def input_jobs_dataset(state: ProjectState) -> Dataset:
         # chart they already know — the two hierarchies do not nest, so a profile can span
         # several business units and this sheet is where that becomes visible.
         "Business level 1", "Business level 2", "Business level 3",
-        "Job family", "Job category", "Job profile",
+        "Job family", "Job category", "Anchor role",
         "Stability score", "Routed by model", "Route confidence", "Moved by model",
         "Backbone profile", "Secondary profile",
     ]
@@ -223,7 +223,7 @@ def skills_dataset(state: ProjectState) -> Dataset:
 
 def skill_requirements_dataset(state: ProjectState) -> Dataset:
     """The job x skill-cluster matrix with required proficiency."""
-    cols = ["Job profile", "Skill cluster", "Required level", "Rationale"]
+    cols = ["Anchor role", "Skill cluster", "Required level", "Rationale"]
     rows = [
         [r.profile_key, r.cluster_name, r.assigned_level or "", getattr(r, "rationale", "") or ""]
         for r in state.skills.profile_requirements
@@ -273,7 +273,7 @@ def tasks_dataset(state: ProjectState) -> Dataset:
 
 def matches_dataset(state: ProjectState) -> Dataset:
     cols = [
-        "Job profile", "Matched", "Taxonomy family", "Sub-family", "Specialization",
+        "Anchor role", "Matched", "Taxonomy family", "Sub-family", "Specialization",
         "Code", "Career level", "Career stream", "Cosine", "Confidence",
         "Runner-up", "Needs review", "Review reasons", "Set by user", "Rationale",
     ]
@@ -312,7 +312,7 @@ def je_dataset(state: ProjectState) -> Dataset:
     framework = state.je_framework if state.je_framework.domains else je.load_default_framework()
     domains = [d.name for d in framework.domains]
     cols = [
-        "Job profile", "Aggregate score", "Level",
+        "Anchor role", "Aggregate score", "Level",
         *je.PERSONAS, "Spread", "Stale", *domains,
     ]
     rows = []

@@ -132,7 +132,7 @@ export type ClusterEntity = "job" | "skill" | "task";
 export interface TierStatus {
   entity: ClusterEntity;
   tier: TierName;
-  /** What this tier's clusters are called, e.g. "Job profiles", "Task domains". */
+  /** What this tier's clusters are called, e.g. "Anchor roles", "Task domains". */
   title: string;
   ready_to_run: boolean;
   below: TierName | null;

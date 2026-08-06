@@ -157,7 +157,7 @@ export function DesignedJobList({
                     <Pencil size={12} />
                   </button>
                   <button
-                    title="A job profile document — not built yet"
+                    title="A role profile document — not built yet"
                     disabled
                     className="shrink-0 text-border"
                   >

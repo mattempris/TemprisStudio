@@ -102,7 +102,7 @@ export function PoolPanel({
         <div className="min-w-0">
           <p className="text-[13px] font-bold text-text">Unreviewed work</p>
           <p className="mt-0.5 text-[11px] leading-snug text-text-muted">
-            {s ? `${s.job_profiles} job profiles · ${s.headcount.toFixed(0)} ${unit}` : ""}
+            {s ? `${s.job_profiles} anchor roles · ${s.headcount.toFixed(0)} ${unit}` : ""}
             {" · "}
             <strong className="text-text-secondary">
               {t.remaining_hours_per_week.toLocaleString(undefined, { maximumFractionDigits: 0 })} h

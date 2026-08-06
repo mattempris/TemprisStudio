@@ -65,12 +65,12 @@ STEPS: tuple[Step, ...] = (
     # The job hierarchy. Each tier consumes the one below it, which is already enforced
     # inside `tier_state.save_tier`; declaring it here is what lets everything *outside*
     # the tier engine know too.
-    Step("job:profile", "Job profiles (clustering)", ("normalize",), counter="job profiles"),
+    Step("job:profile", "Anchor roles (clustering)", ("normalize",), counter="anchor roles"),
     Step("job:category", "Job categories", ("job:profile",), counter="job categories"),
     Step("job:family", "Job families", ("job:category",), counter="job families"),
     Step(
         "profiles",
-        "Job profile documents",
+        "Anchor role documents",
         ("job:family",),
         verb=Verb.MARK_STALE,
         counter="profile documents",

@@ -53,7 +53,7 @@ export function JEResultsBrowser({ profiles, onOpenProfile, loadJe, exportUrl, p
       <table className="w-full border-collapse">
         <thead>
           <tr>
-            {["Job profile", "Level", "Score", "Range", ""].map((h, i) => (
+            {["Anchor role", "Level", "Score", "Range", ""].map((h, i) => (
               <th
                 key={h || i}
                 className={cn(
@@ -74,7 +74,7 @@ export function JEResultsBrowser({ profiles, onOpenProfile, loadJe, exportUrl, p
                 <button
                   onClick={() => onOpenProfile(p.profile_key)}
                   className="group text-left"
-                  title="Open the job profile document"
+                  title="Open the role profile document"
                 >
                   <span className="flex items-center gap-1.5 text-[13px] font-semibold text-text group-hover:text-accent">
                     <FileText size={13} className="shrink-0 text-text-muted group-hover:text-accent" />

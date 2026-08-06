@@ -84,7 +84,7 @@ def _architecture_context(state: ProjectState, max_titles: int = 40) -> str:
     if docs:
         step = max(1, len(docs) // max_titles)
         sample = [d.title for d in docs[::step]][:max_titles]
-        lines.append(f"Job profiles ({len(docs)} total), a sample: " + ", ".join(sample))
+        lines.append(f"Anchor roles ({len(docs)} total), a sample: " + ", ".join(sample))
     return "\n".join(lines)
 
 

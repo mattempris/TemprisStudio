@@ -130,14 +130,14 @@ async def run_matching(
     _workers = llm.resolve_workers(workers)
     available = [p for p in state.job_profiles if not p.stale]
     if not available:
-        raise HTTPException(400, "no job profiles yet — generate job profiles first")
+        raise HTTPException(400, "no anchor role documents yet — generate them first")
     selected = (
         [p for p in available if p.profile_key in set(req.profile_keys)]
         if req.profile_keys
         else available
     )
     if not selected:
-        raise HTTPException(400, "none of the requested profile_keys matched a current job profile")
+        raise HTTPException(400, "none of the requested profile_keys matched a current anchor role")
 
     payload = [(p.profile_key, p.title, p.content) for p in selected]
 
@@ -150,7 +150,7 @@ async def run_matching(
             raise RuntimeError(str(e)) from e
 
         reporter.message(
-            f"Matching {len(payload)} job profiles against {len(idx)} specializations "
+            f"Matching {len(payload)} anchor roles against {len(idx)} specializations "
             f"({idx.n_variants} title variants)"
         )
         results = matcher.match_many(

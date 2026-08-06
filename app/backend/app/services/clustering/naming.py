@@ -30,7 +30,7 @@ NAME_SCHEMA = {
 
 _ENTITY_VOCAB = {
     "job": {
-        "profile": "job profiles (broad job titles, e.g. 'Software Engineer', 'Procurement Analyst')",
+        "profile": "anchor roles (broad job titles, e.g. 'Software Engineer', 'Procurement Analyst')",
         "category": "job categories — the kind of work a group of profiles does (e.g. 'Software Engineering', 'Advisory', 'Design')",
         "family": "job families — the broadest domain groupings (e.g. 'Technology', 'Finance', 'Risk & Compliance')",
     },

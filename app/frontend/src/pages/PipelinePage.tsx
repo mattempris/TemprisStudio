@@ -52,14 +52,14 @@ const STAGES = [
   { id: "strip", title: "Strip irrelevant content", description: "Remove company boilerplate, benefits and recruitment logistics — keeping only what already exists." },
   { id: "dedupe", title: "Deduplicate", description: "Group jobs that describe the same role, using a similarity threshold you control." },
   { id: "normalize", title: "Normalise descriptions", description: "Produce a structured summary per distinct job: purpose, key tasks, reporting line, budget." },
-  { id: "cluster", title: "Job profiles", description: "Group the normalised jobs into job profiles, review what the model re-checked, and name them." },
-  { id: "categories", title: "Job categories", description: "Group the confirmed job profiles into categories, then name them from what they contain." },
+  { id: "cluster", title: "Anchor roles", description: "Group the normalised jobs into anchor roles — the canonical role many source titles collapse onto. Review what the model re-checked, and name them." },
+  { id: "categories", title: "Job categories", description: "Group the confirmed anchor roles into categories, then name them from what they contain." },
   { id: "families", title: "Job families", description: "Group the categories into job families — the top of the hierarchy." },
-  { id: "profiles", title: "Job profile documents", description: "Write a job profile document for each confirmed profile, from the template and boilerplate you define here." },
+  { id: "profiles", title: "Anchor role documents", description: "Write a role profile document for each confirmed anchor role, from the template and boilerplate you define here." },
   { id: "evaluation", title: "Job evaluation", description: "Score each profile document against your job evaluation framework and map it to a level." },
   { id: "skills", title: "Skills taxonomy", description: "Infer the attributes each profile needs and cluster them into a taxonomy. Proficiency levels are optional." },
   { id: "tasks", title: "Task taxonomy", description: "Infer what each profile spends time on, cluster it, and analyse where the workforce's time goes." },
-  { id: "matching", title: "3rd-party taxonomy match", description: "Place each job profile in the external market taxonomy and assign a career level." },
+  { id: "matching", title: "3rd-party taxonomy match", description: "Place each anchor role in the external market taxonomy and assign a career level." },
 ] as const;
 
 // Coarsest first — the order the taxonomy browser renders its headings in, which
@@ -470,7 +470,7 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
             </Collapsible>
 
             <Collapsible
-              title="Job profile template"
+              title="Role profile template"
               subtitle="Which sections each profile has, their headings and order, and the guidance used to write them."
             >
               <LazyProfileTemplate
@@ -715,12 +715,12 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
                 <span className="flex items-center gap-1.5">
                   <Play size={12} />
                   {summary!.job_profiles > 0
-                    ? "Regenerate " + summary!.job_profiles + " job profile documents"
-                    : "Generate job profile documents"}
+                    ? "Regenerate " + summary!.job_profiles + " anchor role documents"
+                    : "Generate anchor role documents"}
                 </span>
               </Button>
               <p className="text-[11.5px] leading-snug text-text-secondary">
-                One document per confirmed job profile, written from the template above.
+                One document per confirmed anchor role, written from the template above.
                 Evaluated levels are added by the step that follows.
               </p>
               {showProgress && <ProgressBar job={job} />}
@@ -1095,7 +1095,7 @@ function LazyProficiencyTemplate({
 
 function stageState(id: string, s: StageSummary, d: Downstream): StageState {
   switch (id) {
-    // Steps 8-11 all hang off having job profiles; each is complete once its own
+    // Steps 8-11 all hang off having anchor role documents; each is complete once its own
     // final artifact exists (a named taxonomy, or at least one recorded match).
     case "skills":
       if (s.job_profiles === 0) return "locked";
@@ -1200,17 +1200,17 @@ function lockedReason(id: string): string {
     case "cluster":
       return "Normalise at least 3 jobs first.";
     case "categories":
-      return "Confirm the job profiles first.";
+      return "Confirm the anchor roles first.";
     case "families":
       return "Confirm the job categories first.";
     case "profiles":
       return "Confirm all three hierarchy levels first.";
     case "evaluation":
-      return "Generate the job profile documents first.";
+      return "Generate the anchor role documents first.";
     case "skills":
     case "tasks":
     case "matching":
-      return "Generate job profiles first.";
+      return "Generate the anchor role documents first.";
     default:
       return "";
   }

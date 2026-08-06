@@ -537,7 +537,7 @@ def put_profile_template(
     problems = tpl.validate(sections)
     if problems:
         raise HTTPException(
-            422, {"message": "job profile template is not valid", "problems": problems}
+            422, {"message": "role profile template is not valid", "problems": problems}
         )
 
     state.profile_template = config
@@ -1323,7 +1323,7 @@ async def start_profile_generation(
 
     def work(reporter: ProgressReporter) -> dict:
         llm.reset_cache_stats()
-        reporter.stage_start(len(specs), f"Generating {len(specs)} job profile documents")
+        reporter.stage_start(len(specs), f"Generating {len(specs)} anchor role documents")
         contents = generator.generate_many(specs, workers=_workers, progress=reporter.pmap_callback())
 
         accent = state.meta.accent_color
@@ -1417,7 +1417,7 @@ async def start_job_evaluation(
     svc, state = _load(client_slug, project_slug)
     _workers = llm.resolve_workers(workers)
     if not state.job_profiles:
-        raise HTTPException(400, "no job profile documents yet — generate the profiles first")
+        raise HTTPException(400, "no anchor role documents yet — generate them first")
 
     wanted = list(dict.fromkeys(req.profile_keys)) if req and req.profile_keys else None
     if wanted is not None:

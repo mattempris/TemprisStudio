@@ -41,7 +41,7 @@ const STEPS = [
     id: "architecture",
     title: "Work architecture",
     description:
-      "Every job profile, skill cluster and task cluster, and how they connect. Later steps add processes, agents and actions to the same graph.",
+      "Every anchor role, skill cluster and task cluster, and how they connect. Later steps add processes, agents and actions to the same graph.",
   },
   { id: "processes", title: "Process upload", description: "Upload process documents and map their steps onto the task structure. Optional." },
   { id: "opportunity", title: "AI opportunity assessment", description: "Break each task cluster into actions and score each one for automation and augmentation." },
@@ -308,7 +308,7 @@ export function WorkforcePage({
               }
               summary={
                 isArchitecture && cut
-                  ? `${cut.totals.leaves.job} job profiles · ${cut.totals.leaves.skill} skill clusters · ${cut.totals.leaves.task} task clusters`
+                  ? `${cut.totals.leaves.job} anchor roles · ${cut.totals.leaves.skill} skill clusters · ${cut.totals.leaves.task} task clusters`
                   : isProductivity && status?.skills_written
                     ? `${status.skills_written} skills written`
                     : undefined

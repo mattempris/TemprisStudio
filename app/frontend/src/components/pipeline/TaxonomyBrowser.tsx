@@ -256,7 +256,7 @@ function LeafTable({
         <thead>
           <tr className="border-b border-border text-left text-[9.5px] uppercase tracking-wider text-text-muted">
             <th className="pb-1.5 font-extrabold">{kind === "skill" ? "Skill" : "Task"}</th>
-            <th className="pb-1.5 font-extrabold">From job profile</th>
+            <th className="pb-1.5 font-extrabold">From anchor role</th>
             {kind === "task" && <th className="pb-1.5 text-right font-extrabold">Time</th>}
             {kind === "task" && hasHeadcount && (
               <th className="pb-1.5 text-right font-extrabold">FTE</th>

@@ -99,7 +99,7 @@ async def infer_skills(
     _workers = llm.resolve_workers(workers)
     available = [p for p in state.job_profiles if not p.stale]
     if not available:
-        raise HTTPException(400, "no job profiles yet — generate job profiles first")
+        raise HTTPException(400, "no anchor role documents yet — generate them first")
 
     selected = (
         [p for p in available if p.profile_key in set(req.profile_keys)]
@@ -107,12 +107,12 @@ async def infer_skills(
         else available
     )
     if not selected:
-        raise HTTPException(400, "none of the requested profile_keys matched a current job profile")
+        raise HTTPException(400, "none of the requested profile_keys matched a current anchor role")
 
     payload = [(p.profile_key, p.title, p.content) for p in selected]
 
     def work(reporter: ProgressReporter) -> dict:
-        reporter.stage_start(len(payload), f"Inferring skills for {len(payload)} job profiles")
+        reporter.stage_start(len(payload), f"Inferring skills for {len(payload)} anchor roles")
         per_profile = inference.infer_many(payload, workers=_workers, progress=reporter.pmap_callback())
         flat = [s for group in per_profile for s in group]
         audit = inference.audit_skills(flat)

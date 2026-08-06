@@ -11,7 +11,7 @@ import { Button } from "../ui/Button";
 import { cn } from "../../lib/cn";
 
 /**
- * Step 11 — job profiles matched into the 3rd-party taxonomy.
+ * Step 11 — anchor roles matched into the 3rd-party taxonomy.
  *
  * Two views, because they answer different questions:
  *   Structure — the client's profiles arranged under the external taxonomy's own
@@ -108,7 +108,7 @@ export function MatchingPanel({
         <Button variant="primary" onClick={() => onRun(picked)} disabled={running}>
           <span className="flex items-center gap-1.5">
             <Play size={12} />
-            {hasResults ? "Re-run matching" : "Match job profiles into the taxonomy"}
+            {hasResults ? "Re-run matching" : "Match anchor roles into the taxonomy"}
             {picked.length > 0 && ` (${picked.length} industries)`}
           </span>
         </Button>

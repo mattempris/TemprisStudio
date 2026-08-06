@@ -66,8 +66,14 @@ class EntitySpec:
 ENTITY_SPECS: dict[str, EntitySpec] = {
     "job": EntitySpec(
         "job", "job", "cluster_embeddings",
-        ("Job profiles", "Job categories", "Job families"),
-        ("normalised jobs", "job profiles", "job categories"),
+        # "Anchor roles" rather than "job profiles": the finest tier of the job hierarchy is
+        # the canonical role that many source titles collapse onto, and calling it a profile
+        # confused it with the *document* written about it in step 7. Display only — the tier
+        # key stays "profile" and so do `profile_key`, `k_profiles` and the `profiles/` blob
+        # subtree, for the same reason the Tempris rebrand left them alone: renaming a
+        # persisted field means migrating every state blob to change a label.
+        ("Anchor roles", "Job categories", "Job families"),
+        ("normalised jobs", "anchor roles", "job categories"),
     ),
     "skill": EntitySpec(
         "skill", "skill", "skill_embeddings",

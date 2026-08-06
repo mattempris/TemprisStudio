@@ -46,12 +46,12 @@ UNMAPPED_ENTITY = "unmapped"
 GRAPH_ENTITIES: tuple[str, ...] = ENTITIES + (ACTION_ENTITY, PROCESS_ENTITY, UNMAPPED_ENTITY)
 
 LEVEL_TITLES: dict[str, dict[str, str]] = {
-    "job": {"family": "Job family", "category": "Job category", "profile": "Job profile"},
+    "job": {"family": "Job family", "category": "Job category", "profile": "Anchor role"},
     "skill": {"family": "Skill family", "category": "Skill category", "profile": "Skill cluster"},
     "task": {"family": "Task domain", "category": "Task category", "profile": "Task cluster"},
 }
 
-# What a node's size means, per entity. Job profiles are people; skill clusters are
+# What a node's size means, per entity. Anchor roles are people; skill clusters are
 # skills; task clusters are the time those tasks consume, which is the only one of the
 # three that is a rate rather than a count.
 #

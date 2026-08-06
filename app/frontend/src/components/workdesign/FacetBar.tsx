@@ -108,7 +108,7 @@ export function FacetBar({
 
         {s && (
           <p className="ml-auto self-center text-right text-[11px] tabular-nums leading-snug text-text-secondary">
-            <strong className="text-text">{s.job_profiles}</strong> job profiles ·{" "}
+            <strong className="text-text">{s.job_profiles}</strong> anchor roles ·{" "}
             <strong className="text-text">
               {s.headcount.toLocaleString(undefined, { maximumFractionDigits: 0 })}
             </strong>{" "}

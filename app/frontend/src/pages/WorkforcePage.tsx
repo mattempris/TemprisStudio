@@ -13,6 +13,7 @@ import { StudioToggle, ProceedToWorkDesign } from "../components/wizard/StudioTo
 import { useSectionScroll } from "../hooks/useSectionScroll";
 import { DemoReset } from "../components/wizard/DemoReset";
 import { Button } from "../components/ui/Button";
+import { CheckboxDropdown } from "../components/ui/CheckboxDropdown";
 import { Modal } from "../components/ui/Modal";
 import { HEAT_GRADIENT, opportunityColor, opportunitySpan } from "../lib/heat";
 import { useJobStream } from "../hooks/useJobStream";
@@ -504,7 +505,7 @@ export function WorkforcePage({
                       </div>
 
                       {filters && (
-                        <div className="flex flex-wrap items-start gap-x-4 gap-y-2 rounded-[10px] border border-border bg-panel px-4 py-2.5">
+                        <div className="flex flex-wrap items-start gap-2 rounded-[10px] border border-border bg-panel px-3 py-2">
                           <FilterGroup
                             title={filters.job?.level_titles.family ?? "Job family"}
                             options={filters.job?.family ?? []}
@@ -590,11 +591,17 @@ export function WorkforcePage({
 }
 
 /**
- * Multi-select filter as toggle chips.
+ * Multi-select filter as a dropdown of checkboxes.
  *
- * Chips rather than a `<select multiple>`: the counts have to be visible — a filter list
- * that does not say how much of the graph each option covers makes choosing one
- * guesswork — and a native multi-select hides them behind a scroll and a modifier key.
+ * A thin adapter over the shared `CheckboxDropdown` — Work Design Studio needs the same
+ * control, so the behaviour lives in one place rather than being written twice.
+ *
+ * This was a row of toggle chips, on the reasoning that the counts have to be visible: a
+ * filter that does not say how much of the graph each option covers makes choosing one
+ * guesswork, and a native multi-select hides them behind a scroll and a modifier key. That
+ * reasoning was right and still holds — the dropdown keeps the count on every row. What it
+ * drops is only the permanent cost of laying every option out above the graph.
+ *
  * Nothing selected means everything, which is the same convention as the rest of the app.
  */
 function FilterGroup({
@@ -608,47 +615,14 @@ function FilterGroup({
   selected: number[];
   onChange: (next: number[]) => void;
 }) {
-  if (options.length === 0) return null;
   return (
-    <div className="min-w-0">
-      <div className="mb-1 flex items-baseline gap-2">
-        <span className="text-[10px] font-extrabold uppercase tracking-wider text-text-muted">
-          {title}
-        </span>
-        {selected.length > 0 && (
-          <button
-            onClick={() => onChange([])}
-            className="text-[10.5px] font-semibold text-accent hover:underline"
-          >
-            all
-          </button>
-        )}
-      </div>
-      <div className="flex flex-wrap gap-1">
-        {options.map((o) => {
-          const on = selected.includes(o.id);
-          return (
-            <button
-              key={o.id}
-              onClick={() =>
-                onChange(on ? selected.filter((x) => x !== o.id) : [...selected, o.id])
-              }
-              title={`${o.leaves} beneath`}
-              className={`rounded-[5px] border px-1.5 py-0.5 text-[10.5px] font-semibold transition-colors ${
-                on
-                  ? "border-accent bg-accent text-white"
-                  : "border-border bg-card text-text-secondary hover:border-accent"
-              }`}
-            >
-              {o.name}
-              <span className={`ml-1 tabular-nums ${on ? "text-white/70" : "text-text-muted"}`}>
-                {o.leaves}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </div>
+    <CheckboxDropdown
+      className="w-[200px]"
+      label={title}
+      options={options.map((o) => ({ value: o.id, label: o.name, count: o.leaves }))}
+      selected={selected}
+      onChange={onChange}
+    />
   );
 }
 

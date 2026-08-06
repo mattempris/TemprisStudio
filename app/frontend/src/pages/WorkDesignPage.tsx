@@ -33,6 +33,7 @@ import { Modal } from "../components/ui/Modal";
 import { Button } from "../components/ui/Button";
 import { FacetBar } from "../components/workdesign/FacetBar";
 import { useIsNarrow } from "../hooks/useIsNarrow";
+import type { RollupNode } from "../lib/poolRollup";
 import { PoolPanel } from "../components/workdesign/PoolPanel";
 import { JobDesignPanel } from "../components/workdesign/JobDesignPanel";
 import { LeversPanel } from "../components/workdesign/LeversPanel";
@@ -128,7 +129,9 @@ export function WorkDesignPage({
   const [dirty, setDirty] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<DesignedJob | null>(null);
-  const [dragging, setDragging] = useState<PoolCluster | null>(null);
+  // The dragged thing is a rollup node, not a cluster: the pool is drawn rolled up to task
+  // domain, so a tile can stand for a whole family of work.
+  const [dragging, setDragging] = useState<RollupNode | null>(null);
 
   const hpw = status?.hours_per_fte_week ?? 37.5;
   const unit = pool?.unit ?? (status?.has_headcount ? "FTE" : "role-weeks");
@@ -380,18 +383,18 @@ export function WorkDesignPage({
   );
 
   function onDragStart(e: DragStartEvent) {
-    const c = e.active.data.current?.cluster as PoolCluster | undefined;
-    if (c) setDragging(c);
+    const n = e.active.data.current?.node as RollupNode | undefined;
+    if (n) setDragging(n);
   }
 
   function onDragEnd(e: DragEndEvent) {
-    const c = e.active.data.current?.cluster as PoolCluster | undefined;
+    const n = e.active.data.current?.node as RollupNode | undefined;
     setDragging(null);
-    if (!c || e.over?.id !== "design") return;
-    // The drop carries one holder's share — the number a designer wants nine times in ten, and
-    // by construction it cannot overflow a one-person job. The full aggregate stays on the cell
-    // and the hours are editable straight afterwards.
-    addFromPool(c, c.hours_per_holder_week);
+    if (!n || e.over?.id !== "design") return;
+    // The drop carries one holder's share of every real cluster beneath the tile — the number a
+    // designer wants nine times in ten, and by construction it cannot overflow a one-person job.
+    // Never a synthetic line for the group itself: a designed job's lines carry a cluster id.
+    for (const c of n.leaves) addFromPool(c, c.hours_per_holder_week);
   }
 
   const gate = status && !status.ready;
@@ -562,6 +565,7 @@ export function WorkDesignPage({
             <p className="text-[11.5px] font-bold text-text">{dragging.name}</p>
             <p className="text-[10.5px] tabular-nums text-text-muted">
               {dragging.hours_per_holder_week.toFixed(1)} h — one holder's share
+              {dragging.leaves.length > 1 && ` of ${dragging.leaves.length} clusters`}
             </p>
           </div>
         )}

@@ -745,9 +745,17 @@ function ClusterList({
 
   return (
     <div className="space-y-1.5">
-      <p className="text-[11px] font-extrabold uppercase tracking-wider text-text-muted">
-        {data.clusters.length} clusters · {data.n_moved} moved by the model
-      </p>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <p className="text-[11px] font-extrabold uppercase tracking-wider text-text-muted">
+          {data.clusters.length} clusters · {data.n_moved} moved by the model
+        </p>
+        {/* Neither control announced itself: a name becomes editable only once clicked, and the
+            move control is a dropdown two expansions down that reads as a label for the group it
+            is already in. Both were reported as missing while working perfectly. */}
+        <p className="text-[11px] text-text-muted">
+          Click a name to rename it · open a group to move its {itemNoun} elsewhere
+        </p>
+      </div>
       {data.size_median != null && (
         <div className="flex flex-wrap gap-x-6 gap-y-2 rounded-[10px] border border-border bg-panel px-4 py-3">
           <SizeStatRow
@@ -846,6 +854,7 @@ function ClusterList({
                         both get one wrong sometimes in ways only a person reading the
                         group can see, and re-clustering to fix a single member would
                         discard every other decision at this tier. */}
+                    <span className="shrink-0 text-[10.5px] text-text-muted">move to</span>
                     <select
                       value={c.id}
                       disabled={moving === m.item_id}

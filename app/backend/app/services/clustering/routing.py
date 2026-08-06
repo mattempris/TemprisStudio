@@ -41,12 +41,47 @@ ROUTE_SCHEMA = {
 _ENTITY_NOUN = {"job": "job role", "skill": "skill", "task": "task"}
 
 
+# What the router should weigh, per entity.
+#
+# Jobs are the exception, and it is a deliberate reversal. This prompt used to tell the model to
+# ignore "seniority/scale" for every entity, which was right when the finest job tier was meant
+# to group purely by discipline. It is wrong for anchor roles: an anchor role is the canonical
+# role a set of source titles collapses onto, so a Graduate Analyst and a Head of Analytics
+# belong in different ones, and a solicitor post belongs apart from a paralegal post with
+# similar duties. The normalise step now writes a level rung and a qualifications descriptor
+# into the text the router reads, so the criteria are actually present in both the item and the
+# cluster exemplars rather than being asked for and absent.
+#
+# Skills and tasks keep the original instruction. A skill is a capability and a task is a piece
+# of work; neither carries a level of its own, and a "senior" version of a task is the same task
+# done by a more senior person.
+_CRITERIA = {
+    "job": (
+        "Weigh three things together: the core function of the role, its LEVEL, and any formal "
+        "QUALIFICATION it requires. The text carries an explicit 'Level:' rung and, where one "
+        "applies, a 'Qualifications:' descriptor — treat both as real grouping criteria, not as "
+        "surface detail. Two roles doing similar work at different levels belong in different "
+        "clusters, and so do two roles whose duties overlap but where one requires a formal "
+        "qualification and the other does not. Ignore the job title's adjectives; the stated "
+        "level is the evidence, not the wording."
+    ),
+    "skill": (
+        "Reason about its core substance, not surface wording or the seniority of whoever holds "
+        "it — a skill is a capability, and the same capability at a higher level is still the "
+        "same capability."
+    ),
+    "task": (
+        "Reason about its core substance, not surface wording or the seniority of whoever "
+        "performs it — the same piece of work done by a more senior person is the same task."
+    ),
+}
+
+
 def _route_system_prompt(entity: str) -> str:
     noun = _ENTITY_NOUN[entity]
     return (
         f"You assign one ambiguous {noun} to the cluster it best belongs to, "
-        "choosing from a fixed set of clusters. Reason about its core function and "
-        "substance, not surface wording or seniority/scale. Return the primary "
+        f"choosing from a fixed set of clusters. {_CRITERIA[entity]} Return the primary "
         "cluster id with a confidence 0-1. If it genuinely spans two clusters, "
         "also return a secondary cluster id with its confidence; otherwise "
         "secondary must be null. Be calibrated: low confidence when it is a poor "

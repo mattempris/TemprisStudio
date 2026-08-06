@@ -35,8 +35,8 @@ from app.models.project_state import (
     TierMemberRecord,
     TierState,
 )
+from app.services import normalization
 from app.services.clustering import tier as tier_engine
-from app.services.normalization import NormalizedResult
 from app.services.project_service import ProjectService
 
 # Tier order, finest first — the order the user confirms them in.
@@ -121,16 +121,14 @@ def base_items(state: ProjectState, entity: str) -> list[tuple[str, str]]:
     same content in both places by construction.
     """
     if entity == "job":
+        # Via `result_of` rather than constructing the dataclass here. This module and the
+        # cluster build step both need the embedding text of an already-normalised job, and both
+        # used to write the constructor out by hand — so adding a field updated one and not the
+        # other, and the build step embedded without the level signal while this read the tree as
+        # though it were there. Vectors and tree silently out of step is not a failure that
+        # announces itself.
         return [
-            (
-                p.id,
-                NormalizedResult(
-                    purpose_statement=p.purpose_statement,
-                    key_tasks=p.key_tasks,
-                    management_line=p.management_line,
-                    budget_responsibility=p.budget_responsibility,
-                ).embedding_text(),
-            )
+            (p.id, normalization.result_of(p).embedding_text())
             for p in state.normalized_profiles
         ]
     if entity == "skill":

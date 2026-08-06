@@ -107,12 +107,31 @@ class DedupeGroup(BaseModel):
 
 
 class NormalizedProfile(BaseModel):
+    """One normalised job — the unit that gets embedded and clustered into anchor roles.
+
+    `level_indicator` and `qualifications` are part of the embedding text, so they steer how
+    anchor roles form: a Graduate Analyst and a Head of Analytics are not the same canonical
+    role, and a solicitor post is not the same role as a paralegal post with similar duties.
+    See `normalization.NormalizedResult.embedding_text`, which records why this reverses the
+    original decision to keep level out of clustering entirely.
+
+    All three are optional so a state blob written before they existed still deserialises. Those
+    projects keep clustering on purpose and tasks alone — the fields are only populated by a
+    fresh normalise run, and re-running it invalidates the hierarchy built on the old text,
+    which is the honest outcome rather than a silent mix of two embedding recipes.
+    """
+
     id: str  # == dedupe group_id
     source_record_ids: list[str]
     purpose_statement: str
     key_tasks: list[str]
     management_line: str | None = None
     budget_responsibility: str | None = None
+    # One of `normalization.LEVEL_LADDER`. A clustering aid, not a grade — the Job Evaluation
+    # step remains the authority on levelling.
+    level_indicator: str | None = None
+    level_evidence: str | None = None
+    qualifications: str | None = None
     generated_at: datetime
 
 

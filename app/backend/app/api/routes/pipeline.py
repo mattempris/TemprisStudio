@@ -935,6 +935,9 @@ async def start_normalize(
                 key_tasks=res.key_tasks,
                 management_line=res.management_line,
                 budget_responsibility=res.budget_responsibility,
+                level_indicator=res.level_indicator,
+                level_evidence=res.level_evidence,
+                qualifications=res.qualifications,
                 generated_at=datetime.now(timezone.utc),
             )
             for gid, srcs, res in zip(group_ids, source_ids, results)
@@ -978,15 +981,7 @@ async def start_cluster_build(
         raise HTTPException(400, "need at least 3 normalised profiles to cluster")
 
     profiles = state.normalized_profiles
-    texts = [
-        normalization.NormalizedResult(
-            purpose_statement=p.purpose_statement,
-            key_tasks=p.key_tasks,
-            management_line=p.management_line,
-            budget_responsibility=p.budget_responsibility,
-        ).embedding_text()
-        for p in profiles
-    ]
+    texts = [normalization.result_of(p).embedding_text() for p in profiles]
     ids = [p.id for p in profiles]
 
     try:

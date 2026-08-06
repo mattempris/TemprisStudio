@@ -7,8 +7,13 @@
  * likewise invisible at a glance on a 230px strip.
  *
  * Run:  npx esbuild scripts/_test_treemap.ts --bundle --platform=node --format=esm  *         --outfile=node_modules/.cache/tm.mjs && node node_modules/.cache/tm.mjs
+ *
+ * Imports from lib/treemap rather than the component: the layout is a pure module now, so
+ * this bundles a hundred lines instead of pulling React through esbuild. The assertions are
+ * unchanged — squarify is generic over the item and returns it with geometry added, so a
+ * cell is still `{v, task, x, y, w, h}` and `c.task.proportion` still resolves.
  */
-import { squarify } from "../src/components/workforce/TaskTreemap";
+import { layout, squarify } from "../src/lib/treemap";
 
 const W = 1000, H = 230;
 let ok = true;
@@ -74,6 +79,50 @@ run([50,20,10,5,3,2,1,0.5,0.3,0.2], "long tail");
 // box would still fill and every cell would quietly overstate itself — so the invariant
 // is asserted here rather than assumed.
 run([33.4,33.3,33.3], "sums to 100 exactly, as the pipeline guarantees");
+
+// ---- the generic path, and `extent` ----------------------------------------
+// The component lays out `{v, datum, pooled}` items rather than `{v, task}`, so the generic
+// signature is exercised directly here. A regression in it would surface only as a blank
+// panel in the browser.
+console.log("\nGeneric items and layout()");
+const generic = [{ v: 30, id: "a" }, { v: 20, id: "b" }, { v: 50, id: "c" }];
+const glaid = layout(generic, 400, 200);
+check("layout returns a cell per item", glaid.length === 3, `${glaid.length}`);
+check("the caller's payload survives", glaid.every((c) => typeof c.id === "string"));
+check("sorted descending by value", glaid[0].v === 50, `${glaid[0].v}`);
+check(
+  "areas still match shares",
+  glaid.every((c) => Math.abs(c.w * c.h - (c.v / 100) * 400 * 200) < 1),
+);
+check(
+  "zero and negative values are dropped rather than laid out",
+  layout([{ v: 10 }, { v: 0 }, { v: -5 }], 400, 200).length === 1,
+);
+check(
+  "a zero-width box returns nothing rather than dividing by zero",
+  layout(generic, 0, 200).length === 0,
+);
+
+// `extent` is what makes a designed job show spare capacity. Without it a 40%-full job and a
+// 200%-full job draw identically, which defeats the point of a capacity meter.
+console.log("\nextent — laying out over capacity rather than over the sum");
+const half = layout([{ v: 25 }, { v: 25 }], 400, 200, 100);
+const halfArea = half.reduce((s, c) => s + c.w * c.h, 0);
+check(
+  "cells occupy their share of the extent, not the whole box",
+  Math.abs(halfArea - 0.5 * 400 * 200) < 1,
+  `${halfArea.toFixed(0)} vs ${0.5 * 400 * 200}`,
+);
+check(
+  "and still tile without escaping the box",
+  half.every((c) => c.x >= -0.01 && c.y >= -0.01 && c.x + c.w <= 400.01 && c.y + c.h <= 200.01),
+);
+check(
+  "an extent below the sum is ignored — an over-capacity job fills its box",
+  Math.abs(
+    layout([{ v: 60 }, { v: 60 }], 400, 200, 100).reduce((s, c) => s + c.w * c.h, 0) - 400 * 200,
+  ) < 1,
+);
 
 console.log("\n" + (ok ? "PASS" : "FAIL"));
 process.exit(ok ? 0 : 1);

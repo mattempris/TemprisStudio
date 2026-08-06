@@ -207,6 +207,12 @@ class TierState(BaseModel):
     gate: float
     embedding_model: str = ""
     names: dict[int, str] = Field(default_factory=dict)
+    # One sentence per cluster, written at naming time from the same exemplars the name
+    # came from. Optional so a tier confirmed before this existed still deserialises, and
+    # sparse so a cluster the model named but did not describe keeps its name — a name is
+    # what the hierarchy depends on, a description is what makes two similar ones
+    # distinguishable without opening each.
+    descriptions: dict[int, str] = Field(default_factory=dict)
     members: list[TierMemberRecord] = Field(default_factory=list)
     # A few member texts per cluster, kept so the next tier can describe its items
     # without reloading and re-summarising the tier below.

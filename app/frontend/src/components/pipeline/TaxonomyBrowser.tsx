@@ -157,6 +157,7 @@ export function TaxonomyBrowser({ kind, roots, hasHeadcount, tierLabels, edit }:
                 onToggle={() => toggle(rk)}
                 edit={rowEdit(0, root, null)}
               />
+              {open[rk] && <RowDescription node={root} depth={0} />}
               {open[rk] &&
                 (root.children ?? []).map((cat) => {
                   const ck = `${rk}c${cat.id}`;
@@ -171,6 +172,7 @@ export function TaxonomyBrowser({ kind, roots, hasHeadcount, tierLabels, edit }:
                         onToggle={() => toggle(ck)}
                         edit={rowEdit(1, cat, root.id)}
                       />
+                      {open[ck] && <RowDescription node={cat} depth={1} />}
                       {open[ck] &&
                         (cat.children ?? []).map((cl) => {
                           const lk = `${ck}l${cl.id}`;
@@ -185,6 +187,7 @@ export function TaxonomyBrowser({ kind, roots, hasHeadcount, tierLabels, edit }:
                                 onToggle={() => toggle(lk)}
                                 edit={rowEdit(2, cl, cat.id)}
                               />
+                              {open[lk] && <RowDescription node={cl} depth={2} />}
                               {open[lk] && (
                                 <LeafTable
                                   kind={kind}
@@ -203,6 +206,24 @@ export function TaxonomyBrowser({ kind, roots, hasHeadcount, tierLabels, edit }:
         })}
       </ul>
     </div>
+  );
+}
+
+/** The sentence written for this group at naming time, shown once it is opened.
+ *
+ * Only on expand. A skills tree has hundreds of rows and a sentence on every collapsed one
+ * buries the structure the tree exists to show; opening a row is the moment someone is asking
+ * what it actually contains. Indented to the row's own depth so it reads as belonging to it
+ * rather than to the children listed beneath. */
+function RowDescription({ node, depth }: { node: TaxonomyNode; depth: number }) {
+  if (!node.description) return null;
+  return (
+    <p
+      className="border-t border-border bg-panel/60 py-1.5 pr-3 text-[11.5px] leading-snug text-text-secondary"
+      style={{ paddingLeft: `${43 + depth * 18}px` }}
+    >
+      {node.description}
+    </p>
   );
 }
 

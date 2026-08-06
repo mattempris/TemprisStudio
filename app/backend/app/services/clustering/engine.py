@@ -98,7 +98,7 @@ async def run_clustering_pipeline(
         naming.build_cluster_block(fid, [item_texts[i] for i in idxs])
         for fid, idxs in family_exemplars.by_cluster.items()
     ]
-    family_names = naming.name_level(entity, "family", family_blocks, k_family, has_parent_context=False)
+    family_names, _ = naming.name_level(entity, "family", family_blocks, k_family, has_parent_context=False)
 
     category_exemplars = bb.compute_exemplars(embeddings, cuts["category"])
     category_blocks = [
@@ -107,7 +107,7 @@ async def run_clustering_pipeline(
         )
         for cid, idxs in category_exemplars.by_cluster.items()
     ]
-    category_names = naming.name_level(entity, "category", category_blocks, k_category, has_parent_context=True)
+    category_names, _ = naming.name_level(entity, "category", category_blocks, k_category, has_parent_context=True)
 
     profile_exemplars = bb.compute_exemplars(embeddings, cuts["profile"])
     profile_blocks = [
@@ -116,7 +116,7 @@ async def run_clustering_pipeline(
         )
         for pid, idxs in profile_exemplars.by_cluster.items()
     ]
-    profile_names = naming.name_level(entity, "profile", profile_blocks, k_profile, has_parent_context=True)
+    profile_names, _ = naming.name_level(entity, "profile", profile_blocks, k_profile, has_parent_context=True)
 
     # ---- gate + route the unstable slice ----
     unstable_indices = [i for i in range(n) if not np.isnan(stability.scores[i]) and stability.scores[i] < gate]

@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from app.models.project_state import InferredTaskRecord, ProjectState
 from app.services import llm, provenance
+from app.services.clustering import tier_state
 from app.services.orchestrator import JobAlreadyRunning, ProgressReporter, get_registry, run_job
 from app.api.routes import lineage as lineage_routes
 from app.services.project_service import ProjectService
@@ -232,6 +233,9 @@ def tasks_taxonomy(client_slug: str, project_slug: str) -> dict:
     task_by_id = {t.id: t for t in state.tasks.inferred}
 
     # headcount per job profile, rolled up from raw records via dedupe groups
+    # One sentence per cluster, written at naming time. Sparse: empty for a tier
+    # confirmed before descriptions existed.
+    descs = tier_state.descriptions_of(state, "task")
     hc_by_record = {r.id: r.headcount for r in state.raw_records}
     group_members = {g.group_id: g.member_ids for g in state.dedupe_groups}
     profile_headcount: dict[str, int] = {}
@@ -254,15 +258,18 @@ def tasks_taxonomy(client_slug: str, project_slug: str) -> dict:
             continue
         dom = tree.setdefault(
             a.final_family_id,
-            {"id": a.final_family_id, "name": c.family_names.get(a.final_family_id, "?"), "categories": {}},
+            {"id": a.final_family_id, "name": c.family_names.get(a.final_family_id, "?"),
+             "description": descs["family"].get(a.final_family_id, ""), "categories": {}},
         )
         cat = dom["categories"].setdefault(
             a.final_category_id,
-            {"id": a.final_category_id, "name": c.category_names.get(a.final_category_id, "?"), "clusters": {}},
+            {"id": a.final_category_id, "name": c.category_names.get(a.final_category_id, "?"),
+             "description": descs["category"].get(a.final_category_id, ""), "clusters": {}},
         )
         cl = cat["clusters"].setdefault(
             a.final_profile_id,
-            {"id": a.final_profile_id, "name": c.profile_names.get(a.final_profile_id, "?"), "tasks": []},
+            {"id": a.final_profile_id, "name": c.profile_names.get(a.final_profile_id, "?"),
+             "description": descs["profile"].get(a.final_profile_id, ""), "tasks": []},
         )
         cl["tasks"].append(
             {

@@ -109,6 +109,10 @@ class TierResult:
     multi_home: int
     centroids: np.ndarray = field(default_factory=lambda: np.empty((0, 0)))
     exemplar_texts: dict[int, list[str]] = field(default_factory=dict)
+    # One sentence per cluster, written from its exemplars at naming time. Sparse by
+    # design and defaulted: a cluster the model named but did not describe keeps its
+    # name, and the identity-tier path constructs a result without descriptions at all.
+    descriptions: dict[int, str] = field(default_factory=dict)
 
 
 def analyse(items: TierItems, *, k: int, n_perturb: int = 50, subsample_frac: float = 0.9,
@@ -161,7 +165,7 @@ async def finalise(
         naming.build_cluster_block(cid, [items.texts[i] for i in idxs])
         for cid, idxs in exemplars.by_cluster.items()
     ]
-    names = naming.name_level(
+    names, descriptions = naming.name_level(
         entity, tier, blocks, analysis.k, has_parent_context=False, progress=naming_progress
     )
 
@@ -257,6 +261,7 @@ async def finalise(
         multi_home=sum(1 for m in members if m.secondary_cluster_id is not None),
         centroids=centroids,
         exemplar_texts=exemplar_texts,
+        descriptions=descriptions,
     )
 
 

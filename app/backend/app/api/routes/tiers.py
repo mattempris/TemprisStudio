@@ -978,6 +978,9 @@ def tier_clusters(client_slug: str, project_slug: str, entity: str, tier: str) -
         {
             "id": cid,
             "name": rec.names.get(cid, "?"),
+            # Empty for a tier confirmed before descriptions existed, and for the odd
+            # cluster the model named without describing. The UI shows the row either way.
+            "description": rec.descriptions.get(cid, ""),
             "members": sorted(by_cluster.get(cid, []), key=lambda x: x["label"]),
             "size": len(by_cluster.get(cid, [])),
             # For the hover tooltip: at the profile tier the member's dedupe group
@@ -1140,6 +1143,19 @@ def tier_cluster_members(
         # apart. See _member_details.
         members = _member_details(state, entity, member_ids)
         total_noun = _label_noun(entity, tier)
+    # The confirmed name and description, but ONLY when this cut is the confirmed one.
+    #
+    # This endpoint cuts the tree fresh at whatever k was asked for, so its cluster ids are
+    # backbone labels at that k. They coincide with the confirmed tier's ids only when k
+    # matches — at any other k, cluster 3 is a different set of items and attaching the
+    # confirmed name to it would put a real label on a group that does not exist.
+    #
+    # Even at the matching k the two can differ, because routing moves individual items after
+    # the cut. That is a handful of members out of a group, not a different group, so the name
+    # still describes what is on screen; a `routed` count is returned so the dialog can say the
+    # membership shown is the geometry's rather than the final one.
+    rec = tier_state.tiers_of(state, entity).get(tier)
+    confirmed = rec is not None and rec.names and rec.k == k
     return {
         "entity": entity,
         "tier": tier,
@@ -1150,6 +1166,9 @@ def tier_cluster_members(
         "members": members,
         "total": sum(r["count"] for r in members),
         "total_noun": total_noun,
+        "name": rec.names.get(cluster, "") if confirmed else "",
+        "description": rec.descriptions.get(cluster, "") if confirmed else "",
+        "routed": rec.n_routed if confirmed else 0,
     }
 
 

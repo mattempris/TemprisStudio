@@ -18,8 +18,12 @@ NAME_SCHEMA = {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {"id": {"type": "integer"}, "name": {"type": "string"}},
-                "required": ["id", "name"],
+                "properties": {
+                    "id": {"type": "integer"},
+                    "name": {"type": "string"},
+                    "description": {"type": "string"},
+                },
+                "required": ["id", "name", "description"],
                 "additionalProperties": False,
             },
         }
@@ -175,8 +179,34 @@ def _build_system_prompt(entity: str, level: str, *, has_parent_context: bool) -
         "close ones by function, specialism, or domain rather than using "
         "near-duplicate wording."
         f"{parent_note} Use plain business English, title case, no numbering, no "
-        "quotes. Return a name for every cluster id."
+        "quotes. Return a name for every cluster id.\n\n"
+        + _DESCRIPTION_RULES
     )
+
+
+# A name of two to five words cannot carry what a group actually contains, and two
+# neighbouring clusters routinely end up with names a reader cannot choose between.
+# The description is what makes them distinguishable without opening each one.
+#
+# Written from the items shown rather than from the name: a description that only
+# restates the label in longer words adds nothing, and the failure is silent because
+# it still reads as a sentence.
+_DESCRIPTION_RULES = (
+    "For each cluster also write `description`: ONE sentence, 15-30 words, saying what "
+    "the items in it have in common and what distinguishes it from its siblings.\n"
+    "- Write it from the items you were shown, not from the name you chose. It must "
+    "tell a reader something the name does not.\n"
+    "- Do not begin by restating the name, and do not begin with 'This cluster', "
+    "'This group' or 'A group of'. Nor with 'Covers', 'Involves', 'Includes', "
+    "'Focuses on', 'Encompasses' or 'Relates to' — those say only that a group "
+    "contains its contents, and cost two of the words you have. Open on the work "
+    "itself: 'Managing digital media files and resolving playback faults', not "
+    "'Focuses on managing digital media files'.\n"
+    "- Be concrete and neutral. No marketing adjectives, no claims about quality, "
+    "importance or strategic value.\n"
+    "- Where the cluster holds a single item, describe that item rather than "
+    "inventing a broader theme around it."
+)
 
 
 def build_cluster_block(
@@ -206,8 +236,13 @@ def _token_budget(n: int) -> int:
     A name is ~10 tokens, but with adaptive thinking the reasoning shares this
     budget and grows with the number of siblings being kept distinct. A fixed 4000
     was the original value and truncated at around 40 clusters.
+
+    Each cluster now also carries a one-sentence description, which is ~35 tokens of
+    output — so the per-cluster allowance rose from 400 to 600. Under-budgeting here
+    truncates the JSON mid-array, and the ids that come back short are then re-asked
+    for; the retry masks the shortfall but pays for the level twice.
     """
-    return min(24_000, 3_000 + 400 * n)
+    return min(32_000, 3_000 + 600 * n)
 
 
 def name_level(
@@ -218,14 +253,22 @@ def name_level(
     *,
     has_parent_context: bool = False,
     progress=None,
-) -> dict[int, str]:
-    """blocks: one build_cluster_block() string per cluster, in cluster-id order.
+) -> tuple[dict[int, str], dict[int, str]]:
+    """(names, descriptions) keyed by cluster id.
+
+    blocks: one build_cluster_block() string per cluster, in cluster-id order.
+
+    Names and descriptions come from one call rather than two. The model is already
+    looking at the exemplars and at every sibling name it is producing, which is
+    exactly what a distinguishing sentence needs — and a second pass would double the
+    cost of the step that already dominates a level's spend.
 
     `progress(named, total)` is called after each batch — naming a large level takes
     minutes, and without it the UI shows a stalled bar through the whole thing.
     """
     system = _build_system_prompt(entity, level, has_parent_context=has_parent_context)
     names: dict[int, str] = {}
+    descriptions: dict[int, str] = {}
 
     for start in range(0, len(blocks), NAME_BATCH):
         batch = blocks[start : start + NAME_BATCH]
@@ -240,14 +283,18 @@ def name_level(
                 + prompt
             )
         wanted = {int(b.split("]")[0][1:]) for b in batch}
-        names.update(_name_batch(prompt, system, batch, wanted))
+        got_names, got_descs = _name_batch(prompt, system, batch, wanted)
+        names.update(got_names)
+        descriptions.update(got_descs)
         if progress:
             progress(min(len(names), n_expected), n_expected)
 
-    return _ensure_complete_and_unique(names, blocks, entity, level)
+    return _ensure_complete_and_unique(names, descriptions, blocks, entity, level)
 
 
-def _name_batch(prompt: str, system: str, batch: list[str], wanted: set[int]) -> dict[int, str]:
+def _name_batch(
+    prompt: str, system: str, batch: list[str], wanted: set[int]
+) -> tuple[dict[int, str], dict[int, str]]:
     """One naming call, retried once for whatever it failed to name.
 
     The model occasionally returns fewer rows than it was asked for. That used to be
@@ -257,6 +304,7 @@ def _name_batch(prompt: str, system: str, batch: list[str], wanted: set[int]) ->
     not a cosmetic one, so the ids that came back short are asked for again.
     """
     out: dict[int, str] = {}
+    descs: dict[int, str] = {}
     for attempt in range(2):
         result = llm.complete_json(
             prompt,
@@ -269,6 +317,12 @@ def _name_batch(prompt: str, system: str, batch: list[str], wanted: set[int]) ->
             cid, name = c["id"], c["name"].strip()
             if cid in wanted and name:
                 out[cid] = name
+                # A missing description is not worth a retry — the name is what the
+                # hierarchy depends on, and re-asking a whole batch to recover a
+                # sentence would pay for the level twice over cosmetics.
+                desc = str(c.get("description") or "").strip()
+                if desc:
+                    descs[cid] = desc
 
         missing = wanted - set(out)
         if not missing:
@@ -278,12 +332,12 @@ def _name_batch(prompt: str, system: str, batch: list[str], wanted: set[int]) ->
             print(f"  [naming] {len(missing)} cluster(s) came back unnamed — asking again for {sorted(missing)}")
             prompt = "Name each cluster:\n\n" + "\n".join(retry)
             batch = retry
-    return out
+    return out, descs
 
 
 def _ensure_complete_and_unique(
-    names: dict[int, str], blocks: list[str], entity: str, level: str
-) -> dict[int, str]:
+    names: dict[int, str], descriptions: dict[int, str], blocks: list[str], entity: str, level: str
+) -> tuple[dict[int, str], dict[int, str]]:
     """Every cluster ends up named, and no two names collide.
 
     Both guarantees are enforced here rather than trusted from the model, because
@@ -308,6 +362,12 @@ def _ensure_complete_and_unique(
         names[cid] = fallback[0].upper() + fallback[1:]
         print(f"  [naming] {entity}/{level}: cluster {cid} unnamed after retry — using {names[cid]!r}")
 
+    # Descriptions are optional by design: a cluster with a name and no sentence is
+    # usable, one with neither is not. So they are neither invented nor deduplicated —
+    # two clusters may legitimately be described in similar terms, and a suffix on a
+    # sentence would read as a defect rather than as the disambiguation it is on a name.
+    descriptions = {cid: d for cid, d in descriptions.items() if cid in names}
+
     seen: dict[str, int] = {}
     for cid in sorted(names):
         key = names[cid].strip().lower()
@@ -321,4 +381,4 @@ def _ensure_complete_and_unique(
                   f"cluster {seen[key]}'s name — renamed to {names[cid]!r}")
         else:
             seen[key] = cid
-    return names
+    return names, descriptions

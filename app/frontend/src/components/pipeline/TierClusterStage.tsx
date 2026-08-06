@@ -519,7 +519,11 @@ function ClusterDetail({
 
   return (
     <Modal
-      title={`Group ${cluster + 1}`}
+      // The confirmed name once there is one, because "Group 4" identifies a position in a
+      // list and the name identifies the thing. Falls back to the position while the cut is
+      // still unconfirmed, or when a different k is being previewed — at another k these ids
+      // are a different grouping, so the name would belong to something else.
+      title={data?.name || `Group ${cluster + 1}`}
       subtitle={
         data
           ? `${size} ${itemNoun}` +
@@ -530,6 +534,13 @@ function ClusterDetail({
       }
       onClose={onClose}
     >
+      {/* The sentence the naming step wrote from these same members. It is the reason two
+          similarly-named groups can be told apart without reading both member lists. */}
+      {data?.description && (
+        <p className="mb-3 border-b border-border pb-3 text-[12.5px] leading-relaxed text-text-secondary">
+          {data.description}
+        </p>
+      )}
       {error && <p className="text-[12px] text-brand">{error}</p>}
       {!data && !error && <p className="text-[12px] text-text-muted">Loading…</p>}
       {data && (
@@ -831,8 +842,16 @@ function ClusterList({
                 {c.size}
               </span>
             </div>
+            {open[c.id] && c.description && (
+              // Under the name rather than beside it, and only while the row is open: a task
+              // tier has 750 rows, and a sentence on each collapsed row is a wall of prose
+              // nobody reads. Opening one is the moment someone wants to know what it is.
+              <p className="border-t border-border bg-panel/40 px-3 pt-2 pl-9 text-[11.5px] leading-snug text-text-secondary">
+                {c.description}
+              </p>
+            )}
             {open[c.id] && (
-              <ul className="border-t border-border bg-panel/40 px-3 py-2 pl-9">
+              <ul className="border-t-0 border-border bg-panel/40 px-3 py-2 pl-9">
                 {c.members.map((m) => (
                   <li key={m.item_id} className="flex items-center gap-2 py-0.5 text-[11.5px]">
                     <span className="min-w-0 flex-1 truncate text-text-secondary">{m.label}</span>

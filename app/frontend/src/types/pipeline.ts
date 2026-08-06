@@ -237,6 +237,12 @@ export interface ClusterMembers {
   /** What `total` counts, which is not always the same unit as the rows: a family's
    *  rows are categories while its total is the profiles beneath them. */
   total_noun: string;
+  /** The confirmed name and its one-sentence description — present ONLY when the cut being
+   *  shown is the confirmed one, since at any other k these ids are a different grouping. */
+  name?: string;
+  description?: string;
+  /** Items the model moved after the cut, so the dialog can qualify whose membership this is. */
+  routed?: number;
 }
 
 export interface TierClusterMember {
@@ -264,6 +270,8 @@ export interface TierClusters extends SizeStats {
   clusters: {
     id: number;
     name: string;
+    /** One sentence from naming time. Empty on a tier confirmed before this existed. */
+    description?: string;
     size: number;
     members: TierClusterMember[];
     titles?: string[];
@@ -359,6 +367,8 @@ export interface TaxonomyLeaf {
 export interface TaxonomyNode {
   id: number;
   name: string;
+  /** One sentence written at naming time. Empty for a tier confirmed before this existed. */
+  description?: string;
   children?: TaxonomyNode[];
   leaves?: TaxonomyLeaf[];
   skill_count?: number;

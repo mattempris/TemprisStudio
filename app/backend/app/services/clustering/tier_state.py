@@ -114,6 +114,21 @@ def tiers_of(state: ProjectState, entity: str) -> dict[str, TierState]:
     raise ValueError(f"unknown entity {entity!r}")
 
 
+def descriptions_of(state: ProjectState, entity: str) -> dict[str, dict[int, str]]:
+    """Per-tier cluster descriptions, keyed tier -> cluster id -> sentence.
+
+    Read from the tier records rather than from the denormalised `ClusteringState`, because
+    that view carries names only. Rather than widen it with three more parallel dicts — the
+    fourth, fifth and sixth of a shape that already has to be kept in step — the tier records
+    stay the single home for this and the few readers that want it come here.
+
+    Every tier is present in the return, empty where a tier is unconfirmed or predates
+    descriptions, so callers can index without guarding.
+    """
+    tiers = tiers_of(state, entity)
+    return {t: dict(getattr(tiers.get(t), "descriptions", None) or {}) for t in ORDER}
+
+
 def base_items(state: ProjectState, entity: str) -> list[tuple[str, str]]:
     """(id, text) per base record, in state order — the finest tier's population.
 
@@ -260,6 +275,7 @@ def save_tier(
         gate=result.gate,
         embedding_model=embedding_model,
         names=result.names,
+        descriptions=result.descriptions,
         members=[
             TierMemberRecord(
                 item_id=m.item_id,

@@ -93,9 +93,16 @@ export function EntityTaxonomyStage({
   proficiency,
 }: Props) {
   const [tree, setTree] = useState<{ roots: TaxonomyNode[]; hasHeadcount: boolean } | null>(null);
-  // Whether the running job is this step's inference, as opposed to one of the
-  // tiers' own jobs — which report next to their own buttons.
-  const [ranInfer, setRanInfer] = useState(false);
+  // WHICH of this step's own actions is running, not merely whether one is.
+  //
+  // This was a boolean covering inference only, and the proficiency button started a job without
+  // setting it — so pressing "Generate proficiency and map jobs" ran for minutes with no bar, no
+  // spinner and no label change, and read as a dead button. A boolean could not have been set by
+  // both buttons anyway: the bar has to render next to the control that started it, or it appears
+  // in the wrong half of the step.
+  //
+  // The tiers are not in here; they own their own progress next to their own buttons.
+  const [ran, setRan] = useState<"infer" | "proficiency" | null>(null);
   // Which tiers are expanded. A confirmed tier renders its whole cluster list — 750
   // tiles on the task tier — so the settled ones collapse and the one still needing a
   // decision stays open. `undefined` means "follow that default"; an explicit entry is
@@ -139,7 +146,7 @@ export function EntityTaxonomyStage({
             <Button
               variant="primary"
               onClick={() => {
-                setRanInfer(true);
+                setRan("infer");
                 runJob(onInfer);
               }}
               disabled={busy || jobProfileCount === 0}
@@ -155,7 +162,7 @@ export function EntityTaxonomyStage({
             <Button
               variant={anchorRolesSkipped ? "primary" : "default"}
               onClick={() => {
-                setRanInfer(true);
+                setRan("infer");
                 runJob(onInferFromSource);
               }}
               disabled={busy || jobProfileCount === 0}
@@ -189,7 +196,7 @@ export function EntityTaxonomyStage({
       {/* The step-level bar covers inference only. Each tier renders its own
           progress next to the button that started it, so a taxonomy view never
           shows two spinners for one job. */}
-      {ranInfer && progress}
+      {ran === "infer" && progress}
 
       {/* 2. Group into the three tiers, bottom-up. Each is confirmed on its own,
              so a coarser tier only appears once the one below it is settled. */}
@@ -271,12 +278,22 @@ export function EntityTaxonomyStage({
             </p>
           </div>
           {proficiency.editor}
-          <Button variant="primary" onClick={() => runJob(proficiency.onGenerate)} disabled={busy}>
+          <Button
+            variant="primary"
+            onClick={() => {
+              setRan("proficiency");
+              runJob(proficiency.onGenerate);
+            }}
+            disabled={busy}
+          >
             <span className="flex items-center gap-1.5">
               <Play size={12} />
               {proficiency.done ? "Regenerate proficiency mapping" : "Generate proficiency and map jobs"}
             </span>
           </Button>
+          {/* Beside the button that started it. Generating criteria for every cluster and then
+              mapping every job onto them is minutes of work, and it used to run in total silence. */}
+          {ran === "proficiency" && progress}
           {proficiency.mappedClusters > 0 && (
             <p className="mt-2 text-[11.5px] text-text-secondary">
               {proficiency.mappedClusters} clusters have level criteria;{" "}

@@ -61,6 +61,34 @@ class SkillsSummary(BaseModel):
     profile_requirements: int = 0
     levels_assigned: int = 0
     audit: dict = Field(default_factory=dict)
+    # Anchor roles that stand for exactly one uploaded record, and whether the anchor-role tier
+    # was confirmed one-to-one. Together these decide which infer buttons the step offers —
+    # see `_source_option`.
+    source_eligible: int = 0
+    anchor_roles: int = 0
+    anchor_roles_skipped: bool = False
+
+
+def _source_option(state) -> dict:
+    """Whether the "infer from the uploaded descriptions" path is available, and its scope.
+
+    Two facts, both needed before the UI can decide what to offer:
+
+    `source_eligible` counts anchor roles that stand for exactly one uploaded record. Any at all
+    means the second button is worth showing; the count tells the user how much of the run it
+    would change, since roles that merge several records fall back to the document either way.
+
+    `anchor_roles_skipped` says the anchor-role tier was confirmed one-to-one. Then every role is
+    its own uploaded record and the generated documents are summaries of single descriptions the
+    user already considers good — so the document path is not a choice worth offering, and the UI
+    hides it rather than presenting two buttons where one is strictly worse.
+    """
+    eligible, total = provenance.coverage(state)
+    return {
+        "source_eligible": eligible,
+        "anchor_roles": total,
+        "anchor_roles_skipped": "cluster" in state.skipped_steps,
+    }
 
 
 @router.get("/summary")
@@ -80,6 +108,7 @@ def skills_summary(client_slug: str, project_slug: str) -> SkillsSummary:
         profile_requirements=len(s.profile_requirements),
         levels_assigned=sum(1 for r in s.profile_requirements if r.assigned_level),
         audit=s.audit,
+        **_source_option(state),
     )
 
 
@@ -89,6 +118,15 @@ def skills_summary(client_slug: str, project_slug: str) -> SkillsSummary:
 class InferRequest(BaseModel):
     # instructions.txt: "from a selected subset (or all) job profiles"
     profile_keys: list[str] | None = None
+    # Read each role's own uploaded job description instead of the document written about it,
+    # wherever the role stands for exactly one uploaded record.
+    #
+    # Opt-in rather than automatic. It was automatic first, and that was wrong: on a project that
+    # clustered for real, 307 of 565 anchor roles qualify, so it would silently change what most
+    # roles were inferred from with no way to choose otherwise. Which input to trust is the user's
+    # judgement — a thin HRIS row is better summarised, a comprehensive profile is not — so the UI
+    # offers it as a second button and this is the flag behind it.
+    from_source: bool = False
 
 
 @router.post("/infer")
@@ -109,14 +147,14 @@ async def infer_skills(
     if not selected:
         raise HTTPException(400, "none of the requested profile_keys matched a current anchor role")
 
-    # Where an anchor role stands for exactly one uploaded record, read that record's own text
-    # rather than the document written about it — the document is two model calls downstream and
-    # every hop compresses. See services/provenance for why this tests the data, not the flags.
-    sources = provenance.single_source_text(state)
+    # Only when asked. Where a role merges several records there is no single source description
+    # to pass, so those roles fall back to the document even on this path — the button says how
+    # many go each way rather than the run doing it silently.
+    sources = provenance.single_source_text(state) if req.from_source else {}
     payload = [
         (p.profile_key, p.title, p.content, sources.get(p.profile_key)) for p in selected
     ]
-    from_source = sum(1 for row in payload if row[3])
+    n_from_source = sum(1 for row in payload if row[3])
 
     def work(reporter: ProgressReporter) -> dict:
         reporter.stage_start(len(payload), f"Inferring skills for {len(payload)} anchor roles")
@@ -137,7 +175,7 @@ async def infer_skills(
         ]
         fresh.skills.audit = {
             **audit.summary(),
-            "from_source_description": from_source,
+            "from_source_description": n_from_source,
             "profiles_run": len(payload),
         }
         # re-inferring invalidates the taxonomy built from the previous skill set
@@ -159,7 +197,7 @@ async def infer_skills(
             # How many roles were read from their own uploaded description rather than from the
             # document written about them. Reported per run, because a step that silently reads
             # different inputs for different roles is one whose output nobody can account for.
-            "from_source_description": from_source,
+            "from_source_description": n_from_source,
             "technical": sum(1 for s in flat if s.kind == "technical"),
             "non_technical": sum(1 for s in flat if s.kind == "non-technical"),
             **audit.summary(),

@@ -318,6 +318,11 @@ export interface SkillsSummary {
   profile_requirements: number;
   levels_assigned: number;
   audit: Record<string, number>;
+  /** Anchor roles standing for exactly one uploaded record — the scope of the source path. */
+  source_eligible: number;
+  anchor_roles: number;
+  /** The anchor-role tier was confirmed one-to-one, so the documents summarise single records. */
+  anchor_roles_skipped: boolean;
 }
 
 export interface TasksSummary {
@@ -329,6 +334,11 @@ export interface TasksSummary {
   k_tasks: number | null;
   named: boolean;
   audit: Record<string, number>;
+  /** Anchor roles standing for exactly one uploaded record — the scope of the source path. */
+  source_eligible: number;
+  anchor_roles: number;
+  /** The anchor-role tier was confirmed one-to-one, so the documents summarise single records. */
+  anchor_roles_skipped: boolean;
 }
 
 export interface TaxonomyLeaf {

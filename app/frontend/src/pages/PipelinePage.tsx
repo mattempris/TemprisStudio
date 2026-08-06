@@ -866,7 +866,10 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
             named={skills?.named ?? false}
             tiers={tiers.skill}
             audit={skills?.audit ?? {}}
+            sourceEligible={skills?.source_eligible ?? 0}
+            anchorRolesSkipped={skills?.anchor_roles_skipped ?? false}
             onInfer={() => api.skills.infer(undefined, workers)}
+            onInferFromSource={() => api.skills.infer(undefined, workers, true)}
             tierApi={(t) => api.tier("skill", t)}
             loadTaxonomy={async () => {
               const t = await api.skills.taxonomy();
@@ -911,7 +914,10 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
             named={tasks?.named ?? false}
             tiers={tiers.task}
             audit={tasks?.audit ?? {}}
+            sourceEligible={tasks?.source_eligible ?? 0}
+            anchorRolesSkipped={tasks?.anchor_roles_skipped ?? false}
             onInfer={() => api.tasks.infer(undefined, workers)}
+            onInferFromSource={() => api.tasks.infer(undefined, workers, true)}
             tierApi={(t) => api.tier("task", t)}
             loadTaxonomy={async () => {
               const t = await api.tasks.taxonomy();

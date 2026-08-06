@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ChevronRight, Play } from "lucide-react";
+import { ChevronRight, FileText, Play } from "lucide-react";
 import type { InvalidationPreview } from "../wizard/RepeatConfirm";
 import type { JobHandle, TaxonomyNode, TierName, TierStatus } from "../../types/pipeline";
 import { TaxonomyBrowser, normalizeTaxonomy, type TaxonomyKind } from "./TaxonomyBrowser";
@@ -40,7 +40,13 @@ interface Props {
   /** Per-tier status, keyed by tier. Undefined until the first fetch lands. */
   tiers: Partial<Record<TierName, TierStatus>>;
   audit: Record<string, number>;
+  /** Anchor roles standing for exactly one uploaded record. Zero hides the source button. */
+  sourceEligible: number;
+  /** The anchor-role tier was confirmed one-to-one, which hides the document button. */
+  anchorRolesSkipped: boolean;
   onInfer: () => Promise<JobHandle>;
+  /** Same run, reading the uploaded descriptions instead of the generated documents. */
+  onInferFromSource: () => Promise<JobHandle>;
   tierApi: (tier: TierName) => TierApi;
   loadTaxonomy: () => Promise<{ roots: TaxonomyNode[]; hasHeadcount: boolean }>;
   runJob: (start: () => Promise<JobHandle>) => void;
@@ -74,7 +80,10 @@ export function EntityTaxonomyStage({
   named,
   tiers,
   audit,
+  sourceEligible,
+  anchorRolesSkipped,
   onInfer,
+  onInferFromSource,
   tierApi,
   loadTaxonomy,
   runJob,
@@ -110,22 +119,62 @@ export function EntityTaxonomyStage({
 
   return (
     <div className="space-y-4">
-      {/* 1. Infer */}
+      {/* 1. Infer — one button, or two where the same run could read different inputs.
+             Which to trust is a judgement, not a default: a thin HRIS row is better
+             summarised into a role document, a comprehensive job profile is not. So the choice
+             is explicit rather than the run silently picking per role.
+
+             The document button hides when the anchor-role tier was confirmed one-to-one. There,
+             every role IS one uploaded record and the document is a summary of a description the
+             user already considers good — so it is strictly the worse input, and offering it
+             would be offering a choice with a wrong answer.
+
+             But only when there is something to replace it with. Skipping the tier while letting
+             dedupe merge records gives a project with no 1:1 roles AND no document button, which
+             leaves the step with no way to run at all. Hiding one button has to be conditional on
+             the other being there. */}
       <div className="space-y-2">
-        <Button
-          variant="primary"
-          onClick={() => {
-            setRanInfer(true);
-            runJob(onInfer);
-          }}
-          disabled={busy || jobProfileCount === 0}
-        >
-          <span className="flex items-center gap-1.5">
-            <Play size={12} />
-            {inferredCount > 0 ? `Re-infer ${noun}` : `Infer ${noun}`} from {jobProfileCount} anchor
-            role{jobProfileCount === 1 ? "" : "s"}
-          </span>
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {(!anchorRolesSkipped || sourceEligible === 0) && (
+            <Button
+              variant="primary"
+              onClick={() => {
+                setRanInfer(true);
+                runJob(onInfer);
+              }}
+              disabled={busy || jobProfileCount === 0}
+            >
+              <span className="flex items-center gap-1.5">
+                <Play size={12} />
+                {inferredCount > 0 ? `Re-infer ${noun}` : `Infer ${noun}`} from {jobProfileCount}{" "}
+                anchor role{jobProfileCount === 1 ? "" : "s"}
+              </span>
+            </Button>
+          )}
+          {sourceEligible > 0 && (
+            <Button
+              variant={anchorRolesSkipped ? "primary" : "default"}
+              onClick={() => {
+                setRanInfer(true);
+                runJob(onInferFromSource);
+              }}
+              disabled={busy || jobProfileCount === 0}
+            >
+              <span className="flex items-center gap-1.5">
+                <FileText size={12} />
+                Infer {noun} directly from uploaded descriptions
+              </span>
+            </Button>
+          )}
+        </div>
+        {sourceEligible > 0 && !anchorRolesSkipped && (
+          <p className="text-[11.5px] leading-snug text-text-muted">
+            {sourceEligible} of {jobProfileCount} anchor roles stand for exactly one uploaded
+            record, so the second option reads those descriptions in full rather than the document
+            written about them. The other {jobProfileCount - sourceEligible} merge several records
+            and use the document either way.
+          </p>
+        )}
         {inferredCount > 0 && (
           <div className="min-w-0">
             <p className="text-[12.5px] text-text-secondary">

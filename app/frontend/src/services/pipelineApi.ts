@@ -298,10 +298,12 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
     // ── Skills (steps 8-9) ───────────────────────────────────────────────────
     skills: {
       summary: () => request<SkillsSummary>(`${base}/skills/summary`),
-      infer: (profileKeys?: string[], workers?: number) =>
+      /** `fromSource` reads each role's own uploaded description where it stands for exactly
+       *  one record, instead of the document written about it. */
+      infer: (profileKeys?: string[], workers?: number, fromSource = false) =>
         request<JobHandle>(`${base}/skills/infer${qs({ workers })}`, {
           method: "POST",
-          body: JSON.stringify({ profile_keys: profileKeys ?? null }),
+          body: JSON.stringify({ profile_keys: profileKeys ?? null, from_source: fromSource }),
         }),
       taxonomy: () => request<{ families: TaxonomyNode[]; has_headcount: boolean }>(`${base}/skills/taxonomy`),
       generateProficiency: (workers?: number) =>
@@ -322,10 +324,12 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
     // ── Tasks (step 10) ──────────────────────────────────────────────────────
     tasks: {
       summary: () => request<TasksSummary>(`${base}/tasks/summary`),
-      infer: (profileKeys?: string[], workers?: number) =>
+      /** `fromSource` reads each role's own uploaded description where it stands for exactly
+       *  one record, instead of the document written about it. */
+      infer: (profileKeys?: string[], workers?: number, fromSource = false) =>
         request<JobHandle>(`${base}/tasks/infer${qs({ workers })}`, {
           method: "POST",
-          body: JSON.stringify({ profile_keys: profileKeys ?? null }),
+          body: JSON.stringify({ profile_keys: profileKeys ?? null, from_source: fromSource }),
         }),
       taxonomy: () =>
         request<{ domains: TaxonomyNode[]; has_headcount: boolean; total_proportion: number }>(

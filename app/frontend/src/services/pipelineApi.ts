@@ -21,6 +21,7 @@ import type {
   Overview,
   ProfileRow,
   SkillsSummary,
+  SkippableSteps,
   StageSummary,
   TasksSummary,
   TierClusters,
@@ -134,6 +135,18 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
         body: JSON.stringify({ threshold }),
       }),
 
+    /** The optional steps, what declining each does, and which are declined.
+     *  Served rather than hardcoded so the wording and the behaviour have one home. */
+    skippableSteps: () => request<SkippableSteps>(`${base}/steps/skippable`),
+    skipStep: (stepId: string) =>
+      request<{ skipped: string; kind: string }>(`${base}/steps/${stepId}/skip`, {
+        method: "POST",
+      }),
+    unskipStep: (stepId: string) =>
+      request<{ unskipped: string; skipped: string[] }>(`${base}/steps/${stepId}/skip`, {
+        method: "DELETE",
+      }),
+
     startNormalize: (workers?: number) =>
       request<JobHandle>(`${base}/normalize${qs({ workers })}`, { method: "POST" }),
 
@@ -193,6 +206,12 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
           request<JobHandle>(`${t}/confirm${qs({ workers })}`, {
             method: "POST",
             body: JSON.stringify({ k, gate }),
+          }),
+        /** Confirm this tier one-to-one: every item its own cluster, named from the data.
+         *  Not a job — there is no model call and no stability pass to report on. */
+        skip: () =>
+          request<{ k: number; one_to_one: boolean; invalidated: unknown[] }>(`${t}/skip`, {
+            method: "POST",
           }),
         clusters: () => request<TierClusters>(`${t}/clusters`),
         /** Full membership of one cluster of an unconfirmed cut — the preview's

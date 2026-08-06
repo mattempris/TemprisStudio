@@ -11,6 +11,7 @@ import type {
   EmbeddingModelsInfo,
   ClusterEntity,
   TierName,
+  SkippableStep,
   TierStatus,
   ProfileSection,
   ProfileTemplate,
@@ -22,6 +23,7 @@ import type {
   TasksSummary,
 } from "../types/pipeline";
 import { StageSection, type StageState } from "../components/wizard/StageSection";
+import { SkipStep } from "../components/wizard/SkipStep";
 import { ProgressBar } from "../components/wizard/ProgressBar";
 import { JobPulse } from "../components/wizard/JobPulse";
 import { ProceedToWorkforce, StudioToggle, type StudioGate } from "../components/wizard/StudioToggle";
@@ -226,10 +228,48 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
     setExpanded(firstIncompleteStage(summary, downstream));
   }, [summary, expanded, downstream]);
 
+  // The optional steps and their consequence text. Static per project, so fetched once —
+  // which of them are *currently* skipped comes from the polled summary instead, so the
+  // badge cannot lag a skip by a poll interval.
+  const [skippable, setSkippable] = useState<SkippableStep[]>([]);
+  useEffect(() => {
+    void api.skippableSteps().then((r) => setSkippable(r.steps)).catch(() => setSkippable([]));
+  }, [api]);
+
   const state = useCallback(
-    (id: string): StageState => (summary ? stageState(id, summary, downstream) : "locked"),
+    (id: string): StageState =>
+      summary ? stageState(id, summary, downstream) : "locked",
     [summary, downstream],
   );
+
+  /** The skip control for a step, or null when the step is not optional. */
+  function skipControl(id: string) {
+    const step = skippable.find((x) => x.id === id);
+    if (!step || !summary) return null;
+    const isSkipped = summary.skipped_steps.includes(id);
+    // A tier goes through the tier router, which owns save_tier and the tier caches.
+    const tierOf = { cluster: "profile", categories: "category", families: "family" }[id] as
+      | TierName
+      | undefined;
+    return (
+      <SkipStep
+        label={step.label}
+        consequence={step.consequence}
+        kind={step.kind}
+        skipped={isSkipped}
+        busy={busy}
+        // `act` already wraps error handling, the busy flag and a refresh — the same
+        // treatment every other non-job action on this page gets.
+        onSkip={() =>
+          void act(async () => {
+            if (tierOf) await api.tier("job", tierOf).skip();
+            else await api.skipStep(id);
+          })
+        }
+        onUndo={() => void act(() => api.unskipStep(id))}
+      />
+    );
+  }
 
   async function runJob(
     start: () => Promise<{ job_id: string; stage: string }>,
@@ -409,6 +449,11 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
               }}
             >
               {renderStage(s.id)}
+              {/* Below the step's own controls: skipping is the alternative to doing it, so it
+                  should read as the last resort rather than compete with the primary action. */}
+              {st !== "locked" && skipControl(s.id) && (
+                <div className="mt-4 border-t border-border pt-3">{skipControl(s.id)}</div>
+              )}
             </StageSection>
           );
         })}
@@ -1094,6 +1139,9 @@ function LazyProficiencyTemplate({
 }
 
 function stageState(id: string, s: StageSummary, d: Downstream): StageState {
+  // A declined step reads as skipped, never as done — even when it produced exactly the
+  // artefact a completed one would. See StageSection's note on why that badge matters.
+  if (s.skipped_steps.includes(id)) return "skipped";
   switch (id) {
     // Steps 8-11 all hang off having anchor role documents; each is complete once its own
     // final artifact exists (a named taxonomy, or at least one recorded match).
@@ -1142,6 +1190,24 @@ function stageState(id: string, s: StageSummary, d: Downstream): StageState {
 }
 
 function stageSummaryLine(id: string, s: StageSummary, d: Downstream): string | undefined {
+  // Say what the skip actually left behind. "142 distinct jobs" is a claim about
+  // deduplication; "142 records, nothing merged" is a description of what happened.
+  if (s.skipped_steps.includes(id)) {
+    switch (id) {
+      case "strip":
+        return `${s.stripped_records} records carried through unstripped`;
+      case "dedupe":
+        return `${s.dedupe_groups} records, nothing merged`;
+      case "cluster":
+        return `${d.tiers.job.profile?.k ?? 0} anchor roles, one per job, named from the upload`;
+      case "categories":
+        return `${d.tiers.job.category?.k ?? 0} categories, one per anchor role`;
+      case "families":
+        return `${d.tiers.job.family?.k ?? 0} families, one per category`;
+      default:
+        return "Not run";
+    }
+  }
   switch (id) {
     case "skills":
       if (!d.skills?.named) return undefined;
@@ -1166,7 +1232,11 @@ function stageSummaryLine(id: string, s: StageSummary, d: Downstream): string | 
     case "strip":
       return `${s.stripped_records} stripped`;
     case "dedupe":
-      return `${s.dedupe_groups} distinct jobs at threshold ${s.dedupe_threshold?.toFixed(2)}`;
+      // A null threshold means no similarity decision was made, so printing "threshold
+      // undefined" would be worse than saying only what is known.
+      return s.dedupe_threshold === null
+        ? `${s.dedupe_groups} distinct jobs`
+        : `${s.dedupe_groups} distinct jobs at threshold ${s.dedupe_threshold.toFixed(2)}`;
     case "normalize":
       return `${s.normalized_profiles} normalised`;
     case "cluster":

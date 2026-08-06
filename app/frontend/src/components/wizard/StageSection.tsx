@@ -1,8 +1,16 @@
 import type { ReactNode } from "react";
-import { Check, ChevronDown, Lock } from "lucide-react";
+import { Check, ChevronDown, Lock, SkipForward } from "lucide-react";
 import { cn } from "../../lib/cn";
 
-export type StageState = "locked" | "active" | "complete";
+/**
+ * `skipped` is its own state, not a flavour of `complete`.
+ *
+ * A skipped step has often produced exactly the artefact a completed one would — the identity
+ * grouping — so by the usual test it *is* complete. But the badge is what a reader trusts when
+ * they come back to a project in a month, and "Done" over a step nobody ran is the one claim
+ * this wizard must not make.
+ */
+export type StageState = "locked" | "active" | "complete" | "skipped";
 
 interface StageSectionProps {
   index: number;
@@ -69,11 +77,20 @@ export function StageSection({
           className={cn(
             "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[12px] font-bold",
             state === "complete" && "border-success bg-success text-white",
+            state === "skipped" && "border-border bg-panel text-text-muted",
             state === "active" && "border-accent bg-accent text-white",
             locked && "border-border bg-panel text-text-muted",
           )}
         >
-          {state === "complete" ? <Check size={14} /> : locked ? <Lock size={11} /> : index}
+          {state === "complete" ? (
+            <Check size={14} />
+          ) : state === "skipped" ? (
+            <SkipForward size={12} />
+          ) : locked ? (
+            <Lock size={11} />
+          ) : (
+            index
+          )}
         </span>
 
         <span className="min-w-0 flex-1">
@@ -84,12 +101,24 @@ export function StageSection({
                 Done
               </span>
             )}
+            {state === "skipped" && (
+              <span className="rounded-full border border-border bg-panel px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wider text-text-muted">
+                Skipped
+              </span>
+            )}
           </span>
           <span className="mt-0.5 block text-[13px] leading-relaxed text-text-secondary">
             {locked && lockedReason ? lockedReason : description}
           </span>
-          {state === "complete" && summary && !expanded && (
-            <span className="mt-2 block text-[12.5px] font-semibold text-accent">{summary}</span>
+          {(state === "complete" || state === "skipped") && summary && !expanded && (
+            <span
+              className={cn(
+                "mt-2 block text-[12.5px] font-semibold",
+                state === "skipped" ? "text-text-muted" : "text-accent",
+              )}
+            >
+              {summary}
+            </span>
           )}
         </span>
 

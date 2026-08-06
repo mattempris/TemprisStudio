@@ -38,7 +38,7 @@ from app.models.project_state import (
     StageName,
 )
 from app.services import dedupe as dedupe_svc
-from app.services import llm, normalization, stripping
+from app.services import llm, skip_steps, normalization, stripping
 from app.services.clustering import backbone as bb
 from app.services.clustering import engine as cluster_engine
 from app.services.clustering import naming, rollup, routing
@@ -119,6 +119,8 @@ class StageSummary(BaseModel):
     named: bool = False
     job_profiles: int = 0
     je_results: int = 0
+    # Steps the user declined. A label, never a gate — see services/skip_steps.
+    skipped_steps: list[str] = Field(default_factory=list)
     current_stage: str = "ingest"
     active_job_id: str | None = None
     active_job_stage: str | None = None
@@ -169,6 +171,7 @@ def get_summary(client_slug: str, project_slug: str) -> StageSummary:
         named=bool(c and c.profile_names),
         job_profiles=len([p for p in state.job_profiles if not p.stale]),
         je_results=len([r for r in state.je_results if not r.stale]),
+        skipped_steps=list(state.skipped_steps),
         current_stage=state.meta.current_stage.value,
         active_job_id=active.job_id if active else None,
         active_job_stage=active.stage if active else None,
@@ -614,6 +617,7 @@ async def start_strip(
             for rid, res in zip(record_ids, results)
         ]
         fresh.meta.current_stage = StageName.strip
+        skip_steps.unmark(fresh, "strip")
         svc.save_state(fresh, action="strip", lineage_payload={"records": len(results)})
 
         low_fidelity = [
@@ -742,6 +746,102 @@ class ConfirmDedupeRequest(BaseModel):
     groups: list[list[str]] | None = None
 
 
+@router.get("/steps/skippable")
+def list_skippable_steps(client_slug: str, project_slug: str) -> dict:
+    """Which steps may be declined, what declining each one does, and which are declined.
+
+    Served rather than hardcoded in the client so the consequence text and the list itself
+    have one home. A control whose wording drifts from what the endpoint actually does is
+    worse than no control.
+    """
+    _, state = _load(client_slug, project_slug)
+    return {
+        "steps": [
+            {"id": s.id, "label": s.label, "kind": s.kind, "consequence": s.consequence}
+            for s in skip_steps.SKIPPABLE
+        ],
+        "skipped": list(state.skipped_steps),
+    }
+
+
+@router.post("/steps/{step_id}/skip")
+def skip_step(client_slug: str, project_slug: str, step_id: str) -> dict:
+    """Decline a step.
+
+    For an omission step this records the decision and nothing else — nothing downstream
+    reads what the step would have produced.
+
+    For an identity step it performs the trivial version, because something downstream does:
+    the strip step's output is what gets deduplicated, and the dedupe groups are what get
+    normalised. Writing the identity artefact is what keeps every consumer free of a
+    "was this skipped?" branch.
+
+    The three tier steps are not handled here. They live on the tier router, which owns
+    `build_items`, `save_tier` and the tier caches; reaching across for them would duplicate
+    the confirm path badly. This returns a 400 naming the right endpoint rather than
+    pretending to have done something.
+    """
+    step = skip_steps.BY_ID.get(step_id)
+    if step is None:
+        raise HTTPException(
+            404,
+            f"{step_id!r} is not an optional step. Optional steps are: "
+            f"{', '.join(sorted(skip_steps.BY_ID))}",
+        )
+    if step_id in ("cluster", "categories", "families"):
+        tier = {"cluster": "profile", "categories": "category", "families": "family"}[step_id]
+        raise HTTPException(
+            400,
+            f"skip this tier through POST /cluster/job/tier/{tier}/skip — it has to write a "
+            f"confirmed tier, which is that endpoint's job",
+        )
+
+    svc, state = _load(client_slug, project_slug)
+    detail: dict = {}
+    if step_id == "strip":
+        if not state.raw_records:
+            raise HTTPException(409, "nothing has been uploaded yet")
+        detail["stripped_records"] = skip_steps.skip_strip(state)
+        state.meta.current_stage = StageName.strip
+    elif step_id == "dedupe":
+        if not state.stripped_records:
+            raise HTTPException(409, "run or skip the strip step first")
+        detail["dedupe_groups"] = skip_steps.skip_dedupe(state)
+        state.meta.current_stage = StageName.dedupe
+
+    skip_steps.mark(state, step_id)
+    # An identity step still changes what everything above it describes, so it cascades
+    # exactly as the real step does. An omission step produces nothing, so there is nothing
+    # for anything to be stale against.
+    invalidated = (
+        lineage_routes.cascade(svc, state, step_id) if step.kind == "identity" else []
+    )
+    svc.save_state(
+        state,
+        action=f"skip-{step_id}",
+        lineage_payload={"step": step_id, "kind": step.kind, **detail,
+                         "invalidated": [i["step"] for i in invalidated]},
+    )
+    return {"skipped": step_id, "kind": step.kind, **detail, "invalidated": invalidated}
+
+
+@router.delete("/steps/{step_id}/skip")
+def unskip_step(client_slug: str, project_slug: str, step_id: str) -> dict:
+    """Withdraw the decision to skip, so the step reads as outstanding again.
+
+    Deliberately does **not** delete the identity artefact. Clearing the singleton dedupe
+    groups would strand the normalised profiles keyed to them, and the honest sequence is to
+    run the real step — which overwrites them and cascades — rather than to leave the project
+    in a state no step produced.
+    """
+    svc, state = _load(client_slug, project_slug)
+    if step_id not in state.skipped_steps:
+        raise HTTPException(409, f"{step_id!r} is not currently skipped")
+    skip_steps.unmark(state, step_id)
+    svc.save_state(state, action=f"unskip-{step_id}", lineage_payload={"step": step_id})
+    return {"unskipped": step_id, "skipped": list(state.skipped_steps)}
+
+
 @router.post("/dedupe/confirm")
 def confirm_dedupe(client_slug: str, project_slug: str, req: ConfirmDedupeRequest) -> dict:
     svc, state = _load(client_slug, project_slug)
@@ -784,6 +884,9 @@ def confirm_dedupe(client_slug: str, project_slug: str, req: ConfirmDedupeReques
     state.dedupe_threshold = req.threshold
     state.dedupe_groups = final
     state.meta.current_stage = StageName.dedupe
+    # Running the step withdraws the decision to skip it. Leaving the marker would make the
+    # summary line keep saying "grouping skipped" about groups the user just confirmed.
+    skip_steps.unmark(state, "dedupe")
     invalidated = lineage_routes.cascade(svc, state, "dedupe")
     svc.save_state(
         state,

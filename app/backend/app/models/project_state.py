@@ -751,6 +751,20 @@ class MatchingState(BaseModel):
 
 class ProjectState(BaseModel):
     meta: ProjectMeta
+    # Wizard steps the user chose to skip, by the id the step list uses ("dedupe",
+    # "cluster", "evaluation", ...).
+    #
+    # **A record, never control flow.** Nothing in the app branches on this. A skipped
+    # grouping step still writes its artefact — dedupe writes one singleton group per
+    # record, the anchor-role tier writes one cluster per job — so every consumer
+    # downstream reads exactly what it always read and cannot tell the difference. That is
+    # the whole design: a skip is the identity operation, not a special case threaded
+    # through ten call sites.
+    #
+    # What this list is for is honesty. A summary line that says "142 distinct jobs" when
+    # nobody deduplicated anything is a claim the project cannot support, and a report has
+    # to be able to say which decisions were made and which were declined.
+    skipped_steps: list[str] = Field(default_factory=list)
     inputs: list[RawInputFile] = Field(default_factory=list)
     column_mapping: ColumnMapping | None = None
     raw_records: list[JobRecordRaw] = Field(default_factory=list)

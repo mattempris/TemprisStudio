@@ -1,3 +1,19 @@
+/** One step the user may decline, from `GET /steps/skippable`. */
+export interface SkippableStep {
+  id: string;
+  label: string;
+  /** "identity" writes the trivial artefact (singleton groups, a 1:1 tier); "omission"
+   *  records the decision and produces nothing. */
+  kind: "identity" | "omission";
+  /** What declining it means, in the server's words. Rendered verbatim. */
+  consequence: string;
+}
+
+export interface SkippableSteps {
+  steps: SkippableStep[];
+  skipped: string[];
+}
+
 export interface StageSummary {
   raw_records: number;
   stripped_records: number;
@@ -12,6 +28,8 @@ export interface StageSummary {
   named: boolean;
   job_profiles: number;
   je_results: number;
+  /** Steps declined, by step id. A label, never a gate. */
+  skipped_steps: string[];
   current_stage: string;
   active_job_id: string | null;
   active_job_stage: string | null;

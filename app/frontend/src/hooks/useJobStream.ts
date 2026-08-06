@@ -41,8 +41,13 @@ export function useJobStream(onFinished?: (summary: Record<string, unknown>) => 
   const socketRef = useRef<WebSocket | null>(null);
   const finishedRef = useRef(onFinished);
   finishedRef.current = onFinished;
+  // Whether this job has already been accounted for — by completing, by failing, or by the
+  // caller deliberately dropping it. Guards the close handler below from firing twice, and from
+  // firing at all on a close we asked for.
+  const settledRef = useRef(true);
 
   const disconnect = useCallback(() => {
+    settledRef.current = true;
     socketRef.current?.close();
     socketRef.current = null;
   }, []);
@@ -50,6 +55,7 @@ export function useJobStream(onFinished?: (summary: Record<string, unknown>) => 
   const attach = useCallback(
     (jobId: string, stage: string) => {
       disconnect();
+      settledRef.current = false;
       setState({ ...IDLE, jobId, stage, running: true, message: "Connecting…" });
 
       const isHttps = window.location.protocol === "https:";
@@ -90,16 +96,35 @@ export function useJobStream(onFinished?: (summary: Record<string, unknown>) => 
         });
 
         if (evt.type === "complete") {
+          settledRef.current = true;
           finishedRef.current?.(evt.summary);
           socket.close();
         }
-        if (evt.type === "error") socket.close();
+        if (evt.type === "error") {
+          settledRef.current = true;
+          socket.close();
+        }
       };
 
       socket.onerror = () =>
         setState((prev) => ({ ...prev, running: false, error: "connection to the progress stream failed" }));
 
-      socket.onclose = () => setState((prev) => ({ ...prev, running: false }));
+      // A socket that closes without having said "complete" still means the job is no longer
+      // being watched — and the job itself usually finished perfectly well. A multi-minute run
+      // outlives a laptop sleep, an idle timeout, a proxy dropping a quiet connection or a
+      // backend restart, and any of those closes the socket silently.
+      //
+      // Without this the page kept whatever it knew before the job started, so every gate that
+      // reads status stayed shut over work that had actually been done: an AI opportunity
+      // assessment completed against 90 clusters while the steps it unlocks stayed locked.
+      // Re-reading status is cheap and correct whatever happened, so it is better done on any
+      // unexpected close than only on the happy path.
+      socket.onclose = () => {
+        const unexpected = !settledRef.current;
+        settledRef.current = true;
+        setState((prev) => ({ ...prev, running: false }));
+        if (unexpected) finishedRef.current?.({});
+      };
     },
     [disconnect],
   );

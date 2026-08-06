@@ -221,7 +221,23 @@ def build_system_prompt(framework: JEFrameworkConfig) -> str:
                 lines.append(f"      {level}: {descriptor}")
 
     n_subfactors = sum(len(d.subdomains) for d in framework.domains)
-    spread_lo, spread_hi = max(4, n_subfactors // 4), max(8, n_subfactors // 2)
+    # How many subfactors the optimistic and pessimistic readings are allowed to move.
+    #
+    # This is the only lever on the width of the uncertainty band, because the model scores
+    # subfactors and never sees the weighted total. Measured over all 565 profiles on the FS
+    # demo, the previous window of n/4..n/2 (5..10 here) had the model moving 8.2 subfactors
+    # up and 8.3 down, which is a Generous-minus-Harsh gap of 24.2 points on a 0-100 scale —
+    # a band so wide it stopped being an uncertainty range and started covering three grades.
+    # Each nudged subfactor is worth ~2.9 points of gap. Replaying the stored evaluations with
+    # the nudge count capped measures it directly: 3 nudges gives a gap of 10.5, 4 gives 14.0,
+    # 5 gives 17.4. So a 3..4 window puts the whole range inside 10-15 rather than only its
+    # midpoint — the model previously landed about two thirds of the way up its window, and a
+    # target band is not much use if the top of the window overshoots it.
+    #
+    # Balanced is untouched by this. It is the headline `aggregate_score`, derived
+    # independently, and narrowing the band deliberately does not move it.
+    spread_lo = max(2, n_subfactors // 6)
+    spread_hi = max(spread_lo + 1, n_subfactors // 5)
 
     all_subfactors = [(d.name, s.name) for d in framework.domains for s in d.subdomains]
 
@@ -229,11 +245,19 @@ def build_system_prompt(framework: JEFrameworkConfig) -> str:
         "\n\nScore each subfactor from THREE perspectives, derived in this order:\n"
         "1. BALANCED: your honest, defensible reading of the role.\n"
         f"2. GENEROUS: identical to Balanced EXCEPT nudge UP by exactly 1 the "
-        f"{spread_lo}-{spread_hi} subfactors where an optimistic but still "
-        "defensible reading justifies it. Never +2 on any subfactor.\n"
+        f"{spread_lo}-{spread_hi} subfactors where the profile is genuinely "
+        "ambiguous and an optimistic reading is still defensible. Never +2 on "
+        "any subfactor.\n"
         f"3. HARSH: identical to Balanced EXCEPT nudge DOWN by exactly 1 the "
-        f"{spread_lo}-{spread_hi} subfactors where a conservative but still "
-        "defensible reading justifies it. Never -2 on any subfactor.\n\n"
+        f"{spread_lo}-{spread_hi} subfactors where the profile is genuinely "
+        "ambiguous and a conservative reading is still defensible. Never -2 on "
+        "any subfactor.\n\n"
+        f"Move AT MOST {spread_hi} subfactors in either direction, and only where "
+        "the evidence in the profile genuinely supports more than one rubric "
+        "level. Where the profile is clear, all three perspectives agree — that "
+        "is the expected case, not a failure to differentiate. These two "
+        "perspectives exist to show where a panel would argue, so a wide gap on "
+        "an unambiguous role is worse than no gap at all.\n\n"
         "HARD CONSTRAINTS: for every subfactor, generous >= balanced >= harsh, "
         "and every score is an integer 1-5. Generous and Harsh differ from "
         "Balanced only by these single-point nudges — they are not independent "

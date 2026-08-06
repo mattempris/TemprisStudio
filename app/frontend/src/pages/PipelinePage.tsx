@@ -288,7 +288,7 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
           {/* Renders only on a seeded demo project — absent everywhere else. */}
           <DemoReset />
         </div>
-        <p className="mb-3 text-[10px] font-extrabold uppercase tracking-wider text-text-muted">Process</p>
+        <p className="mb-3 text-[10px] font-extrabold uppercase tracking-wider text-text-muted">Steps</p>
         <ol className="space-y-1">
           {STAGES.map((s, i) => {
             const st = state(s.id);

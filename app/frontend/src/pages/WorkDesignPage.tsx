@@ -32,6 +32,7 @@ import { DemoReset } from "../components/wizard/DemoReset";
 import { Modal } from "../components/ui/Modal";
 import { Button } from "../components/ui/Button";
 import { FacetBar } from "../components/workdesign/FacetBar";
+import { useIsNarrow } from "../hooks/useIsNarrow";
 import { PoolPanel } from "../components/workdesign/PoolPanel";
 import { JobDesignPanel } from "../components/workdesign/JobDesignPanel";
 import { LeversPanel } from "../components/workdesign/LeversPanel";
@@ -364,6 +365,12 @@ export function WorkDesignPage({
 
   const [notice, setNotice] = useState<string | null>(null);
 
+  // Below the workbench breakpoint the studio is a single column: drag is off (a touch drag there
+  // competes with the page scroll, and the cells are too small to aim at) and both panels pin
+  // their list view. Handing DndContext an empty sensor array is what switches drag off — nothing
+  // can begin a drag, so no child needs to know it is disabled.
+  const narrow = useIsNarrow();
+
   const sensors = useSensors(
     // A distance constraint rather than none, so a click on a cell's + button is still a click.
     useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
@@ -391,7 +398,7 @@ export function WorkDesignPage({
 
   return (
     <DndContext
-      sensors={sensors}
+      sensors={narrow ? [] : sensors}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       // The design panel relayouts as it fills, so a rect measured at drag start is stale by the
@@ -477,7 +484,7 @@ export function WorkDesignPage({
 
               <div className="grid grid-cols-1 gap-4 items-start xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1.2fr)_320px]">
                 <div id="wd-pool" className="scroll-mt-24">
-                  <PoolPanel pool={pool} unit={unit} onAdd={addFromPool} />
+                  <PoolPanel pool={pool} unit={unit} onAdd={addFromPool} forceList={narrow} />
                 </div>
                 <div id="wd-design" className="scroll-mt-24">
                   <JobDesignPanel
@@ -504,6 +511,7 @@ export function WorkDesignPage({
                     onSave={save}
                     onClear={clearDraft}
                     onImport={() => setImportOpen(true)}
+                    forceList={narrow}
                   />
                   {(pool.added?.length ?? 0) > 0 && (
                     <button

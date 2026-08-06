@@ -19,22 +19,27 @@ import type { PoolCluster, PoolResult } from "../../types/workDesign";
  */
 
 const HEIGHT = 320;
-// Below about 1.2% of the box a cell cannot hold a label or be aimed at, and a job family rolls
-// up to 60-90 clusters of which most are under 1%.
-const MIN_SHARE = 0.012;
+// The biggest 28 clusters, with the rest pooled. A count rather than a share: an unfiltered
+// pool has 750 clusters whose *largest* is 1% of the box, so any share-based floor pools
+// nearly all of them — which is exactly what it did the first time this ran.
+const MAX_CELLS = 40;
 
 export function PoolPanel({
   pool,
   unit,
   onAdd,
   dropDisabled,
+  forceList,
 }: {
   pool: PoolResult;
   unit: string;
   onAdd: (cluster: PoolCluster, hours: number) => void;
   dropDisabled?: boolean;
+  /** Narrow screen: pin the list and hide the toggle. A treemap does not survive being narrow. */
+  forceList?: boolean;
 }) {
-  const [view, setView] = useState<"map" | "list">("map");
+  const [pref, setView] = useState<"map" | "list">("map");
+  const view = forceList ? "list" : pref;
   // Dropping a designed-job line back here removes it — the reverse of taking work out.
   const { setNodeRef, isOver } = useDroppable({ id: "pool", disabled: dropDisabled });
 
@@ -56,6 +61,16 @@ export function PoolPanel({
   const s = pool.sample;
   const t = pool.totals;
 
+  // An unfiltered workforce is genuinely flat: 750 task clusters whose largest is 1% of the
+  // total. A treemap of that is a texture whichever way it is pooled, and no amount of
+  // tuning fixes it — the answer is to narrow the sample. Said out loud, with the numbers,
+  // rather than leaving someone to conclude the chart is broken.
+  const shown = pool.clusters.slice(0, MAX_CELLS).reduce((a, c) => a + c.hours_per_week, 0);
+  const tailPct = t.remaining_hours_per_week
+    ? 100 * (1 - shown / t.remaining_hours_per_week)
+    : 0;
+  const tooFlat = pool.clusters.length > MAX_CELLS && tailPct > 40;
+
   return (
     <div
       ref={setNodeRef}
@@ -76,6 +91,7 @@ export function PoolPanel({
             still to allocate
           </p>
         </div>
+        {!forceList && (
         <span className="flex shrink-0 rounded-[6px] border border-border bg-card p-0.5">
           {(["map", "list"] as const).map((v) => (
             <button
@@ -90,6 +106,7 @@ export function PoolPanel({
             </button>
           ))}
         </span>
+        )}
       </div>
 
       <div className="px-4 py-3">
@@ -100,13 +117,24 @@ export function PoolPanel({
               : "No work matches this filter."}
           </p>
         ) : view === "map" ? (
-          <Treemap
-            data={data}
-            height={HEIGHT}
-            minCellShare={MIN_SHARE}
-            renderCell={(c) => <PoolCell cell={c} onAdd={onAdd} />}
-            cellProps={(c) => ({ "data-cluster": c.datum.payload.cluster_id })}
-          />
+          <>
+            {tooFlat && (
+              <p className="mb-2 rounded-[8px] border border-warning-border bg-warning-bg px-2.5 py-1.5 text-[10.5px] leading-snug text-warning">
+                This slice has {pool.clusters.length} task clusters and the largest is{" "}
+                {pool.clusters[0].share_pct.toFixed(1)}% of it, so the biggest {MAX_CELLS} are
+                drawn and the remaining {pool.clusters.length - MAX_CELLS} are pooled — together
+                still {tailPct.toFixed(0)}% of the work. Filter to a job family or a task domain
+                to see the shape of it.
+              </p>
+            )}
+            <Treemap
+              data={data}
+              height={HEIGHT}
+              maxCells={MAX_CELLS}
+              renderCell={(c) => <PoolCell cell={c} onAdd={onAdd} />}
+              cellProps={(c) => ({ "data-cluster": c.datum.payload.cluster_id })}
+            />
+          </>
         ) : (
           <div className="max-h-[320px] overflow-y-auto">
             {pool.clusters.map((c) => (

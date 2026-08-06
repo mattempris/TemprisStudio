@@ -34,6 +34,7 @@ export function JobDesignPanel({
   onSave,
   onClear,
   onImport,
+  forceList,
 }: {
   title: string;
   onTitle: (v: string) => void;
@@ -49,8 +50,11 @@ export function JobDesignPanel({
   onSave: () => void;
   onClear: () => void;
   onImport: () => void;
+  /** Narrow screen: pin the list and hide the toggle. See `useIsNarrow`. */
+  forceList?: boolean;
 }) {
-  const [view, setView] = useState<"map" | "list">("list");
+  const [pref, setView] = useState<"map" | "list">("list");
+  const view = forceList ? "list" : pref;
   const { setNodeRef, isOver } = useDroppable({ id: "design" });
 
   const data = useMemo<TreemapDatum<DesignedTaskLine>[]>(
@@ -87,19 +91,21 @@ export function JobDesignPanel({
             placeholder="Name this job"
             className="min-w-0 flex-1 rounded-[7px] border border-transparent bg-transparent px-1 py-0.5 text-[14px] font-bold text-text outline-none hover:border-border focus:border-accent"
           />
-          <span className="flex shrink-0 rounded-[6px] border border-border bg-card p-0.5">
-            {(["map", "list"] as const).map((v) => (
-              <button
-                key={v}
-                onClick={() => setView(v)}
-                className={`rounded-[4px] px-1.5 py-0.5 transition-colors ${
-                  view === v ? "bg-accent-bg text-accent" : "text-text-secondary hover:text-text"
-                }`}
-              >
-                {v === "map" ? <LayoutGrid size={11} /> : <List size={11} />}
-              </button>
-            ))}
-          </span>
+          {!forceList && (
+            <span className="flex shrink-0 rounded-[6px] border border-border bg-card p-0.5">
+              {(["map", "list"] as const).map((v) => (
+                <button
+                  key={v}
+                  onClick={() => setView(v)}
+                  className={`rounded-[4px] px-1.5 py-0.5 transition-colors ${
+                    view === v ? "bg-accent-bg text-accent" : "text-text-secondary hover:text-text"
+                  }`}
+                >
+                  {v === "map" ? <LayoutGrid size={11} /> : <List size={11} />}
+                </button>
+              ))}
+            </span>
+          )}
         </div>
         <div className="mt-2 flex items-center gap-2">
           <label className="flex items-center gap-1.5 text-[11px] font-semibold text-text-secondary">
@@ -128,7 +134,9 @@ export function JobDesignPanel({
         {lines.length === 0 ? (
           <div className="py-8 text-center">
             <p className="text-[12px] text-text-muted">
-              Drag work in from the left, or press the + on a cell.
+              {forceList
+                ? "Add work with the + beside a row in the unreviewed work above."
+                : "Drag work in from the left, or press the + on a cell."}
             </p>
             <Button onClick={onImport} className="mt-3">
               Import a job's task profile…

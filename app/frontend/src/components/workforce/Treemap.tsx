@@ -37,20 +37,25 @@ export interface TreemapCell<P> extends Rect {
 }
 
 /**
- * Cells below this share of the box are pooled into one "+N smaller" cell.
+ * Tail pooling: everything past the biggest `maxCells` becomes one "+N smaller" cell.
  *
- * Not a nicety. A job family rolls up to 60-90 task clusters of which most are under 1%, and
- * ninety cells in a 460px panel is a texture rather than a chart — individually unreadable,
- * unclickable, and impossible to aim a drag at. Pooling the tail fixes the legibility, the
- * target size and the label thresholds in one move.
+ * Not a nicety. Ninety cells in a 460px panel is a texture rather than a chart —
+ * individually unreadable, unclickable, and impossible to aim a drag at.
+ *
+ * **A count, not a share.** The first version used a minimum share of the box, and it failed
+ * on exactly the data it was written for: an unfiltered pool of 750 task clusters has a
+ * *largest* cluster at 1.0%, so a 1.2% floor pooled all 750 into a single cell. A share
+ * threshold assumes something about how concentrated the distribution is, and this one spans
+ * a whole workforce down to a single job family. A count makes no such assumption — keep the
+ * biggest N, pool the rest — and N is what actually determines legibility.
  */
-const DEFAULT_MIN_SHARE = 0;
+const DEFAULT_MAX_CELLS = 0; // 0 = no pooling
 
 export function Treemap<P>({
   data,
   height,
   heat = true,
-  minCellShare = DEFAULT_MIN_SHARE,
+  maxCells = DEFAULT_MAX_CELLS,
   extent,
   renderCell,
   cellProps,
@@ -60,7 +65,8 @@ export function Treemap<P>({
   data: TreemapDatum<P>[];
   height: number;
   heat?: boolean;
-  minCellShare?: number;
+  /** Keep the biggest N cells and pool the rest. 0 means show everything. */
+  maxCells?: number;
   /** Lay out over this total instead of the data's sum — see `layout`. */
   extent?: number;
   renderCell?: (cell: TreemapCell<P>) => ReactNode;
@@ -92,9 +98,9 @@ export function Treemap<P>({
 
     // Pool the tail before laying out, so the pooled cell competes for area on its combined
     // value rather than being appended afterwards.
-    const cut = minCellShare * total;
-    const big = cut > 0 ? live.filter((d) => d.value >= cut) : live;
-    const small = cut > 0 ? live.filter((d) => d.value < cut) : [];
+    const ranked = maxCells > 0 ? [...live].sort((a, b) => b.value - a.value) : live;
+    const big = maxCells > 0 ? ranked.slice(0, maxCells) : ranked;
+    const small = maxCells > 0 ? ranked.slice(maxCells) : [];
     const items: { v: number; datum: TreemapDatum<P>; pooled: TreemapDatum<P>[] | null }[] =
       big.map((d) => ({ v: d.value, datum: d, pooled: null }));
     if (small.length) {
@@ -127,7 +133,7 @@ export function Treemap<P>({
         pooled: c.pooled,
       };
     });
-  }, [data, width, height, heat, minCellShare, extent]);
+  }, [data, width, height, heat, maxCells, extent]);
 
   return (
     <div

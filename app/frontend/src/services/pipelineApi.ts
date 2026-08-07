@@ -279,6 +279,9 @@ export function pipelineApi(clientSlug: string, projectSlug: string) {
     getProfileJe: (key: string) => request<JEDetail>(`${base}/profiles/${key}/je`),
     exportUrl: (key: string, fmt: "html" | "docx" | "pdf") =>
       `/api${base}/profiles/${key}/export/${fmt}`,
+    /** Every anchor role document at once. `zip` is one self-contained HTML per role plus an
+     *  index linking them; `html` is the same documents in one page-broken volume for printing. */
+    exportAllUrl: (fmt: "zip" | "html") => `/api${base}/profiles/export/all.${fmt}`,
     exportCapabilities: () =>
       request<{ html: boolean; docx: boolean; pdf: boolean }>(`${base}/export/capabilities`),
 

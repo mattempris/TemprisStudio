@@ -50,7 +50,7 @@ from app.services.ingestion.column_mapping import suggest_mapping
 from app.services.ingestion.hris import load_spreadsheet
 from app.services.ingestion import parsers
 from app.services.ingestion.parsers import ParseFailed, UnsupportedFileType, extract_text
-from app.services.job_profile import exporters, generator
+from app.services.job_profile import bundle, exporters, generator
 from app.services.job_profile import template_config as tpl
 from app.services.orchestrator import (
     JobAlreadyRunning,
@@ -1738,6 +1738,78 @@ def get_profile_je(client_slug: str, project_slug: str, profile_key: str) -> dic
         "personas": stored.personas,
         "framework": framework.model_dump(mode="json"),
     }
+
+
+def _ordered_documents(state) -> tuple[list, dict[str, str]]:
+    """Every live document in architecture order, plus each one's evaluated level.
+
+    Family, then category, then title — the order the architecture reads in, so a printed volume
+    is navigable rather than being in whatever order generation happened to finish in.
+    """
+    c = state.clustering
+    fam_of: dict[int, tuple[int, int]] = {}
+    if c:
+        for a in c.assignments:
+            fam_of[a.final_profile_id] = (a.final_family_id, a.final_category_id)
+
+    def key(d):
+        fam, cat = fam_of.get(d.profile_cluster_id, (10**6, 10**6))
+        fam_name = (c.family_names.get(fam, "") if c else "") or "zzz"
+        cat_name = (c.category_names.get(cat, "") if c else "") or "zzz"
+        return (fam_name.lower(), cat_name.lower(), d.title.lower())
+
+    docs = sorted((d for d in state.job_profiles if not d.stale), key=key)
+    levels = {r.profile_key: r.level_name for r in state.je_results if not r.stale}
+    return docs, levels
+
+
+@router.get("/profiles/export/all.{fmt}")
+def export_all_profiles(client_slug: str, project_slug: str, fmt: str):
+    """Every anchor role document at once — `zip` for one file per role, `html` for one volume.
+
+    `zip` is the one the button uses: each role as its own self-contained HTML file, plus an
+    index that links them, so an unpacked folder is navigable and any single file can be sent on
+    alone. Nothing is rendered — the stored HTML is what the per-profile export already serves.
+
+    `html` is the same documents in one page-broken document, for printing.
+
+    No PDF. It needs WeasyPrint's native Pango and Cairo libraries, which are absent on a
+    Windows backend, so it would be a route that only ever 503s. Printing the `html` form gives
+    the same pages, since the breaks and margins are CSS.
+    """
+    from fastapi.responses import Response
+
+    _, state = _load(client_slug, project_slug)
+    docs, levels = _ordered_documents(state)
+    stem = f"{client_slug}-{project_slug}-anchor-roles"
+
+    try:
+        if fmt == "zip":
+            data, skipped = bundle.zip_per_role(
+                docs, company=state.meta.display_name, levels=levels
+            )
+            media, filename = "application/zip", f"{stem}.zip"
+        elif fmt == "html":
+            html, skipped = bundle.combine_html(
+                docs, company=state.meta.display_name, levels=levels
+            )
+            # Inline: this one is meant to be read and printed, so a download would put a file
+            # manager between the button and Ctrl+P.
+            if skipped:
+                print(f"  [bundle] {len(skipped)} document(s) left out: {skipped[:5]}")
+            return Response(content=html, media_type="text/html; charset=utf-8")
+        else:
+            raise HTTPException(400, "fmt must be zip or html")
+    except bundle.NothingToBundle as e:
+        raise HTTPException(409, str(e)) from e
+
+    if skipped:
+        print(f"  [bundle] {len(skipped)} document(s) had no stored HTML: {skipped[:5]}")
+    return Response(
+        content=data,
+        media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/profiles/{profile_key}/export/{fmt}")

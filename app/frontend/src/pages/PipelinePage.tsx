@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Play } from "lucide-react";
+import { Download, FileText, Play } from "lucide-react";
 import { pipelineApi, taxonomyApi } from "../services/pipelineApi";
 import { useJobStream } from "../hooks/useJobStream";
 import { useSectionScroll } from "../hooks/useSectionScroll";
@@ -771,6 +771,42 @@ export function PipelinePage({ clientSlug, projectSlug }: { clientSlug: string; 
               </p>
               {showProgress && <ProgressBar job={job} />}
             </div>
+
+            {/* All of them at once. One self-contained HTML per role is the useful default —
+                it is what gets handed over, and any single file can be sent on alone. The
+                combined volume sits beside it for printing, which is also the PDF route: PDF
+                rendering needs native libraries this backend does not have, so a PDF button
+                would only ever fail. */}
+            {summary!.job_profiles > 0 && (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-[10px] border border-border bg-panel px-4 py-3">
+                <div className="min-w-0">
+                  <p className="text-[12.5px] font-semibold text-text">
+                    Export all {summary!.job_profiles} documents
+                  </p>
+                  <p className="text-[11.5px] leading-snug text-text-muted">
+                    One self-contained HTML file per role, numbered in architecture order, with an
+                    index that links them. Each file opens on its own with no server.
+                  </p>
+                </div>
+                <span className="flex shrink-0 flex-wrap items-center gap-2">
+                  <a
+                    href={api.exportAllUrl("zip")}
+                    className="flex items-center gap-1.5 rounded-[10px] border border-brand bg-brand px-3 py-2 text-[11px] font-bold text-white transition-colors hover:bg-brand-hover"
+                  >
+                    <Download size={12} /> Export profiles (.zip)
+                  </a>
+                  <a
+                    href={api.exportAllUrl("html")}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="All roles in one page-broken document — print this to get a PDF"
+                    className="flex items-center gap-1.5 rounded-[10px] border border-border bg-card px-3 py-2 text-[11px] font-bold text-text transition-colors hover:bg-panel"
+                  >
+                    <FileText size={12} /> One volume to print
+                  </a>
+                </span>
+              </div>
+            )}
 
             {profiles.length > 0 && (
               <JEResultsBrowser

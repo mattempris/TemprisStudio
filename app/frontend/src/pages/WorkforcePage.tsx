@@ -660,19 +660,23 @@ function Legend({
   hasProcesses?: boolean;
   hasUnmapped?: boolean;
 }) {
+  // The same CSS variables the graph fills its nodes from, as inline styles rather than
+  // Tailwind classes. A legend that names its own colours is a second source of truth, and the
+  // moment the graph moved off the accent tokens this drifted — the swatches went on saying
+  // accent/teal/purple while the nodes had stopped being those colours.
   const items = [
-    ["job", "Jobs", "bg-accent"],
-    ["skill", "Skills", "bg-teal"],
-    ["task", "Tasks", "bg-purple"],
-    ...(hasActions ? ([["action", "Actions", "bg-orange"]] as const) : []),
-    ...(hasProcesses ? ([["process", "Processes", "bg-brand"]] as const) : []),
-    ...(hasUnmapped ? ([["unmapped", "No matching task", "bg-warning"]] as const) : []),
+    ["job", "Jobs", "var(--graph-job)"],
+    ["skill", "Skills", "var(--graph-skill)"],
+    ["task", "Tasks", "var(--graph-task)"],
+    ...(hasActions ? ([["action", "Actions", "var(--graph-action)"]] as const) : []),
+    ...(hasProcesses ? ([["process", "Processes", "var(--color-brand)"]] as const) : []),
+    ...(hasUnmapped ? ([["unmapped", "No matching task", "var(--color-warning)"]] as const) : []),
   ] as const;
   return (
     <span className="flex items-center gap-3">
-      {items.map(([id, label, cls]) => (
+      {items.map(([id, label, colour]) => (
         <span key={id} className="flex items-center gap-1.5 text-[11px] text-text-secondary">
-          <span className={`h-2.5 w-2.5 rounded-full ${cls}`} />
+          <span className="h-2.5 w-2.5 rounded-full" style={{ background: colour }} />
           {label}
         </span>
       ))}

@@ -49,6 +49,22 @@
   --color-orange-bg: rgba(194, 65, 12, 0.07);
   --color-orange-border: rgba(194, 65, 12, 0.22);
 
+  /* Graph categories.
+   *
+   * Deliberately NOT the accent tokens above. Those are picked to harmonise with each other,
+   * which is the opposite of what a categorical encoding needs — and on the muted palettes they
+   * collapse: the four entity colours sit 9.5 dE apart on sepia and 16.9 on vintage, which on a
+   * 6px node is one colour. Measured, not eyeballed.
+   *
+   * These are spread on hue AND lightness so they survive a small node, a colour-vision
+   * deficiency, and a palette change. Worst pair is 43 dE. They are intentionally the same in
+   * every light palette: what a colour MEANS in a chart should not shift when someone changes
+   * theme, and there is nothing to harmonise with when the whole point is to differ. */
+  --graph-job: #1f6fd0;
+  --graph-skill: #0f8a6a;
+  --graph-task: #8b3fc4;
+  --graph-action: #d2691e;
+
   --radius-card: 12px;
   --radius-modal: 20px;
 

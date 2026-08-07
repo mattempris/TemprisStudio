@@ -26,11 +26,24 @@ import type { GraphCut, GraphNode } from "../../types/workforce";
  * compared rather than chased with the cursor.
  */
 
+/**
+ * Node fills, from the graph's own categorical tokens rather than the UI accents.
+ *
+ * These used to be `--color-accent`, `--color-teal` and so on. Those are picked to harmonise
+ * with each other, which is precisely wrong for telling four categories apart, and on the muted
+ * palettes they collapsed outright — the four entity colours sit 9.5 dE apart on sepia and 16.9
+ * on vintage, which at a 6px node is one colour. The `--graph-*` set is spread on hue and
+ * lightness instead, worst pair 43 dE, and does not change with the palette.
+ *
+ * Processes and unmapped steps keep their semantic tokens: those two are not members of a
+ * category set, they are "the thing you uploaded" and "the bit that did not match", and reading
+ * as brand and warning is the point.
+ */
 const ENTITY_TOKEN: Record<string, string> = {
-  job: "--color-accent",
-  skill: "--color-teal",
-  task: "--color-purple",
-  action: "--color-orange",
+  job: "--graph-job",
+  skill: "--graph-skill",
+  task: "--graph-task",
+  action: "--graph-action",
   process: "--color-brand",
   unmapped: "--color-warning",
 };

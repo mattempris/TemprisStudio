@@ -19,6 +19,13 @@
 
 /* ---- Dark: the default structure, inverted and de-saturated -------------- */
 :root[data-palette="dark"] {
+  /* Lifted for a dark canvas — same hues, enough luminance to read on near-black.
+   * Worst pair 40 dE, minimum contrast 7.2:1 against the darkest canvas. */
+  --graph-job: #5aa9f5;
+  --graph-skill: #3fd6a8;
+  --graph-task: #c08cf0;
+  --graph-action: #f0a35a;
+
   --color-canvas: #12141c;
   --color-panel: #191c26;
   --color-card: #1e2230;
@@ -111,6 +118,13 @@
 
 /* ---- Cyberpunk: near-black with neon. Deliberately high-chroma ----------- */
 :root[data-palette="cyberpunk"] {
+  /* Lifted for a dark canvas — same hues, enough luminance to read on near-black.
+   * Worst pair 40 dE, minimum contrast 7.2:1 against the darkest canvas. */
+  --graph-job: #5aa9f5;
+  --graph-skill: #3fd6a8;
+  --graph-task: #c08cf0;
+  --graph-action: #f0a35a;
+
   --color-canvas: #0a0a14;
   --color-panel: #101026;
   --color-card: #16162e;

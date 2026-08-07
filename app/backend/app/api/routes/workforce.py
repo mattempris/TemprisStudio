@@ -43,6 +43,7 @@ from app.models.project_state import (
     TaskSkillRecord,
 )
 from app.services import embeddings as emb
+from app.services.exports import workforce_export as wf_export
 from app.services import llm
 from app.services.clustering import tier_state
 from app.services.ingestion import parsers
@@ -120,6 +121,35 @@ def workforce_status(client_slug: str, project_slug: str) -> dict:
         # studio switcher should not need a call per studio to know what is reachable.
         "agents_defined": len(state.workforce.agents),
     }
+
+
+@router.get("/export.json")
+def workforce_export(
+    client_slug: str, project_slug: str, specs: bool = True
+) -> Response:
+    """Everything this studio holds, as one JSON document.
+
+    A data export, not a report: nothing summarised, ranked or rounded for reading. See
+    `services/exports/workforce_export` for what travels with it and why.
+
+    `specs=false` drops the inlined agent specifications, which are one blob read each and the
+    slowest part of this call. Worth it on a project with fifty agents when only the assessment
+    is wanted; the default is everything, because that is what an export is for.
+
+    Content-Disposition is an attachment here, unlike the HTML report. Nothing renders a
+    megabyte of JSON usefully in a browser tab, so the download is the useful outcome rather
+    than friction in front of one.
+    """
+    svc, state = _load(client_slug, project_slug)
+    facts = _facts(svc, client_slug, project_slug)
+    payload = wf_export.build(svc, state, facts, include_specs=specs)
+    body = json.dumps(payload, ensure_ascii=False, indent=2)
+    name = f"{client_slug}-{project_slug}-work-architecture.json"
+    return Response(
+        content=body,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{re.sub(chr(34), "", name)}"'},
+    )
 
 
 @router.post("/graph/build")

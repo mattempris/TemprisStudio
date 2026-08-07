@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { Download, RefreshCw } from "lucide-react";
 import { ArchitectureGraph, type ColorMode } from "../components/workforce/ArchitectureGraph";
 import { OpportunityStage } from "../components/workforce/OpportunityStage";
 import { ProductivityStage } from "../components/workforce/ProductivityStage";
@@ -573,6 +573,31 @@ export function WorkforcePage({
             </StageSection>
           );
         })}
+
+        {/* Everything this studio holds, as one file. Only once the graph exists, since the
+            export carries the graph edges and the taxonomies that make its ids resolvable —
+            before that there is nothing to resolve them against.
+
+            An anchor rather than a button with a fetch: it is a download, and pulling a
+            megabyte through JS only to hand it back to the browser adds a copy in memory and a
+            blob URL to clean up. */}
+        {status?.graph_built && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-[10px] border border-border bg-panel px-4 py-3">
+            <div className="min-w-0">
+              <p className="text-[12.5px] font-semibold text-text">Export</p>
+              <p className="text-[11.5px] leading-snug text-text-muted">
+                Every assessment, action, augmentation, agent specification and graph edge in
+                this studio, with all three taxonomies so the ids resolve on their own.
+              </p>
+            </div>
+            <a
+              href={api.exportUrl()}
+              className="flex shrink-0 items-center gap-1.5 rounded-[10px] border border-border bg-card px-3 py-2 text-[11px] font-bold text-text transition-colors hover:bg-panel"
+            >
+              <Download size={12} /> Export all data (.json)
+            </a>
+          </div>
+        )}
 
         {/* The forward door. Job Architecture has one at the foot of its wizard; without the
             same here, Work Design was only reachable from the sidebar toggle, which is hidden

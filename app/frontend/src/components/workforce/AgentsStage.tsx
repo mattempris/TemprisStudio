@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Download, Search, Trash2, Upload, UserCheck } from "lucide-react";
+import { Bot, Download, RefreshCw, Search, Trash2, Upload, UserCheck } from "lucide-react";
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
 import { Modal } from "../ui/Modal";
@@ -68,6 +68,7 @@ export function AgentsStage({ api, onError }: { api: Api; onError: (m: string) =
   }, [report, threshold, domain, query]);
 
   const pending = shown.filter((c) => !c.agent).length;
+  const specified = shown.filter((c) => c.agent).length;
 
   const generate = async (body: { cluster_ids?: number[]; threshold?: number; redo?: boolean }) => {
     try {
@@ -226,6 +227,26 @@ export function AgentsStage({ api, onError }: { api: Api; onError: (m: string) =
             </span>
           </Button>
         )}
+        {/* Re-specify exists for one reason: the software catalogue is uploaded after
+            the fact as often as before it, and a spec written without it names a
+            generic system. Rewriting is the only way to pick the context up. */}
+        {specified > 0 && (
+          <Button
+            onClick={() =>
+              void generate({
+                cluster_ids: shown.filter((c) => c.agent).map((c) => c.cluster_id),
+                redo: true,
+              })
+            }
+            disabled={job.running}
+            title="Discard these specifications and write them again against the current software catalogue"
+          >
+            <span className="flex items-center gap-1.5">
+              <RefreshCw size={12} />
+              Re-specify {specified}
+            </span>
+          </Button>
+        )}
         <JobPulse job={job} />
       </div>
 
@@ -236,7 +257,7 @@ export function AgentsStage({ api, onError }: { api: Api; onError: (m: string) =
           <span className="min-w-0 flex-1">Task cluster</span>
           <span className="w-16 text-right">Automate</span>
           <span className="w-20 text-right">{report.unit} freed</span>
-          <span className="w-32 text-right">Agent</span>
+          <span className="w-40 text-right">Agent</span>
         </div>
         {shown.slice(0, 300).map((c) => (
           <CandidateRow
@@ -245,6 +266,7 @@ export function AgentsStage({ api, onError }: { api: Api; onError: (m: string) =
             unit={report.unit}
             busy={job.running}
             onGenerate={() => void generate({ cluster_ids: [c.cluster_id] })}
+            onRegenerate={() => void generate({ cluster_ids: [c.cluster_id], redo: true })}
             onView={() =>
               c.agent &&
               void api
@@ -307,6 +329,7 @@ function CandidateRow({
   unit,
   busy,
   onGenerate,
+  onRegenerate,
   onView,
   downloadUrl,
 }: {
@@ -314,6 +337,7 @@ function CandidateRow({
   unit: string;
   busy: boolean;
   onGenerate: () => void;
+  onRegenerate: () => void;
   onView: () => void;
   downloadUrl?: string;
 }) {
@@ -337,7 +361,7 @@ function CandidateRow({
       <span className="w-20 text-right text-[11.5px] font-semibold tabular-nums text-text">
         {c.time_released.toFixed(2)}
       </span>
-      <span className="flex w-32 shrink-0 items-center justify-end gap-1.5">
+      <span className="flex w-40 shrink-0 items-center justify-end gap-1.5">
         {c.agent ? (
           <>
             {c.agent.human_in_the_loop && (
@@ -358,6 +382,15 @@ function CandidateRow({
               className="rounded-[6px] border border-border bg-card px-1.5 py-0.5 text-[10.5px] font-semibold text-text transition-colors hover:bg-panel"
             >
               Spec
+            </button>
+            <button
+              onClick={onRegenerate}
+              disabled={busy}
+              title={`Re-specify ${c.agent.name} against the current software catalogue`}
+              aria-label={`Re-specify ${c.agent.name}`}
+              className="rounded-[6px] border border-border bg-card px-1.5 py-0.5 text-[10.5px] font-semibold text-text transition-colors hover:bg-panel disabled:opacity-50"
+            >
+              <RefreshCw size={10} />
             </button>
             {downloadUrl && (
               <a

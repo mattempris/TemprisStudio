@@ -59,6 +59,10 @@ export function workforceApi(clientSlug: string, projectSlug: string) {
   const base = `/projects/${clientSlug}/${projectSlug}/workforce`;
   return {
     status: () => request<WorkforceStatus>(`${base}/status`),
+    /** Everything this studio holds, as one JSON file. A URL rather than a fetch: it is a
+     *  download, and streaming it through JS only to hand it back to the browser adds a copy
+     *  in memory and a blob URL to clean up. */
+    exportUrl: () => `/api${base}/export.json`,
     buildGraph: () => request<JobHandleLike>(`${base}/graph/build`, { method: "POST" }),
     /** One cut of the graph. The roll-up is server-side, so a zoom or an expand is a
      *  request rather than a re-layout of the whole dataset in the browser. */
